@@ -5,12 +5,89 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.6
+go get github.com/eleven-am/golem/go@v0.6.7
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.7
+
+Unreleased.
+
+**Fix: removing and re-adding a link in one nested write works.** A nested
+`Update` that combined `DeleteMany` with `Create` on the same relation, such as
+`PostTags.DeleteMany(tag = "go")` with `PostTags.Create(tag = "go")` to relink
+a tag, always failed. With no existing link it failed with `FORBIDDEN:
+mutation is not authorized`, though nothing was unauthorized; with an existing
+link it failed with `CONFLICT` from the database's duplicate-key error (23505
+on PostgreSQL). The create ran first, so the delete then removed the row just
+created, or the create collided with the row the delete was meant to remove.
+Now the delete runs first and the link exists afterwards. This affected
+v0.6.4 to v0.6.6.
+
+**Behaviour change: the operations on one relation run in a fixed order.** The
+nested operations you give one relation field in a single write now run in
+three steps, whatever order you list them in:
+
+1. `Delete`, `DeleteMany`, `Disconnect`, `Set`
+2. `Update`, `UpdateMany`, `Upsert`
+3. `Create`, `CreateMany`, `Connect`, `ConnectOrCreate`
+
+Before, they ran `Create`, `CreateMany`, `Connect`, `ConnectOrCreate`,
+`Disconnect`, `Set`, `Update`, `UpdateMany`, `Upsert`, `Delete`, `DeleteMany`.
+Operations on different relation fields keep their previous order, and so do
+operations within the same step except where listed below. These
+combinations on one relation now behave differently:
+
+- `Create` or `CreateMany` with `UpdateMany`, `DeleteMany` or `Set`: these
+  no longer reach the rows this write creates. With `UpdateMany` the new rows
+  keep the values you created them with; with `DeleteMany` or `Set` they stay
+  related. Before, `UpdateMany` changed the new rows too, `Set` disconnected
+  them unless it named them, and a caller's `DeleteMany` matching a new row
+  failed with `FORBIDDEN`.
+- `Create` with `Update`, `Delete` or `Disconnect` naming the row being
+  created: now fails with `NOT_FOUND`, because the row does not exist yet when
+  the update, delete or disconnect runs. Before, the row was created and then
+  updated or disconnected; with `Delete`, a caller's write failed with
+  `FORBIDDEN`.
+- `Create` with an `Upsert` on the same target: the upsert now creates the
+  row, and the `Create` then fails with `CONFLICT`. Before, the `Create` made
+  the row and the upsert updated it.
+- `Connect` or `ConnectOrCreate` with `UpdateMany` or `DeleteMany`: the rows
+  being connected are no longer updated or deleted by them.
+- `Connect` with `Update` or `Delete` naming the row being connected: now
+  fails with `NOT_FOUND`, because the row is not yet related when the update
+  or delete runs. Before, the row was connected and then updated or deleted.
+- `Connect` with `Set`: the connected row is now added to the set. Before,
+  `Set` ran last and dropped it unless the set named it.
+- `Connect` with `Disconnect` of the same row: the row ends up connected.
+  Before, it ended up disconnected.
+- `Set` with `DeleteMany`: `DeleteMany` now deletes the rows related before
+  the write, then `Set` relates what it names. A `Set` naming a row the
+  `DeleteMany` deleted fails with `NOT_FOUND`. Before, `Set` ran first and
+  `DeleteMany` then deleted the rows of the new set.
+- `Disconnect` or `Set` with `Delete` of the same row: the delete now runs
+  first, so the disconnect, or a set naming that row, fails with
+  `NOT_FOUND`. `Disconnect` with `Delete` of the same row already failed with
+  `NOT_FOUND`, the other way round.
+- `Update`, `UpdateMany` or `Upsert` with `Delete` or `DeleteMany`: the
+  delete now runs first, so rows it removes are not updated first, get no
+  update hooks and no update event. An `Update` naming a row the delete
+  removed fails with `NOT_FOUND`. Before, a caller's `Update` with a `Delete`
+  of the same row failed with `FORBIDDEN`.
+
+**Fix: a row removed later in the same write is no longer reported as
+`FORBIDDEN`.** When a caller's nested write created or updated a row and a
+later operation in the same write removed it, for example a `DeleteMany` on
+another relation field reaching the same table, or a cascade from a delete,
+the write failed with `FORBIDDEN: mutation is not authorized`. It now fails
+with `CONFLICT: a later nested operation removed a row this mutation wrote`,
+and nothing is written. A row that exists but fails your policy still fails
+with `FORBIDDEN`.
 
 ---
 

@@ -2644,26 +2644,47 @@ func (transaction *systemNestedTransaction[P, A]) FinalizeNested(ctx context.Con
 		if err != nil {
 			return err
 		}
-		recordQueryerStatement(ctx, transaction.queryer, transaction.binding.observation)
-		rows, err := transaction.queryer.QueryxContext(ctx, verification.SQL(), verification.Args()...)
+		allowed, err := transaction.persistedRowMatches(ctx, verification)
 		if err != nil {
-			return fmt.Errorf("P4_RUNTIME_NESTED_POLICY: verify completed create graph: %w", err)
+			return err
 		}
-		allowed := rows.Next()
-		iterationErr := rows.Err()
-		if closeErr := rows.Close(); closeErr != nil {
-			return closeErr
+		if allowed {
+			continue
 		}
-		if iterationErr != nil {
-			return fmt.Errorf("P4_RUNTIME_NESTED_POLICY: read completed graph verification: %w", iterationErr)
+		existence, err := mutationsql.RenderPersistedExistence(node, row, transaction.app.registry, transaction.app.provider, transaction.app.capabilities)
+		if err != nil {
+			return err
 		}
-		if !allowed {
-			operation := scalarMutationOperationName(node.Operation())
-			cause := fmt.Errorf("P4_RUNTIME_NESTED_POLICY: completed %s graph is not authorized", operation)
-			return golem.RuntimeOperationError(golem.CodeForbidden, operation, golem.ModelID(node.ModelID()), golem.FieldID{}, "mutation is not authorized", cause)
+		exists, err := transaction.persistedRowMatches(ctx, existence)
+		if err != nil {
+			return err
 		}
+		operation := scalarMutationOperationName(node.Operation())
+		if !exists {
+			cause := fmt.Errorf("P4_RUNTIME_NESTED_POLICY: completed %s graph row was removed by a later operation in the same mutation", operation)
+			return golem.RuntimeOperationError(golem.CodeConflict, operation, golem.ModelID(node.ModelID()), golem.FieldID{}, "a later nested operation removed a row this mutation wrote", cause)
+		}
+		cause := fmt.Errorf("P4_RUNTIME_NESTED_POLICY: completed %s graph is not authorized", operation)
+		return golem.RuntimeOperationError(golem.CodeForbidden, operation, golem.ModelID(node.ModelID()), golem.FieldID{}, "mutation is not authorized", cause)
 	}
 	return nil
+}
+
+func (transaction *systemNestedTransaction[P, A]) persistedRowMatches(ctx context.Context, verification mutationsql.PersistedVerification) (bool, error) {
+	recordQueryerStatement(ctx, transaction.queryer, transaction.binding.observation)
+	rows, err := transaction.queryer.QueryxContext(ctx, verification.SQL(), verification.Args()...)
+	if err != nil {
+		return false, fmt.Errorf("P4_RUNTIME_NESTED_POLICY: verify completed create graph: %w", err)
+	}
+	matched := rows.Next()
+	iterationErr := rows.Err()
+	if closeErr := rows.Close(); closeErr != nil {
+		return false, closeErr
+	}
+	if iterationErr != nil {
+		return false, fmt.Errorf("P4_RUNTIME_NESTED_POLICY: read completed graph verification: %w", iterationErr)
+	}
+	return matched, nil
 }
 
 func (transaction *systemNestedTransaction[P, A]) VerifyNested(ctx context.Context, applied mutationnested.AppliedNode) error {
