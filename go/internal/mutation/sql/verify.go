@@ -25,8 +25,19 @@ func (verification PersistedVerification) Args() []any {
 }
 
 func RenderPersistedVerification(node mutationir.Node, row mutationdecode.Row, conditions []policyir.Condition, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (PersistedVerification, error) {
-	if registry == nil || row.ModelID() != node.ModelID() || len(conditions) == 0 {
+	if len(conditions) == 0 {
 		return PersistedVerification{}, fmt.Errorf("P4_MUTATION_SQL_VERIFY: node, persisted row, and conditions are required")
+	}
+	return renderPersistedRow(node, row, conditions, registry, provider, capabilities)
+}
+
+func RenderPersistedExistence(node mutationir.Node, row mutationdecode.Row, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (PersistedVerification, error) {
+	return renderPersistedRow(node, row, nil, registry, provider, capabilities)
+}
+
+func renderPersistedRow(node mutationir.Node, row mutationdecode.Row, conditions []policyir.Condition, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (PersistedVerification, error) {
+	if registry == nil || row.ModelID() != node.ModelID() {
+		return PersistedVerification{}, fmt.Errorf("P4_MUTATION_SQL_VERIFY: node and persisted row are required")
 	}
 	dialect, _, err := providerDialect(provider)
 	if err != nil {

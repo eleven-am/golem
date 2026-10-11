@@ -173,13 +173,20 @@ func (builder *builder) buildRelations(parent policyir.ModelID, parentOperation 
 		return nil, fail(CodeDepth, golem.ModelID(parent), golem.FieldID{}, "nested mutation depth exceeds configured bound", nil)
 	}
 	ordered := append([]golem.FrozenNestedMutation(nil), mutations...)
+	for _, frozen := range ordered {
+		if _, ok := relationExecutionRank(frozen.Action()); !ok {
+			return nil, fail(CodeShape, frozen.ParentModelID(), frozen.FieldID(), "unknown nested action", nil)
+		}
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		left, right := ordered[i], ordered[j]
 		leftField, rightField := left.FieldID(), right.FieldID()
 		if leftField != rightField {
 			return bytes.Compare(leftField[:], rightField[:]) < 0
 		}
-		return left.Action() < right.Action()
+		leftRank, _ := relationExecutionRank(left.Action())
+		rightRank, _ := relationExecutionRank(right.Action())
+		return leftRank < rightRank
 	})
 	var result []mutationir.NodeInput
 	for _, frozen := range ordered {
@@ -190,6 +197,35 @@ func (builder *builder) buildRelations(parent policyir.ModelID, parentOperation 
 		result = append(result, nodes...)
 	}
 	return result, nil
+}
+
+func relationExecutionRank(action golem.MutationRelationAction) (uint8, bool) {
+	switch action {
+	case golem.MutationRelationDelete:
+		return 0, true
+	case golem.MutationRelationDeleteMany:
+		return 1, true
+	case golem.MutationRelationDisconnect:
+		return 2, true
+	case golem.MutationRelationSet:
+		return 3, true
+	case golem.MutationRelationUpdate:
+		return 4, true
+	case golem.MutationRelationUpdateMany:
+		return 5, true
+	case golem.MutationRelationUpsert:
+		return 6, true
+	case golem.MutationRelationCreate:
+		return 7, true
+	case golem.MutationRelationCreateMany:
+		return 8, true
+	case golem.MutationRelationConnect:
+		return 9, true
+	case golem.MutationRelationConnectOrCreate:
+		return 10, true
+	default:
+		return 0, false
+	}
 }
 
 func (builder *builder) buildRelation(parent policyir.ModelID, parentOperation mutationir.Operation, frozen golem.FrozenNestedMutation, depth uint16) ([]mutationir.NodeInput, error) {

@@ -362,6 +362,21 @@ selected and absent-because-policy-masked are deliberately indistinguishable,
 so a caller cannot discover a field exists by watching it vanish. Ignore the
 second return and you get a zero value you cannot explain.
 
+### Nested writes on one relation run in a fixed order
+
+When one write gives a relation field several nested operations, they run in
+three steps, whatever order you list them in: first `Delete`, `DeleteMany`,
+`Disconnect` and `Set`; then `Update`, `UpdateMany` and `Upsert`; then
+`Create`, `CreateMany`, `Connect` and `ConnectOrCreate`. So `DeleteMany` with
+`Create` replaces links in one call, and `UpdateMany` or `DeleteMany` never
+touches the rows the same write creates or connects. An `Update`, `Delete` or
+`Disconnect` naming a row the same write creates or connects fails with
+`NOT_FOUND`, because that row is not there yet: make it a second call.
+
+If a later operation in a caller's write removes a row the write created or
+updated, for example a `DeleteMany` on another relation field of the same
+model, the write fails with `CONFLICT` and nothing is written.
+
 ## What it does
 
 ```go
