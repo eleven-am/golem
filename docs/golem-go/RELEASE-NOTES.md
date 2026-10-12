@@ -5,12 +5,26 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.7
+go get github.com/eleven-am/golem/go@v0.6.8
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.8
+
+**Fix: `golem migration apply` accepts enum checks on PostgreSQL.** Applying a
+migration failed with `application physical fingerprint mismatch` when a model
+had an enum with a single value, such as `Platform = twitch`, or a `Check` that
+compares an enum field with an enum value, such as `Status.Eq(StatusFailed)`,
+alone or combined with another condition such as `FailureCode.IsNotNull()`.
+Any `Check` that tests a nullable field with `IsNull` or `IsNotNull` failed the
+same way. PostgreSQL stores these checks in a rewritten form, and Golem read them back as
+different from the checks it had created. They now match. A check whose live
+value or column was changed by hand is still reported as drift.
 
 ---
 
