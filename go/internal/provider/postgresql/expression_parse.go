@@ -71,6 +71,22 @@ func parseCatalogGeneratedExpression(source string, table physical.PhysicalTable
 }
 
 func normalizeCatalogExpressionAgainstReviewed(value, reviewed physical.Expression) (physical.Expression, error) {
+	if value.Kind == physical.ExpressionLiteral && reviewed.Kind == physical.ExpressionLiteral && value.Literal != nil && reviewed.Literal != nil && value.Literal.Kind == ir.LiteralString && reviewed.Literal.Kind == ir.LiteralEnum && value.Literal.Canonical == reviewed.Literal.Canonical && value.Type == reviewed.Type && reviewed.Type.Kind == physical.StoragePostgreSQLText {
+		literal := *value.Literal
+		literal.Kind = ir.LiteralEnum
+		value.Literal = &literal
+		return value, nil
+	}
+	if value.Kind == physical.ExpressionOperator && value.Symbol != nil && value.Symbol.Identity == schemaexpr.Equal && len(value.Operands) == 2 && reviewed.Kind == physical.ExpressionOperator && reviewed.Symbol != nil && reviewed.Symbol.Identity == schemaexpr.In && len(reviewed.Operands) == 2 {
+		candidate, err := normalizeCatalogExpressionAgainstReviewed(parsedPredicate(schemaexpr.In, append([]physical.Expression(nil), value.Operands...)...), reviewed)
+		if err != nil {
+			return physical.Expression{}, err
+		}
+		if reflect.DeepEqual(candidate, reviewed) {
+			return candidate, nil
+		}
+		return value, nil
+	}
 	if value.Kind == physical.ExpressionCast && value.Symbol != nil && value.Symbol.Identity == catalogCastVarcharToTextV1 && len(value.Operands) == 1 && reviewed.Type.Kind == physical.StoragePostgreSQLVarchar {
 		source := value.Operands[0]
 		alignCatalogExpressionCollections(&source, reviewed)
@@ -208,7 +224,9 @@ func (p *expressionParser) parseComparison() (physical.Expression, error) {
 			return physical.Expression{}, fmt.Errorf("IS requires NULL")
 		}
 		p.take()
-		return parsedPredicate(identity, left), nil
+		predicate := parsedPredicate(identity, left)
+		predicate.Nullable = false
+		return predicate, nil
 	}
 	if p.word("IN") {
 		p.take()
