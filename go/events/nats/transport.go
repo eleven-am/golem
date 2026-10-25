@@ -413,8 +413,8 @@ func (transport *Transport) Subscribe(ctx context.Context, requested events.Subs
 	if transport == nil || ctx == nil || !requested.Valid() {
 		return nil, events.Failure(events.CodeSubscriptionInvalid)
 	}
-	if ctx.Err() != nil {
-		return nil, events.Failure(events.CodeSubscriptionCancelled)
+	if err := ctx.Err(); err != nil {
+		return nil, events.Cancelled(err)
 	}
 	transport.mu.Lock()
 	if transport.closed || !transport.bound || transport.client == nil {
@@ -440,7 +440,7 @@ func (transport *Transport) Subscribe(ctx context.Context, requested events.Subs
 		_ = result.closeWith(events.CodeEventTransport)
 		return nil, events.Failure(events.CodeEventTransport)
 	}
-	result.install(upstream, context.AfterFunc(ctx, func() { _ = result.closeWith(events.CodeSubscriptionCancelled) }))
+	result.install(upstream, context.AfterFunc(ctx, func() { _ = result.closeWithError(events.Cancelled(ctx.Err())) }))
 	flushCtx, cancel := context.WithTimeout(ctx, transport.config.FlushTimeout)
 	defer cancel()
 	if err := client.FlushWithContext(flushCtx); err != nil {

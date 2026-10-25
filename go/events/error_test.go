@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,6 +30,29 @@ func TestFailfCarriesDetailWithoutChangingClassification(t *testing.T) {
 	}
 	if code := (&Error{}).Code(); code != "" {
 		t.Fatalf("zero error code = %q", code)
+	}
+}
+
+func TestCancelledWrapsCauseWithoutChangingClassification(t *testing.T) {
+	failure := Cancelled(context.DeadlineExceeded)
+	if want := string(CodeSubscriptionCancelled) + ": " + context.DeadlineExceeded.Error(); failure.Error() != want {
+		t.Fatalf("cancelled failure = %q want %q", failure.Error(), want)
+	}
+	if !errors.Is(failure, context.DeadlineExceeded) || errors.Is(failure, context.Canceled) {
+		t.Fatal("cancelled failure does not unwrap to exactly its cause")
+	}
+	if !errors.Is(failure, Failure(CodeSubscriptionCancelled)) || !errors.Is(Failure(CodeSubscriptionCancelled), failure) {
+		t.Fatal("cause broke code-only identity")
+	}
+	if code, ok := CodeOf(fmt.Errorf("wrapped: %w", failure)); !ok || code != CodeSubscriptionCancelled {
+		t.Fatalf("CodeOf(wrapped) = %q ok=%t", code, ok)
+	}
+	bare := Cancelled(nil)
+	if bare.Error() != string(CodeSubscriptionCancelled) || errors.Unwrap(bare) != nil {
+		t.Fatalf("cancelled without cause = %q unwrap=%v", bare.Error(), errors.Unwrap(bare))
+	}
+	if (*Error)(nil).Unwrap() != nil {
+		t.Fatal("nil failure unwrapped to a cause")
 	}
 }
 

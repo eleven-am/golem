@@ -21,7 +21,7 @@ type memoryStream struct {
 	stop      func() bool
 	closed    bool
 	once      sync.Once
-	err       ErrorCode
+	err       error
 }
 
 func NewMemoryTransport(limits MemoryLimits) (EventTransport, error) {
@@ -45,14 +45,14 @@ func (transport *memoryTransport) Subscribe(ctx context.Context, subscription Su
 		return nil, Failure(CodeSubscriptionInvalid)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, Failure(CodeSubscriptionCancelled)
+		return nil, Cancelled(err)
 	}
 	transport.mu.Lock()
 	transport.nextID++
 	stream := &memoryStream{transport: transport, id: transport.nextID, filter: subscription, queue: make(chan Notice, transport.buffer)}
 	transport.streams[stream.id] = stream
 	transport.mu.Unlock()
-	stream.installStop(context.AfterFunc(ctx, func() { _ = stream.closeWith(CodeSubscriptionCancelled) }))
+	stream.installStop(context.AfterFunc(ctx, func() { _ = stream.closeWithError(Cancelled(ctx.Err())) }))
 	return stream, nil
 }
 
@@ -97,10 +97,10 @@ func (stream *memoryStream) Recv(ctx context.Context) (Notice, error) {
 	}
 	select {
 	case <-ctx.Done():
-		return Notice{}, Failure(CodeSubscriptionCancelled)
+		return Notice{}, Cancelled(ctx.Err())
 	case notice, ok := <-stream.queue:
 		if !ok {
-			return Notice{}, Failure(stream.err)
+			return Notice{}, stream.err
 		}
 		return notice, nil
 	}
@@ -132,13 +132,17 @@ func (stream *memoryStream) closeStop() func() bool {
 }
 
 func (stream *memoryStream) closeWith(code ErrorCode) error {
+	return stream.closeWithError(Failure(code))
+}
+
+func (stream *memoryStream) closeWithError(failure error) error {
 	stream.once.Do(func() {
 		if stop := stream.closeStop(); stop != nil {
 			stop()
 		}
 		stream.transport.mu.Lock()
 		delete(stream.transport.streams, stream.id)
-		stream.err = code
+		stream.err = failure
 		close(stream.queue)
 		stream.transport.mu.Unlock()
 	})

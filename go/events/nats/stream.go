@@ -19,7 +19,7 @@ type stream struct {
 	upstream    subscription
 	stop        func() bool
 	closed      bool
-	err         events.ErrorCode
+	err         error
 	queuedBytes int
 	once        sync.Once
 }
@@ -82,21 +82,21 @@ func (stream *stream) Recv(ctx context.Context) (events.Notice, error) {
 	}
 	select {
 	case <-stream.done:
-		return events.Notice{}, events.Failure(stream.failure())
+		return events.Notice{}, stream.failure()
 	default:
 	}
 	select {
 	case <-ctx.Done():
-		return events.Notice{}, events.Failure(events.CodeSubscriptionCancelled)
+		return events.Notice{}, events.Cancelled(ctx.Err())
 	case <-stream.done:
-		return events.Notice{}, events.Failure(stream.failure())
+		return events.Notice{}, stream.failure()
 	case payload := <-stream.queue:
 		stream.mu.Lock()
 		stream.queuedBytes -= len(payload)
 		stream.mu.Unlock()
 		select {
 		case <-stream.done:
-			return events.Notice{}, events.Failure(stream.failure())
+			return events.Notice{}, stream.failure()
 		default:
 		}
 		stream.transport.mu.Lock()
@@ -118,11 +118,11 @@ func (stream *stream) Recv(ctx context.Context) (events.Notice, error) {
 	}
 }
 
-func (stream *stream) failure() events.ErrorCode {
+func (stream *stream) failure() error {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if stream.err == "" {
-		return events.CodeEventSourceClosed
+	if stream.err == nil {
+		return events.Failure(events.CodeEventSourceClosed)
 	}
 	return stream.err
 }
@@ -130,10 +130,14 @@ func (stream *stream) failure() events.ErrorCode {
 func (stream *stream) Close() error { return stream.closeWith(events.CodeEventSourceClosed) }
 
 func (stream *stream) closeWith(code events.ErrorCode) error {
+	return stream.closeWithError(events.Failure(code))
+}
+
+func (stream *stream) closeWithError(failure error) error {
 	stream.once.Do(func() {
 		stream.mu.Lock()
 		stream.closed = true
-		stream.err = code
+		stream.err = failure
 		upstream := stream.upstream
 		stop := stream.stop
 		stream.upstream = nil

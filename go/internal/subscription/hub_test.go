@@ -176,11 +176,11 @@ func TestSubscriptionStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) 
 				return true
 			}
 			if closeFirst {
-				stream.closeWith(events.CodeSubscriptionCancelled)
+				stream.closeWith(events.Failure(events.CodeSubscriptionCancelled))
 				stream.installStop(stop)
 			} else {
 				stream.installStop(stop)
-				stream.closeWith(events.CodeSubscriptionCancelled)
+				stream.closeWith(events.Failure(events.CodeSubscriptionCancelled))
 			}
 			if err := stream.Close(); err != nil {
 				t.Fatal(err)

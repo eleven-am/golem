@@ -5,12 +5,33 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.8
+go get github.com/eleven-am/golem/go@v0.7.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.7.0
+
+Unreleased.
+
+**Fix: an expired `Recv` context now reports why.** When the context passed to
+`EventStream.Recv` was cancelled or hit its deadline, `Recv` returned
+`GOLEM_SUBSCRIPTION_CANCELLED` with no cause, so a caller could not tell a
+`Recv` timeout, which leaves the stream open, from a closed stream. The error
+now wraps that context's error: `errors.Is(err, context.DeadlineExceeded)` or
+`errors.Is(err, context.Canceled)` holds, as does the existing code check, and
+the next `Recv` on the same stream receives the next event. When the context
+passed to subscribe ends, the error wraps that context's error too. `Close`
+still yields `GOLEM_SUBSCRIPTION_CANCELLED` with no cause. The error text gains
+the cause as a suffix, such as `GOLEM_SUBSCRIPTION_CANCELLED: context deadline
+exceeded`, and `*events.Error` now unwraps; `events.Cancelled(cause)` builds
+this error. Over GraphQL WebSocket, an operation whose context is cancelled
+because its connection or the server is closing now ends without sending a
+`GOLEM_SUBSCRIPTION_CANCELLED` error frame; other terminal codes still send one.
 
 ---
 

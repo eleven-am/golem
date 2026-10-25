@@ -31,16 +31,21 @@ const (
 type Error struct {
 	code   ErrorCode
 	detail string
+	cause  error
 }
 
 func (failure *Error) Error() string {
 	if failure == nil {
 		return ""
 	}
-	if failure.detail == "" {
-		return string(failure.code)
+	message := string(failure.code)
+	if failure.detail != "" {
+		message += ": " + failure.detail
 	}
-	return string(failure.code) + ": " + failure.detail
+	if failure.cause != nil {
+		message += ": " + failure.cause.Error()
+	}
+	return message
 }
 func (failure *Error) Code() ErrorCode {
 	if failure == nil {
@@ -53,7 +58,18 @@ func (failure *Error) Is(target error) bool {
 	return ok && failure != nil && other != nil && failure.code == other.code
 }
 
+func (failure *Error) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.cause
+}
+
 func Failure(code ErrorCode) error { return &Error{code: code} }
+
+func Cancelled(cause error) error {
+	return &Error{code: CodeSubscriptionCancelled, cause: cause}
+}
 
 // Failf builds a classified events failure that also names the field and the
 // bound it violated. Classification stays code-only: Is, CodeOf and every

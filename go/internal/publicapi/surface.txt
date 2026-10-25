@@ -79,6 +79,7 @@ events.(*Capabilities).TransportAvailable func() bool
 events.(*Error).Code func() ErrorCode
 events.(*Error).Error func() string
 events.(*Error).Is func(error) bool
+events.(*Error).Unwrap func() error
 events.(*Limits).RetentionEnabled func() bool
 events.(*Observation).Action func() golem.EventAction
 events.(*Observation).AggregateCount func() int64
@@ -169,6 +170,7 @@ events.CDCIdentity unkeyed literal {Name, Version, Provider}
 events.CDCIdentity.Name field string
 events.CDCIdentity.Provider field golem.Provider
 events.CDCIdentity.Version field string
+events.Cancelled func(error) error
 events.Capabilities type struct
 events.CapabilitiesOf func(EventTransport) TransportCapabilities
 events.CapabilityReporter type interface {TransportCapabilities}

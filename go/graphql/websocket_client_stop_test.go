@@ -356,3 +356,33 @@ func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T
 		}
 	}
 }
+
+func TestWebSocketTerminalCancellationWithoutCauseSendsErrorFrame(t *testing.T) {
+	connection, executor, observer := newClientStopServer(t)
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	stream := <-executor.created
+	stream.failure <- events.Failure(events.CodeSubscriptionCancelled)
+	frame := readWS(t, connection)
+	if frame.ID != "one" || frame.Type != "error" || !bytes.Contains(frame.Payload, []byte(`"code":"`+string(events.CodeSubscriptionCancelled)+`"`)) {
+		t.Fatalf("terminal cancellation frame = %#v", frame)
+	}
+	if finished := awaitFinishedSubscription(t, observer); finished.Outcome() != observe.OutcomeFailure {
+		t.Fatalf("terminal cancellation recorded outcome=%s reason=%s", finished.Outcome(), finished.Reason())
+	}
+}
+
+func TestWebSocketContextCancelledRecvEndsOperationWithoutFrame(t *testing.T) {
+	connection, executor, observer := newClientStopServer(t)
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	stream := <-executor.created
+	stream.failure <- events.Cancelled(context.Canceled)
+	if finished := awaitFinishedSubscription(t, observer); finished.Outcome() != observe.OutcomeCancelled {
+		t.Fatalf("context-cancelled Recv recorded outcome=%s reason=%s", finished.Outcome(), finished.Reason())
+	}
+	writeWS(t, connection, wsMessage{ID: "canary", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	canary := <-executor.created
+	canary.values <- Response{Data: map[string]any{"ticks": int32(7)}}
+	if frame := readWS(t, connection); frame.ID != "canary" || frame.Type != "next" {
+		t.Fatalf("frame after a context-cancelled Recv = %#v", frame)
+	}
+}
