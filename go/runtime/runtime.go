@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -1144,6 +1145,10 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 	hydrations := planned.Hydrations()
 	hydrationRows, err := executeRelationViews(ctx, app, executor, operation, planned, result, hydrations)
 	if err != nil {
+		var public *golem.Error
+		if errors.As(err, &public) && public.Code == golem.CodeLimitExceeded {
+			public.Field = golem.FieldID{}
+		}
 		return nil, err
 	}
 
@@ -1425,7 +1430,7 @@ func enforceDecodedResultLimit(operation golem.ReadOperation, planned readplan.P
 	if field != (golem.FieldID{}) {
 		limit = golem.LimitFanout
 	}
-	return golem.RuntimeLimitError(operationName(operation), golem.ModelID(planned.ModelID()), limit, maximum, reasonMessage(golem.ReasonLimitExceeded, string(limit), maximum), nil)
+	return publicLimit(operationName(operation), golem.ModelID(planned.ModelID()), limit, maximum, field, nil)
 }
 
 func publicPlanError(prepared PreparedRead, cause error) error {

@@ -26,10 +26,13 @@ const (
 )
 
 func enforceStatementParameterLimitWith(model policyir.ModelID, args []any, maximum int) error {
-	if maximum > 0 && maximum <= MaxStatementParameters && len(args) <= maximum {
+	if maximum <= 0 || maximum > MaxStatementParameters {
+		return fail(CodeInput, model, policyir.FieldID{}, "configured read statement parameter limit is invalid", nil)
+	}
+	if len(args) <= maximum {
 		return nil
 	}
-	return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementParameters, Maximum: min(maximum, MaxStatementParameters), Detail: "read statement exceeds the provider-neutral parameter ceiling"}
+	return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementParameters, Maximum: maximum, Detail: "read statement exceeds the provider-neutral parameter ceiling"}
 }
 
 func enforceStatementComplexity(model policyir.ModelID, statement string) error {
@@ -38,15 +41,18 @@ func enforceStatementComplexity(model policyir.ModelID, statement string) error 
 
 // ValidateStatementComplexity applies the configured provider-neutral SQL size limits.
 func ValidateStatementComplexity(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
-	if maximumBytes <= 0 || maximumBytes > MaxStatementBytes || len(statement) > maximumBytes {
-		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementSize, Maximum: min(maximumBytes, MaxStatementBytes), Detail: "read statement exceeds the provider-neutral byte ceiling"}
+	if maximumBytes <= 0 || maximumBytes > MaxStatementBytes || maximumAliases <= 0 || maximumAliases > MaxStatementAliases {
+		return fail(CodeInput, model, policyir.FieldID{}, "configured read statement size limits are invalid", nil)
+	}
+	if len(statement) > maximumBytes {
+		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementSize, Maximum: maximumBytes, Detail: "read statement exceeds the provider-neutral byte ceiling"}
 	}
 	// Every table/subquery and projected decode column emitted by the closed P3
 	// renderer introduces an AS token. CAST expressions do too, making this a
 	// deliberately conservative SQL-complexity bound rather than a parser-based
 	// count of aliases. It remains deterministic and independent of quoting.
-	if maximumAliases <= 0 || maximumAliases > MaxStatementAliases || strings.Count(statement, " AS ") > maximumAliases {
-		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementAliases, Maximum: min(maximumAliases, MaxStatementAliases), Detail: "read statement exceeds the provider-neutral alias ceiling"}
+	if strings.Count(statement, " AS ") > maximumAliases {
+		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementAliases, Maximum: maximumAliases, Detail: "read statement exceeds the provider-neutral alias ceiling"}
 	}
 	return nil
 }

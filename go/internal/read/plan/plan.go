@@ -598,7 +598,10 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		}
 	}
 	if len(result.fields)+len(result.relations)+len(result.counts)+len(result.hydrations) > limits.MaxSelected {
-		return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, model, "selected and policy-only fields exceed the limit")
+		if len(selections)+len(result.orders)+len(result.distinct) > limits.MaxSelected {
+			return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, model, "selected and policy-only fields exceed the limit")
+		}
+		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only fields exceed the selected field limit")
 	}
 	return result, nil
 }
@@ -704,7 +707,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		injectScalarDependencies(&result, registry, []policyir.FieldID{field}, planned)
 	}
 	if len(result.fields)+len(result.hydrations) > limits.MaxSelected {
-		return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, model, "policy-only dependency fields exceed the limit")
+		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only dependency fields exceed the limit")
 	}
 	return result, nil
 }

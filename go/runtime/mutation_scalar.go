@@ -1051,7 +1051,7 @@ func publicScalarMutationError(model golem.ModelID, err error) error {
 	}
 	var failure *scalarMutationFailure
 	scalar := errors.As(err, &failure)
-	if _, _, limited := limitFailure(err); limited {
+	if _, limited := limitFailure(err); limited {
 		operation := "delete"
 		if scalar {
 			operation = scalarMutationOperationName(failure.operation)

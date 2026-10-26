@@ -42,7 +42,7 @@ func TestRuntimeReadLimitsRefuseOverflowWithoutSilentTruncationAndAreIsolated(t 
 	rootOptions := []golem.ReadOption[testUser]{golem.OrderBy(handles.userID.Asc()), golem.Select[testUser](handles.userName)}
 
 	rows, err := SystemFindMany(ctx, limited.System(), handles.users, rootOptions...)
-	assertReadLimitFailure(t, rows, err, golem.LimitTake, 2)
+	assertReadLimitFailure(t, rows, err, golem.FieldID{}, golem.LimitTake, 2)
 	rows, err = SystemFindMany(ctx, limited.System(), handles.users, golem.OrderBy(handles.userID.Asc()), golem.Take[testUser](2), golem.Select[testUser](handles.userName))
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("explicit exact root take rows=%d err=%v", len(rows), err)
@@ -82,7 +82,7 @@ func TestRuntimeReadLimitsRefuseOverflowWithoutSilentTruncationAndAreIsolated(t 
 				golem.Where(handles.userName.Eq("alice")),
 				golem.Select[testUser](handles.userName, handles.posts.Select(handles.postTitle)),
 			)
-			assertReadLimitFailure(t, overflow, overflowErr, golem.LimitFanout, 2)
+			assertReadLimitFailure(t, overflow, overflowErr, fixture.UserPosts, golem.LimitFanout, 2)
 
 			// An explicit page at the configured boundary is intentionally a
 			// page, not an overflow probe.
@@ -101,11 +101,11 @@ func TestRuntimeReadLimitsRefuseOverflowWithoutSilentTruncationAndAreIsolated(t 
 	}
 }
 
-func assertReadLimitFailure[M any](t *testing.T, rows []golem.Row[M], err error, limit golem.Limit, maximum int) {
+func assertReadLimitFailure[M any](t *testing.T, rows []golem.Row[M], err error, field golem.FieldID, limit golem.Limit, maximum int) {
 	t.Helper()
 	var failure *golem.Error
 	message := fmt.Sprintf("request exceeds the %s limit of %d", limit, maximum)
-	if len(rows) != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != limit || failure.LimitMax != maximum || failure.Field != (golem.FieldID{}) || failure.Message != message {
+	if len(rows) != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != limit || failure.LimitMax != maximum || failure.Field != field || failure.Message != message {
 		t.Fatalf("rows=%d error=%v", len(rows), err)
 	}
 }

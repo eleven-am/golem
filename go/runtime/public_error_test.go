@@ -190,11 +190,13 @@ func TestLimitMappersRaiseLimitExceededBeforeAnyOtherClassification(t *testing.T
 		cause   error
 		limit   golem.Limit
 		maximum int
+		field   golem.FieldID
 	}{
 		{name: "touched rows", cause: &mutationLimitError{limit: golem.LimitTouchedRows, max: 3}, limit: golem.LimitTouchedRows, maximum: 3},
 		{name: "facts", cause: &mutationLimitError{limit: golem.LimitFacts, max: 1}, limit: golem.LimitFacts, maximum: 1},
 		{name: "outbox bytes", cause: &mutationLimitError{limit: golem.LimitOutboxBytes, max: 64}, limit: golem.LimitOutboxBytes, maximum: 64},
 		{name: "nested depth", cause: &mutationnested.Error{Code: mutationnested.CodeDepth, Limit: golem.LimitNestedDepth, Maximum: 2}, limit: golem.LimitNestedDepth, maximum: 2},
+		{name: "nested create-many names its relation", cause: &mutationnested.Error{Code: mutationnested.CodeShape, Field: golem.FieldID{15: 9}, Limit: golem.LimitBatchRows, Maximum: 4}, limit: golem.LimitBatchRows, maximum: 4, field: golem.FieldID{15: 9}},
 		{name: "wrapped", cause: fmt.Errorf("outer: %w", &mutationLimitError{limit: golem.LimitTransactionOrdinal, max: 7}), limit: golem.LimitTransactionOrdinal, maximum: 7},
 	}
 	for _, test := range tests {
@@ -210,7 +212,7 @@ func TestLimitMappersRaiseLimitExceededBeforeAnyOtherClassification(t *testing.T
 				"rebased upsert":    rebaseOptimisticUpsertError(model, publicRootUpsertError(model, test.cause)),
 			} {
 				var failure *golem.Error
-				if !errors.As(presented, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != test.limit || failure.LimitMax != test.maximum || failure.Field != (golem.FieldID{}) || failure.Message != message {
+				if !errors.As(presented, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != test.limit || failure.LimitMax != test.maximum || failure.Field != test.field || failure.Message != message {
 					t.Fatalf("%s failure=%#v", name, failure)
 				}
 				if !errors.Is(presented, golem.CodeLimitExceeded) || !errors.Is(presented, golem.ReasonLimitExceeded) || errors.Is(presented, golem.CodeBadUserInput) {

@@ -48,36 +48,48 @@ func reasonMessage(reason golem.Reason, subject string, maximum int) string {
 	}
 }
 
-func limitFailure(err error) (golem.Limit, int, bool) {
+type limitDetail struct {
+	limit   golem.Limit
+	maximum int
+	field   golem.FieldID
+}
+
+func limitFailure(err error) (limitDetail, bool) {
 	var state *mutationLimitError
 	if errors.As(err, &state) {
-		return state.limit, state.max, true
+		return limitDetail{limit: state.limit, maximum: state.max}, true
 	}
 	var batch *mutationbatch.Error
 	if errors.As(err, &batch) && batch.Code == mutationbatch.CodeLimit && batch.Limit != "" {
-		return batch.Limit, batch.Maximum, true
+		return limitDetail{limit: batch.Limit, maximum: batch.Maximum}, true
 	}
 	var nested *mutationnested.Error
 	if errors.As(err, &nested) && nested.Limit != "" {
-		return nested.Limit, nested.Maximum, true
+		return limitDetail{limit: nested.Limit, maximum: nested.Maximum, field: nested.Field}, true
 	}
 	var planned *readplan.Error
 	if errors.As(err, &planned) && planned.Limit != "" {
-		return planned.Limit, planned.Maximum, true
+		return limitDetail{limit: planned.Limit, maximum: planned.Maximum}, true
 	}
 	var rendered *readsql.Error
 	if errors.As(err, &rendered) && rendered.Limit != "" {
-		return rendered.Limit, rendered.Maximum, true
+		return limitDetail{limit: rendered.Limit, maximum: rendered.Maximum}, true
 	}
-	return "", 0, false
+	return limitDetail{}, false
 }
 
 func publicLimitError(operation string, model golem.ModelID, err error) (error, bool) {
-	limit, maximum, ok := limitFailure(err)
+	detail, ok := limitFailure(err)
 	if !ok {
 		return nil, false
 	}
-	return golem.RuntimeLimitError(operation, model, limit, maximum, reasonMessage(golem.ReasonLimitExceeded, string(limit), maximum), err), true
+	return publicLimit(operation, model, detail.limit, detail.maximum, detail.field, err), true
+}
+
+func publicLimit(operation string, model golem.ModelID, limit golem.Limit, maximum int, field golem.FieldID, cause error) error {
+	failure := golem.RuntimeLimitError(operation, model, limit, maximum, reasonMessage(golem.ReasonLimitExceeded, string(limit), maximum), cause).(*golem.Error)
+	failure.Field = field
+	return failure
 }
 
 func publicValueError(operation string, model golem.ModelID, err error) (error, bool) {
@@ -104,21 +116,33 @@ func rebasePublicError(public *golem.Error, operation string, model golem.ModelI
 }
 
 func publicReadPlanError(operation string, model golem.ModelID, request readir.Request, cause error) (error, bool) {
+	mentions := func(field policyir.FieldID) bool { return requestMentionsField(request, field) }
+	if public, ok := publicReadReasonError(operation, model, mentions, cause); ok {
+		return public, true
+	}
+	var failure *readplan.Error
+	if !errors.As(cause, &failure) || (failure.Code != readplan.CodeField && failure.Code != readplan.CodePolicy) {
+		return nil, false
+	}
+	return golem.RuntimeReadError(golem.CodeForbidden, operation, model, namedField(failure.Field, mentions), "read is not permitted", cause), true
+}
+
+func publicReadReasonError(operation string, model golem.ModelID, mentions func(policyir.FieldID) bool, cause error) (error, bool) {
 	if limited, ok := publicLimitError(operation, model, cause); ok {
 		return limited, true
 	}
 	var failure *readplan.Error
-	if !errors.As(cause, &failure) || (failure.Code != readplan.CodeField && failure.Code != readplan.CodePolicy && failure.Reason == "") {
+	if !errors.As(cause, &failure) || failure.Reason == "" {
 		return nil, false
 	}
-	field := golem.FieldID{}
-	if failure.Field != (policyir.FieldID{}) && requestMentionsField(request, failure.Field) {
-		field = golem.FieldID(failure.Field)
+	return golem.RuntimeOperationErrorWithReason(golem.CodeForbidden, failure.Reason, operation, model, namedField(failure.Field, mentions), reasonMessage(failure.Reason, "", 0), cause), true
+}
+
+func namedField(field policyir.FieldID, mentions func(policyir.FieldID) bool) golem.FieldID {
+	if field == (policyir.FieldID{}) || mentions == nil || !mentions(field) {
+		return golem.FieldID{}
 	}
-	if failure.Reason == "" {
-		return golem.RuntimeReadError(golem.CodeForbidden, operation, model, field, "read is not permitted", cause), true
-	}
-	return golem.RuntimeOperationErrorWithReason(golem.CodeForbidden, failure.Reason, operation, model, field, reasonMessage(failure.Reason, "", 0), cause), true
+	return golem.FieldID(field)
 }
 
 func publicReadRenderError(operation string, model golem.ModelID, message string, cause error) error {
