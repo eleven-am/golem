@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -28,7 +29,7 @@ func enforceStatementParameterLimitWith(model policyir.ModelID, args []any, maxi
 	if maximum > 0 && maximum <= MaxStatementParameters && len(args) <= maximum {
 		return nil
 	}
-	return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral parameter ceiling", nil)
+	return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementParameters, Maximum: min(maximum, MaxStatementParameters), Detail: "read statement exceeds the provider-neutral parameter ceiling"}
 }
 
 func enforceStatementComplexity(model policyir.ModelID, statement string) error {
@@ -38,14 +39,14 @@ func enforceStatementComplexity(model policyir.ModelID, statement string) error 
 // ValidateStatementComplexity applies the configured provider-neutral SQL size limits.
 func ValidateStatementComplexity(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
 	if maximumBytes <= 0 || maximumBytes > MaxStatementBytes || len(statement) > maximumBytes {
-		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral byte ceiling", nil)
+		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementSize, Maximum: min(maximumBytes, MaxStatementBytes), Detail: "read statement exceeds the provider-neutral byte ceiling"}
 	}
 	// Every table/subquery and projected decode column emitted by the closed P3
 	// renderer introduces an AS token. CAST expressions do too, making this a
 	// deliberately conservative SQL-complexity bound rather than a parser-based
 	// count of aliases. It remains deterministic and independent of quoting.
 	if maximumAliases <= 0 || maximumAliases > MaxStatementAliases || strings.Count(statement, " AS ") > maximumAliases {
-		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral alias ceiling", nil)
+		return &Error{Code: CodeRender, Model: model, Limit: golem.LimitStatementAliases, Maximum: min(maximumAliases, MaxStatementAliases), Detail: "read statement exceeds the provider-neutral alias ceiling"}
 	}
 	return nil
 }

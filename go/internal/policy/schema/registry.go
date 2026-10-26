@@ -416,6 +416,7 @@ func (registry *Registry) Capability(provider golem.Provider, id compilerir.Capa
 // Model is the minimum provider-neutral model fact used by the binder.
 type Model struct {
 	id                    golem.ModelID
+	logicalName           string
 	fields                []golem.FieldID
 	primaryKey            []golem.FieldID
 	identities            []Identity
@@ -432,6 +433,7 @@ type Model struct {
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
+func (model Model) LogicalName() string     { return model.logicalName }
 func (model Model) Fields() []golem.FieldID { return append([]golem.FieldID(nil), model.fields...) }
 func (model Model) PrimaryKey() []golem.FieldID {
 	return append([]golem.FieldID(nil), model.primaryKey...)

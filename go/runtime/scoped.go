@@ -233,6 +233,9 @@ func reportScoped[P, A any](ctx context.Context, app *App[P, A], request golem.F
 }
 
 func scopedError(model golem.ModelID, cause error) error {
+	if limited, ok := publicLimitError("scoped", model, cause); ok {
+		return limited
+	}
 	return golem.RuntimeReadError(readFaultCode(cause), "scoped", model, golem.FieldID{}, "scoped query could not be executed", cause)
 }
 

@@ -22,7 +22,7 @@ import (
 func (program Program) PrepareCaptured(rows []mutationdecode.Row) (Prepared, error) {
 	context := program.context
 	if uint64(len(rows)) > uint64(program.maxRows) {
-		return Prepared{}, fail(CodeLimit, context.modelID(), policyir.FieldID{}, fmt.Sprintf("captured %d rows; maximum is %d", len(rows), program.maxRows), nil)
+		return Prepared{}, failLimit(golem.LimitBatchRows, int(program.maxRows), context.modelID(), fmt.Sprintf("captured %d rows; maximum is %d", len(rows), program.maxRows))
 	}
 	identities := make([][]any, len(rows))
 	seen := make(map[string]struct{}, len(rows))
@@ -202,11 +202,11 @@ func (context renderContext) chunkSize() (int, error) {
 		fixed = updateFixed
 	}
 	if len(context.primary) == 0 || max <= fixed {
-		return 0, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
+		return 0, failLimit(golem.LimitStatementParameters, max, context.modelID(), "parameter bound cannot hold one captured identity")
 	}
 	rows := (max - fixed) / len(context.primary)
 	if rows < 1 {
-		return 0, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
+		return 0, failLimit(golem.LimitStatementParameters, max, context.modelID(), "parameter bound cannot hold one captured identity")
 	}
 	if rows > int(context.plan.Bounds().MaxRows()) {
 		rows = int(context.plan.Bounds().MaxRows())
@@ -443,7 +443,7 @@ func (context renderContext) orderBy() string {
 
 func (context renderContext) check(statement Statement) (Statement, error) {
 	if uint32(len(statement.bindings)) > context.plan.Bounds().MaxParameters() {
-		return Statement{}, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "prepared statement exceeds parameter bound", nil)
+		return Statement{}, failLimit(golem.LimitStatementParameters, int(context.plan.Bounds().MaxParameters()), context.modelID(), "prepared statement exceeds parameter bound")
 	}
 	return statement, nil
 }

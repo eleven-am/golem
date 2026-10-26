@@ -29,11 +29,13 @@ const (
 )
 
 type Error struct {
-	Code   ErrorCode
-	Model  golem.ModelID
-	Field  golem.FieldID
-	Detail string
-	Cause  error
+	Code    ErrorCode
+	Model   golem.ModelID
+	Field   golem.FieldID
+	Limit   golem.Limit
+	Maximum int
+	Detail  string
+	Cause   error
 }
 
 func (failure *Error) Error() string {

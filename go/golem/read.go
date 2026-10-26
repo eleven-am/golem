@@ -1085,15 +1085,55 @@ const (
 	CodeUnauthenticated ErrorCode = "UNAUTHENTICATED"
 	CodeForbidden       ErrorCode = "FORBIDDEN"
 	CodeConflict        ErrorCode = "CONFLICT"
+	CodeLimitExceeded   ErrorCode = "LIMIT_EXCEEDED"
+)
+
+func (code ErrorCode) Error() string { return string(code) }
+
+type Reason string
+
+const (
+	ReasonValueTooLong          Reason = "VALUE_TOO_LONG"
+	ReasonValuePrecision        Reason = "VALUE_PRECISION"
+	ReasonValueRange            Reason = "VALUE_RANGE"
+	ReasonInvalidValue          Reason = "INVALID_VALUE"
+	ReasonLimitExceeded         Reason = "LIMIT_EXCEEDED"
+	ReasonNotGranted            Reason = "NOT_GRANTED"
+	ReasonFieldNotReadable      Reason = "FIELD_NOT_READABLE"
+	ReasonAuthorizationUnproven Reason = "AUTHORIZATION_UNPROVEN"
+	ReasonPolicyInvalid         Reason = "POLICY_INVALID"
+)
+
+func (reason Reason) Error() string { return string(reason) }
+
+type Limit string
+
+const (
+	LimitTouchedRows         Limit = "touched_rows"
+	LimitFacts               Limit = "facts"
+	LimitOutboxBytes         Limit = "outbox_bytes"
+	LimitTransactionOrdinal  Limit = "transaction_ordinal"
+	LimitNestedDepth         Limit = "nested_depth"
+	LimitStatementParameters Limit = "statement_parameters"
+	LimitStatementSize       Limit = "statement_size"
+	LimitStatementAliases    Limit = "statement_aliases"
+	LimitBatchRows           Limit = "batch_rows"
+	LimitTake                Limit = "take"
+	LimitFanout              Limit = "fanout"
+	LimitSelectedFields      Limit = "selected_fields"
+	LimitDepth               Limit = "depth"
 )
 
 // Error is the transport-neutral public operation error. Cause is retained for
 // trusted logs through Unwrap but is never part of Error's public text.
 type Error struct {
 	Code      ErrorCode
+	Reason    Reason
 	Operation string
 	Model     ModelID
 	Field     FieldID
+	Limit     Limit
+	LimitMax  int
 	Message   string
 	cause     error
 }
@@ -1109,10 +1149,24 @@ func RuntimeReadError(code ErrorCode, operation string, model ModelID, field Fie
 // shared by reads and mutations. RuntimeReadError remains as the P3-compatible
 // spelling.
 func RuntimeOperationError(code ErrorCode, operation string, model ModelID, field FieldID, message string, cause error) error {
-	if code != CodeBadUserInput && code != CodeNotFound && code != CodeUnauthenticated && code != CodeForbidden && code != CodeConflict {
+	if code != CodeBadUserInput && code != CodeNotFound && code != CodeUnauthenticated && code != CodeForbidden && code != CodeConflict && code != CodeLimitExceeded {
 		code = CodeBadUserInput
 	}
 	return &Error{Code: code, Operation: operation, Model: model, Field: field, Message: message, cause: cause}
+}
+
+func RuntimeOperationErrorWithReason(code ErrorCode, reason Reason, operation string, model ModelID, field FieldID, message string, cause error) error {
+	failure := RuntimeOperationError(code, operation, model, field, message, cause).(*Error)
+	failure.Reason = reason
+	return failure
+}
+
+func RuntimeLimitError(operation string, model ModelID, limit Limit, maximum int, message string, cause error) error {
+	failure := RuntimeOperationError(CodeLimitExceeded, operation, model, FieldID{}, message, cause).(*Error)
+	failure.Reason = ReasonLimitExceeded
+	failure.Limit = limit
+	failure.LimitMax = maximum
+	return failure
 }
 
 func (failure *Error) Error() string {
@@ -1127,6 +1181,19 @@ func (failure *Error) Unwrap() error {
 		return nil
 	}
 	return failure.cause
+}
+
+func (failure *Error) Is(target error) bool {
+	if failure == nil {
+		return false
+	}
+	switch typed := target.(type) {
+	case ErrorCode:
+		return failure.Code == typed
+	case Reason:
+		return failure.Reason != "" && failure.Reason == typed
+	}
+	return false
 }
 
 type ReadOperation uint8

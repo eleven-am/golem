@@ -440,7 +440,9 @@ golem.(*EqualField).In func(...V) Predicate[M]
 golem.(*EqualField).Ne func(V) Predicate[M]
 golem.(*EqualField).NotIn func(...V) Predicate[M]
 golem.(*Error).Error func() string
+golem.(*Error).Is func(error) bool
 golem.(*Error).Unwrap func() error
+golem.(*ErrorCode).Error func() string
 golem.(*EventMetadata).Action func() EventAction
 golem.(*EventMetadata).CausationID func() CausationID
 golem.(*EventMetadata).EventID func() EventID
@@ -774,6 +776,7 @@ golem.(*ReadValue).IsNull func() bool
 golem.(*ReadValue).IsPresent func() bool
 golem.(*ReadValue).IsSelected func() bool
 golem.(*ReadValue).State func() ReadState
+golem.(*Reason).Error func() string
 golem.(*RelationDimension).Asc func() GroupOrder[M]
 golem.(*RelationDimension).Desc func() GroupOrder[M]
 golem.(*RelationDimension).Eq func(V) GroupPredicate[M]
@@ -1186,6 +1189,7 @@ golem.(EqualField).Expr func() SchemaExpr[M, V]
 golem.(EqualField).In func(...V) Predicate[M]
 golem.(EqualField).Ne func(V) Predicate[M]
 golem.(EqualField).NotIn func(...V) Predicate[M]
+golem.(ErrorCode).Error func() string
 golem.(EventMetadata).Action func() EventAction
 golem.(EventMetadata).CausationID func() CausationID
 golem.(EventMetadata).EventID func() EventID
@@ -1501,6 +1505,7 @@ golem.(ReadValue).IsNull func() bool
 golem.(ReadValue).IsPresent func() bool
 golem.(ReadValue).IsSelected func() bool
 golem.(ReadValue).State func() ReadState
+golem.(Reason).Error func() string
 golem.(RelationDimension).Asc func() GroupOrder[M]
 golem.(RelationDimension).Desc func() GroupOrder[M]
 golem.(RelationDimension).Eq func(V) GroupPredicate[M]
@@ -1902,6 +1907,7 @@ golem.Coalesce func[M any, V any](...SchemaValue[M, V]) SchemaExpr[M, V]
 golem.CodeBadUserInput const ErrorCode = "BAD_USER_INPUT"
 golem.CodeConflict const ErrorCode = "CONFLICT"
 golem.CodeForbidden const ErrorCode = "FORBIDDEN"
+golem.CodeLimitExceeded const ErrorCode = "LIMIT_EXCEEDED"
 golem.CodeNotFound const ErrorCode = "NOT_FOUND"
 golem.CodeUnauthenticated const ErrorCode = "UNAUTHENTICATED"
 golem.Column[M any] type interface {} sealed
@@ -1950,9 +1956,12 @@ golem.Error comparable
 golem.Error type struct
 golem.Error.Code field ErrorCode
 golem.Error.Field field FieldID
+golem.Error.Limit field Limit
+golem.Error.LimitMax field int
 golem.Error.Message field string
 golem.Error.Model field ModelID
 golem.Error.Operation field string
+golem.Error.Reason field Reason
 golem.ErrorCode comparable
 golem.ErrorCode type string
 golem.EventAction comparable
@@ -2517,6 +2526,21 @@ golem.KeyID comparable
 golem.KeyID type [16]uint8
 golem.LeftJoin func[M any, R any](Scope[M], Relation[M, R]) Scope[R]
 golem.Length func[M any, V ~string | ~[]uint8](SchemaValue[M, V]) SchemaExpr[M, int64]
+golem.Limit comparable
+golem.Limit type string
+golem.LimitBatchRows const Limit = "batch_rows"
+golem.LimitDepth const Limit = "depth"
+golem.LimitFacts const Limit = "facts"
+golem.LimitFanout const Limit = "fanout"
+golem.LimitNestedDepth const Limit = "nested_depth"
+golem.LimitOutboxBytes const Limit = "outbox_bytes"
+golem.LimitSelectedFields const Limit = "selected_fields"
+golem.LimitStatementAliases const Limit = "statement_aliases"
+golem.LimitStatementParameters const Limit = "statement_parameters"
+golem.LimitStatementSize const Limit = "statement_size"
+golem.LimitTake const Limit = "take"
+golem.LimitTouchedRows const Limit = "touched_rows"
+golem.LimitTransactionOrdinal const Limit = "transaction_ordinal"
 golem.ListElement element ~bool | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string | UUID | Decimal | Date | Time | time.Time
 golem.ListElement type interface {}
 golem.ListField[M any, E ListElement] type struct
@@ -2701,6 +2725,17 @@ golem.ReadState comparable
 golem.ReadState type uint8
 golem.ReadUnselected const ReadState = 0
 golem.ReadValue[V any] type struct
+golem.Reason comparable
+golem.Reason type string
+golem.ReasonAuthorizationUnproven const Reason = "AUTHORIZATION_UNPROVEN"
+golem.ReasonFieldNotReadable const Reason = "FIELD_NOT_READABLE"
+golem.ReasonInvalidValue const Reason = "INVALID_VALUE"
+golem.ReasonLimitExceeded const Reason = "LIMIT_EXCEEDED"
+golem.ReasonNotGranted const Reason = "NOT_GRANTED"
+golem.ReasonPolicyInvalid const Reason = "POLICY_INVALID"
+golem.ReasonValuePrecision const Reason = "VALUE_PRECISION"
+golem.ReasonValueRange const Reason = "VALUE_RANGE"
+golem.ReasonValueTooLong const Reason = "VALUE_TOO_LONG"
 golem.ReferentialAction comparable
 golem.ReferentialAction type string
 golem.RelationCardinality comparable
@@ -2836,6 +2871,7 @@ golem.RuntimeInvokeMutationResultHooks func[A any](context.Context, ApplicationB
 golem.RuntimeInvokeReadBeforeHooks func[A any](context.Context, ApplicationBindings[A], RuntimeReadHookRequest, func(RuntimeReadHookRequest) error) (RuntimeReadHookRequest, error)
 golem.RuntimeInvokeReadResultHooks func[A any](context.Context, ApplicationBindings[A], RuntimeReadHookResult) error
 golem.RuntimeJSONRootPath func() JSONPath
+golem.RuntimeLimitError func(string, ModelID, Limit, int, string, error) error
 golem.RuntimeLockKeyIdentity func(LockKey) (string, error)
 golem.RuntimeModelReadRow func(ModelID, ...RuntimeReadCell) (RuntimeModelRow, error)
 golem.RuntimeModelReadRowWithCounts func(ModelID, []RuntimeReadCell, []RuntimeRelationCountCell) (RuntimeModelRow, error)
@@ -2920,6 +2956,7 @@ golem.RuntimeOccurrenceRelationCount func[M any, R any](Row[M], ToMany[M, R], Ru
 golem.RuntimeOccurrenceToMany func[M any, R any](Row[M], ToMany[M, R], RuntimeOccurrenceID) ReadValue[[]Row[R]]
 golem.RuntimeOccurrenceToOne func[M any, R any](Row[M], ToOne[M, R], RuntimeOccurrenceID) ReadValue[Row[R]]
 golem.RuntimeOperationError func(ErrorCode, string, ModelID, FieldID, string, error) error
+golem.RuntimeOperationErrorWithReason func(ErrorCode, Reason, string, ModelID, FieldID, string, error) error
 golem.RuntimePredicateNode type struct
 golem.RuntimePredicateNode unkeyed literal {Kind, Operator, Mode, Truth, Field, Relation, Operand, Path, Children}
 golem.RuntimePredicateNode.Children field []RuntimePredicateNode

@@ -485,7 +485,7 @@ func rebaseOptimisticUpsertError(model golem.ModelID, err error) error {
 	}
 	var public *golem.Error
 	if errors.As(err, &public) {
-		return golem.RuntimeOperationError(public.Code, "upsert", model, public.Field, public.Message, err)
+		return rebasePublicError(public, "upsert", model, public.Message, err)
 	}
 	return publicRootUpsertError(model, err)
 }
@@ -718,6 +718,9 @@ func reclassifyAbsentCollision[M any](ctx context.Context, attempt *sqlxUpsertAt
 }
 
 func publicAbsentUpsertExecutionError(model golem.ModelID, err error) error {
+	if limited, ok := publicLimitError("upsert", model, err); ok {
+		return limited
+	}
 	var cleanup *absentCreateRollbackFailure
 	if errors.As(err, &cleanup) {
 		return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", model, golem.FieldID{}, "mutation could not be completed", err)

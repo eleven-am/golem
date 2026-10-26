@@ -127,6 +127,10 @@ func (operation ScalarOperation) validate() error {
 	return nil
 }
 
+func ValueFitsType(value policyir.Value, fieldType policyir.TypeRef) error {
+	return valueFitsType(value, fieldType)
+}
+
 func valueFitsType(value policyir.Value, fieldType policyir.TypeRef) error {
 	switch fieldType.Kind() {
 	case policyir.ValueDecimal:

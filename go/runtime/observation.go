@@ -271,6 +271,8 @@ func observationResult(err error) (observe.Outcome, observe.Reason) {
 			return observe.OutcomeRefused, observe.ReasonConflict
 		case golem.CodeBadUserInput:
 			return observe.OutcomeRefused, observe.ReasonInvalidInput
+		case golem.CodeLimitExceeded:
+			return observe.OutcomeRefused, observe.ReasonLimit
 		}
 	}
 	return observe.OutcomeFailure, observe.ReasonProvider

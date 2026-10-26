@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
@@ -29,11 +30,13 @@ const (
 )
 
 type Error struct {
-	Code   ErrorCode
-	Model  policyir.ModelID
-	Field  policyir.FieldID
-	Detail string
-	Cause  error
+	Code    ErrorCode
+	Model   policyir.ModelID
+	Field   policyir.FieldID
+	Limit   golem.Limit
+	Maximum int
+	Detail  string
+	Cause   error
 }
 
 func (failure *Error) Error() string {
@@ -309,4 +312,8 @@ func cloneArgument(value any) any {
 
 func fail(code ErrorCode, model policyir.ModelID, field policyir.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Model: model, Field: field, Detail: detail, Cause: cause}
+}
+
+func failLimit(limit golem.Limit, maximum int, model policyir.ModelID, detail string) error {
+	return &Error{Code: CodeLimit, Model: model, Limit: limit, Maximum: maximum, Detail: detail}
 }

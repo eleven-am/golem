@@ -476,6 +476,9 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 }
 
 func publicNestedMutationExecutionError(operation mutationir.Operation, model golem.ModelID, err error) error {
+	if limited, ok := publicLimitError(scalarMutationOperationName(operation), model, err); ok {
+		return limited
+	}
 	var retryConflict *nestedMutationRetryConflict
 	if errors.As(err, &retryConflict) {
 		return golem.RuntimeOperationError(golem.CodeConflict, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation conflicted", err)
@@ -500,8 +503,6 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 			return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID(batch.Field), "nested batch mutation is not authorized", err)
 		case mutationbatch.CodeSet, mutationbatch.CodeIdentity:
 			return golem.RuntimeOperationError(golem.CodeConflict, scalarMutationOperationName(operation), model, golem.FieldID(batch.Field), "nested batch mutation conflicted", err)
-		case mutationbatch.CodeLimit:
-			return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID{}, "nested batch mutation exceeds the configured row limit", err)
 		}
 	}
 	// Nested caller batches expand and lock their exact related-row set before
@@ -691,6 +692,9 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 	if refused, ok := policyUnavailableOperationError(scalarMutationOperationName(operation), model, err); ok {
 		return refused
 	}
+	if limited, ok := publicLimitError(scalarMutationOperationName(operation), model, err); ok {
+		return limited
+	}
 	var planned *mutationplan.Error
 	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID(planned.Field), "mutation is not authorized", err)
@@ -700,6 +704,9 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, nested.Field, "mutation is not authorized", err)
 	}
 	if refused, ok := publicForeignKeyArithmetic(scalarMutationOperationName(operation), model, err); ok {
+		return refused
+	}
+	if refused, ok := publicValueError(scalarMutationOperationName(operation), model, err); ok {
 		return refused
 	}
 	var public *golem.Error

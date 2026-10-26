@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -929,7 +928,7 @@ func prepareReadStatement[P, A any](app *App[P, A], prepared PreparedRead) (prep
 		if prepared.Operation() == golem.ReadCount {
 			message = "count plan could not be rendered"
 		}
-		return preparedReadStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, message, err)
+		return preparedReadStatement{}, publicReadRenderError(operationName(prepared.Operation()), prepared.ModelID(), message, err)
 	}
 	return preparedReadStatement{prepared: prepared, plan: planned, statement: statement}, nil
 }
@@ -1020,7 +1019,7 @@ func countKey(count readplan.RelationCount) readOccurrenceKey {
 func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, planned readplan.Plan) ([]executedRow, error) {
 	statement, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read plan could not be rendered", err)
+		return nil, publicReadRenderError(operationName(operation), golem.ModelID(planned.ModelID()), "read plan could not be rendered", err)
 	}
 	return executeRenderedPlan(ctx, app, executor, operation, planned, statement)
 }
@@ -1422,20 +1421,19 @@ func enforceDecodedResultLimit(operation golem.ReadOperation, planned readplan.P
 	if maximum == 0 || rows <= maximum {
 		return nil
 	}
-	message := "root read limit exceeded"
+	limit := golem.LimitTake
 	if field != (golem.FieldID{}) {
-		message = "relation fanout limit exceeded"
+		limit = golem.LimitFanout
 	}
-	return golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), field, message, nil)
+	return golem.RuntimeLimitError(operationName(operation), golem.ModelID(planned.ModelID()), limit, maximum, reasonMessage(golem.ReasonLimitExceeded, string(limit), maximum), nil)
 }
 
 func publicPlanError(prepared PreparedRead, cause error) error {
 	if refused, ok := policyUnavailableReadError(operationName(prepared.Operation()), prepared.ModelID(), cause); ok {
 		return refused
 	}
-	var failure *readplan.Error
-	if errors.As(cause, &failure) && (failure.Code == readplan.CodeField || failure.Code == readplan.CodePolicy) {
-		return golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(failure.Field), "read is not permitted", cause)
+	if public, ok := publicReadPlanError(operationName(prepared.Operation()), prepared.ModelID(), prepared.request, cause); ok {
+		return public
 	}
 	return golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read request could not be planned", cause)
 }

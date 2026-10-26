@@ -262,7 +262,7 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	}
 	candidates, err := renderSemanticCandidates(app, prepared, planned, indexName, rankParameters)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
+		return nil, publicReadRenderError(operation, prepared.ModelID(), "semantic candidate statement could not be rendered", err)
 	}
 	model := semanticModelID(descriptor.Metadata())
 	ranks, err := rank(ctx, model, candidates.candidates)
@@ -274,7 +274,7 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	}
 	base, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+		return nil, publicReadRenderError(operation, prepared.ModelID(), "semantic row statement could not be rendered", err)
 	}
 	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, operation, candidates.decoder, candidates.fields, len(base.Args()), ranks)
 	if err != nil {
@@ -358,7 +358,7 @@ func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, oper
 		}
 	}
 	if maximum > 0 && requested > maximum {
-		return golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic result limit exceeds the planned row maximum", nil)
+		return golem.RuntimeLimitError(operation, prepared.ModelID(), golem.LimitTake, maximum, reasonMessage(golem.ReasonLimitExceeded, string(golem.LimitTake), maximum), nil)
 	}
 	return nil
 }
@@ -440,7 +440,7 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			}
 			reduced, retry := reduceSemanticHydrationChunk(start, end, err)
 			if !retry {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+				return nil, publicReadRenderError(operation, prepared.ModelID(), "semantic row statement could not be rendered", err)
 			}
 			end = reduced
 		}
