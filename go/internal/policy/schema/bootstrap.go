@@ -339,7 +339,7 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		}
 		builder.logicalModels[logicalModel.ID] = logicalModel
 		builder.logicalFields[logicalModel.ID] = make(map[compilerir.FieldID]compilerir.FieldIR, len(logicalModel.Fields))
-		modelFact := Model{id: mid, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes)), semanticIndexed: len(semanticIndexes[logicalModel.ID]) != 0}
+		modelFact := Model{id: mid, logicalName: logicalModel.LogicalName, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes)), semanticIndexed: len(semanticIndexes[logicalModel.ID]) != 0}
 		if logicalModel.OptimisticConcurrency != nil {
 			field, fieldErr := fieldID(*logicalModel.OptimisticConcurrency)
 			if fieldErr != nil {

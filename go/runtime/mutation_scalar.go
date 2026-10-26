@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
-	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
@@ -1052,13 +1051,13 @@ func publicScalarMutationError(model golem.ModelID, err error) error {
 	}
 	var failure *scalarMutationFailure
 	scalar := errors.As(err, &failure)
-	var limit *mutationbatch.Error
-	if errors.As(err, &limit) && limit.Code == mutationbatch.CodeLimit {
+	if _, limited := limitFailure(err); limited {
 		operation := "delete"
 		if scalar {
 			operation = scalarMutationOperationName(failure.operation)
 		}
-		return golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, golem.FieldID{}, "mutation exceeds the configured row limit", err)
+		public, _ := publicLimitError(operation, model, err)
+		return public
 	}
 	if !scalar {
 		return err

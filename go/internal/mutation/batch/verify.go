@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/eleven-am/golem/go/golem"
+
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -33,7 +35,7 @@ func (prepared Prepared) VerifyAuthorized(authorized []AuthorizedRow, applied, a
 		return Verification{}, fail(CodeSet, prepared.context.node.ModelID(), policyir.FieldID{}, "delete-many cannot have after images", nil)
 	}
 	if want > 0 && uint64(factOrdinalBase)+uint64(want)-1 > math.MaxUint32 {
-		return Verification{}, fail(CodeLimit, prepared.context.node.ModelID(), policyir.FieldID{}, "fact ordinal range exceeds uint32", nil)
+		return Verification{}, failLimit(golem.LimitTransactionOrdinal, math.MaxUint32, prepared.context.node.ModelID(), "fact ordinal range exceeds uint32")
 	}
 	applyByKey, err := prepared.indexRows(applied, "apply")
 	if err != nil {

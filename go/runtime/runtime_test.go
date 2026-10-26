@@ -248,8 +248,11 @@ func TestRootReadExecutionDecodesRowsAndAppliesPolicyBeforePaging(t *testing.T) 
 	denied, _ := app.ForPrincipal(ctx, testPrincipal{Allow: false})
 	callerRows, err = CallerFindMany(ctx, denied, userDescriptor, golem.Take[testUser](1), golem.Select[testUser](name))
 	var deniedError *golem.Error
-	if len(callerRows) != 0 || !errors.As(err, &deniedError) || deniedError.Code != golem.CodeForbidden {
+	if len(callerRows) != 0 || !errors.As(err, &deniedError) || deniedError.Code != golem.CodeForbidden || deniedError.Reason != golem.ReasonNotGranted || deniedError.Field != (golem.FieldID{}) || deniedError.Message != "operation is not granted" {
 		t.Fatalf("denied rows=%d err=%v", len(callerRows), err)
+	}
+	if !errors.Is(err, golem.CodeForbidden) || !errors.Is(err, golem.ReasonNotGranted) {
+		t.Fatalf("denied read is not matched by errors.Is: %v", err)
 	}
 }
 

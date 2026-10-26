@@ -259,7 +259,7 @@ func TestMASK_THE_DISTINCT_KEYSQLite(t *testing.T) {
 	}
 	rows, err := CallerFindMany(ctx, caller, users, golem.Distinct[testUser](userName), golem.Select[testUser](userID))
 	var failure *golem.Error
-	if len(rows) != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Field != fixture.UserName {
+	if len(rows) != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Field != fixture.UserName || failure.Reason != golem.ReasonFieldNotReadable || failure.Message != "field is not readable in this position" {
 		t.Fatalf("rows=%d error=%v", len(rows), err)
 	}
 }

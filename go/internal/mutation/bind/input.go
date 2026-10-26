@@ -385,7 +385,7 @@ func bindScalarOperation(kind InputKind, public golem.FrozenMutationField, field
 		}
 		value, err := bindValue(raw, field.LogicalType(), typ, registry)
 		if err != nil {
-			return mutationir.ScalarOperation{}, fail(CodeValue, modelID, fieldID, "create value does not match the exact logical type", err)
+			return mutationir.ScalarOperation{}, failValue(registry, field, fieldID, "create value does not match the exact logical type", err)
 		}
 		bound, err := mutationir.NewSet(policyir.FieldID(fieldID), typ, value)
 		if err != nil {
@@ -403,7 +403,7 @@ func bindScalarOperation(kind InputKind, public golem.FrozenMutationField, field
 		}
 		value, valueErr := bindValue(raw, field.LogicalType(), typ, registry)
 		if valueErr != nil {
-			return bound, fail(CodeValue, modelID, fieldID, "set value does not match the exact logical type", valueErr)
+			return bound, failValue(registry, field, fieldID, "set value does not match the exact logical type", valueErr)
 		}
 		bound, err = mutationir.NewSet(policyir.FieldID(fieldID), typ, value)
 	case golem.MutationFieldNull:
@@ -417,7 +417,7 @@ func bindScalarOperation(kind InputKind, public golem.FrozenMutationField, field
 		}
 		value, valueErr := bindValue(raw, field.LogicalType(), typ, registry)
 		if valueErr != nil {
-			return bound, fail(CodeValue, modelID, fieldID, "arithmetic operand does not match the exact logical type", valueErr)
+			return bound, failValue(registry, field, fieldID, "arithmetic operand does not match the exact logical type", valueErr)
 		}
 		if operation == golem.MutationFieldIncrement {
 			bound, err = mutationir.NewIncrement(policyir.FieldID(fieldID), typ, value)

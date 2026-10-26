@@ -96,14 +96,9 @@ func TestDeleteCascadeRollsBackAndIsBoundedAcrossProviders(t *testing.T) {
 
 		bounded := reopenMutationResultWithLimits(t, fixture, MutationLimits{MaxTouchedRows: 2})
 		_, err = CallerDelete(ctx, mustMutationResultCaller(t, bounded), bounded.userDescriptor, cascadeUserTarget(bounded, 2))
-		var failure *golem.Error
-		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput || failure.Message != "mutation exceeds the configured row limit" {
-			t.Fatalf("cascade beyond the touched-row limit failure=%#v err=%v", failure, err)
-		}
+		assertMutationRowLimit(t, err, "delete", 2)
 		_, err = CallerDeleteMany(ctx, mustMutationResultCaller(t, bounded), bounded.userDescriptor, bounded.userID.Eq(golem.UUID{15: 2}))
-		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput || failure.Message != "batch mutation exceeds the configured row limit" {
-			t.Fatalf("batch cascade beyond the touched-row limit failure=%#v err=%v", failure, err)
-		}
+		assertMutationRowLimit(t, err, "deleteMany", 2)
 		assertCascadeFacts(t, profile, nil)
 		assertCascadePosts(t, profile, map[byte]string{30: mutationResultUUIDText(2), 31: mutationResultUUIDText(2), 32: mutationResultUUIDText(2)})
 	})
@@ -125,9 +120,9 @@ func TestDeleteCascadeIsBoundedByTheRemainingRowBudgetAcrossProviders(t *testing
 		var applied atomic.Int64
 		exact := reopenMutationResultWithUserDeleteProbe(t, fixture, MutationLimits{MaxTouchedRows: 3}, &applied)
 		_, err := CallerDelete(ctx, mustMutationResultCaller(t, exact), exact.userDescriptor, cascadeUserTarget(exact, 2))
-		assertMutationRowLimit(t, err, "delete", "mutation exceeds the configured row limit")
+		assertMutationRowLimit(t, err, "delete", 3)
 		_, err = CallerDeleteMany(ctx, mustMutationResultCaller(t, exact), exact.userDescriptor, exact.userID.Eq(golem.UUID{15: 2}))
-		assertMutationRowLimit(t, err, "deleteMany", "batch mutation exceeds the configured row limit")
+		assertMutationRowLimit(t, err, "deleteMany", 3)
 		assertCascadeFacts(t, profile, nil)
 		assertCascadePosts(t, profile, unchanged)
 
@@ -139,7 +134,7 @@ func TestDeleteCascadeIsBoundedByTheRemainingRowBudgetAcrossProviders(t *testing
 			_, err := CallerTxDelete(ctx, tx, spent.userDescriptor, cascadeUserTarget(spent, 2))
 			return err
 		})
-		assertMutationRowLimit(t, err, "delete", "mutation exceeds the configured row limit")
+		assertMutationRowLimit(t, err, "delete", 4)
 		err = CallerTransaction(ctx, mustMutationResultCaller(t, spent), func(tx *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 			if _, err := CallerTxUpdate(ctx, tx, spent.postDescriptor, spent.target(40), spent.updateTitle("spent")); err != nil {
 				return err
@@ -147,7 +142,7 @@ func TestDeleteCascadeIsBoundedByTheRemainingRowBudgetAcrossProviders(t *testing
 			_, err := CallerTxDeleteMany(ctx, tx, spent.userDescriptor, spent.userID.Eq(golem.UUID{15: 2}))
 			return err
 		})
-		assertMutationRowLimit(t, err, "deleteMany", "batch mutation exceeds the configured row limit")
+		assertMutationRowLimit(t, err, "deleteMany", 4)
 		assertCascadeFacts(t, profile, nil)
 		assertCascadePosts(t, profile, unchanged)
 
@@ -159,7 +154,7 @@ func TestDeleteCascadeIsBoundedByTheRemainingRowBudgetAcrossProviders(t *testing
 			_, err := CallerTxCreate(ctx, tx, single.postDescriptor, single.createPost(44, golem.UUID{15: 1}, "second"))
 			return err
 		})
-		assertMutationRowLimit(t, err, "create", "mutation exceeds the configured row limit")
+		assertMutationRowLimit(t, err, "create", 1)
 		assertCascadeFacts(t, profile, nil)
 		assertCascadePosts(t, profile, unchanged)
 		if applied.Load() != 0 {
@@ -225,11 +220,15 @@ func reopenMutationResultWithUserDeleteProbe(t *testing.T, fixture mutationResul
 	return fixture
 }
 
-func assertMutationRowLimit(t *testing.T, err error, operation, message string) {
+func assertMutationRowLimit(t *testing.T, err error, operation string, maximum int) {
 	t.Helper()
 	var failure *golem.Error
-	if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput || failure.Operation != operation || failure.Message != message {
+	message := fmt.Sprintf("request exceeds the touched_rows limit of %d", maximum)
+	if !errors.As(err, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != golem.LimitTouchedRows || failure.LimitMax != maximum || failure.Field != (golem.FieldID{}) || failure.Operation != operation || failure.Message != message {
 		t.Fatalf("row limit failure=%#v err=%v, want %s %q", failure, err, operation, message)
+	}
+	if !errors.Is(err, golem.CodeLimitExceeded) || !errors.Is(err, golem.ReasonLimitExceeded) {
+		t.Fatalf("row limit is not matched by errors.Is: %v", err)
 	}
 }
 

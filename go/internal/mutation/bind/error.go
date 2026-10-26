@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // ErrorCode is a stable mutation-binding failure category. Detail and Cause
@@ -29,11 +30,13 @@ const (
 )
 
 type Error struct {
-	Code   ErrorCode
-	Model  golem.ModelID
-	Field  golem.FieldID
-	Detail string
-	Cause  error
+	Code      ErrorCode
+	Model     golem.ModelID
+	Field     golem.FieldID
+	ModelName string
+	FieldName string
+	Detail    string
+	Cause     error
 }
 
 func (failure *Error) Error() string {
@@ -47,4 +50,12 @@ func (failure *Error) Unwrap() error { return failure.Cause }
 
 func fail(code ErrorCode, model golem.ModelID, field golem.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Model: model, Field: field, Detail: detail, Cause: cause}
+}
+
+func failValue(registry *schema.Registry, field schema.Field, fieldID golem.FieldID, detail string, cause error) error {
+	failure := &Error{Code: CodeValue, Model: field.ModelID(), Field: fieldID, FieldName: field.LogicalName(), Detail: detail, Cause: cause}
+	if model, ok := registry.Model(field.ModelID()); ok {
+		failure.ModelName = model.LogicalName()
+	}
+	return failure
 }

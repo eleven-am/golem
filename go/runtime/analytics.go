@@ -11,7 +11,9 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	analytics "github.com/eleven-am/golem/go/internal/analytics"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -183,6 +185,12 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 		if refused, ok := policyUnavailableReadError("analytics", descriptor, err); ok {
 			return preparedAnalyticsStatement{}, refused
 		}
+		if limited, ok := publicLimitError("analytics", descriptor, err); ok {
+			return preparedAnalyticsStatement{}, limited
+		}
+		if public, ok := publicReadReasonError("analytics", descriptor, analyticsFieldMentions(request, app.registry, app.providers), err); ok {
+			return preparedAnalyticsStatement{}, public
+		}
 		var fieldFailure *analytics.FieldAuthorizationError
 		if errors.As(err, &fieldFailure) {
 			return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, fieldFailure.FieldID(), fmt.Sprintf("analytics field %q is not permitted", fieldFailure.LogicalName()), err)
@@ -202,7 +210,7 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 		MaxResultRows:         maxResultRows,
 	})
 	if err != nil {
-		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics statement could not be rendered", err)
+		return preparedAnalyticsStatement{}, publicReadRenderError("analytics", descriptor, "analytics statement could not be rendered", err)
 	}
 	return preparedAnalyticsStatement{plan: planned, statement: statement}, nil
 }
@@ -460,6 +468,40 @@ func toFloat64(value any) (float64, error) {
 	}
 	return result, nil
 }
+func analyticsFieldMentions(request golem.FrozenAnalyticsRequest, registry *schema.Registry, providers policyir.ProviderSet) func(policyir.FieldID) bool {
+	named := map[policyir.FieldID]struct{}{}
+	terms := append(request.Dimensions(), request.Measures()...)
+	for _, order := range request.OrderBy() {
+		terms = append(terms, order.Term)
+	}
+	if having, ok := request.Having(); ok {
+		terms = append(terms, analyticsHavingTerms(having)...)
+	}
+	for _, term := range terms {
+		named[policyir.FieldID(term.Field)] = struct{}{}
+	}
+	var where *policyir.Condition
+	if frozen, ok := request.Where(); ok {
+		if bound, err := policybind.Predicate(frozen, registry, providers); err == nil {
+			where = &bound
+		}
+	}
+	return func(field policyir.FieldID) bool {
+		if _, ok := named[field]; ok {
+			return true
+		}
+		return where != nil && conditionMentionsField(*where, field)
+	}
+}
+
+func analyticsHavingTerms(predicate golem.FrozenGroupPredicate) []golem.FrozenAnalyticsTerm {
+	terms := []golem.FrozenAnalyticsTerm{predicate.Term}
+	for _, child := range predicate.Children {
+		terms = append(terms, analyticsHavingTerms(child)...)
+	}
+	return terms
+}
+
 func analyticsError[M any](operation string, descriptor golem.ModelDescriptor[M], cause error) error {
 	return golem.RuntimeReadError(golem.CodeBadUserInput, operation, descriptor.Metadata().ModelID(), golem.FieldID{}, "analytics request is invalid", cause)
 }

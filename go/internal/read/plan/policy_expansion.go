@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/classify"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
@@ -53,7 +54,7 @@ func (expander *policyExpander) model(model policyir.ModelID, depth int) (policy
 	}
 	if expander.active[model] {
 		if conditionHasRelation(row) {
-			return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "cyclic relation policy cannot be expanded safely", nil)
+			return policyir.Condition{}, failReason(CodePolicy, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "cyclic relation policy cannot be expanded safely")
 		}
 		result, normalizeErr := normalize.Condition(row)
 		if normalizeErr != nil {
@@ -108,7 +109,7 @@ func (expander *policyExpander) condition(condition policyir.Condition, depth in
 			return policyir.Condition{}, fail(CodePolicy, condition.ModelID(), policyir.FieldID{}, "relation policy predicate is malformed", nil)
 		}
 		if depth >= expander.maximum {
-			return policyir.Condition{}, fail(CodeLimit, condition.ModelID(), field, "relation policy depth limit exceeded", nil)
+			return policyir.Condition{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, condition.ModelID(), field, "relation policy depth limit exceeded")
 		}
 		operator, ok := condition.Operator()
 		if !ok {

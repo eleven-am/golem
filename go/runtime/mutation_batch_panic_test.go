@@ -275,7 +275,7 @@ func TestBatchHooksWithTouchedRowLimitExceededMidBatch(t *testing.T) {
 			return updateErr
 		})
 		var failure *golem.Error
-		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+		if !errors.As(err, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Limit != golem.LimitTouchedRows || failure.LimitMax != 3 || failure.Operation != "updateMany" {
 			t.Fatalf("mid-batch touched-row overflow err=%v failure=%#v", err, failure)
 		}
 		assertMutationResultTitleCount(t, fixture, "limit-batch", 3)

@@ -764,11 +764,17 @@ func publicBatchPreparationError(operation mutationir.Operation, model golem.Mod
 	if refused, ok := policyUnavailableOperationError(batchOperationName(operation), model, err); ok {
 		return refused
 	}
+	if limited, ok := publicLimitError(batchOperationName(operation), model, err); ok {
+		return limited
+	}
 	var planned *mutationplan.Error
 	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, batchOperationName(operation), model, golem.FieldID(planned.Field), "batch mutation is not authorized", err)
 	}
 	if refused, ok := publicForeignKeyArithmetic(batchOperationName(operation), model, err); ok {
+		return refused
+	}
+	if refused, ok := publicValueError(batchOperationName(operation), model, err); ok {
 		return refused
 	}
 	var public *golem.Error
@@ -780,6 +786,9 @@ func publicBatchPreparationError(operation mutationir.Operation, model golem.Mod
 
 func publicBatchExecutionError(program mutationbatch.Program, err error) error {
 	model := programModel(program)
+	if limited, ok := publicLimitError(batchOperationName(program.Operation()), model, err); ok {
+		return limited
+	}
 	var hook *mutationHookFailure
 	if errors.As(err, &hook) {
 		return golem.RuntimeOperationError(golem.CodeBadUserInput, batchOperationName(program.Operation()), model, golem.FieldID{}, "mutation hook rejected the operation", err)
@@ -789,8 +798,6 @@ func publicBatchExecutionError(program mutationbatch.Program, err error) error {
 		switch batchFailure.Code {
 		case mutationbatch.CodeForbidden:
 			return golem.RuntimeOperationError(golem.CodeForbidden, batchOperationName(program.Operation()), model, golem.FieldID(batchFailure.Field), "batch mutation is not authorized", err)
-		case mutationbatch.CodeLimit:
-			return golem.RuntimeOperationError(golem.CodeBadUserInput, batchOperationName(program.Operation()), model, golem.FieldID{}, "batch mutation exceeds the configured row limit", err)
 		case mutationbatch.CodeSet, mutationbatch.CodeIdentity:
 			return golem.RuntimeOperationError(golem.CodeConflict, batchOperationName(program.Operation()), model, golem.FieldID(batchFailure.Field), "batch mutation conflicted", err)
 		}

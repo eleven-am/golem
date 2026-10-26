@@ -70,7 +70,7 @@ func assertBatchMutationExactBoundary(t testing.TB, fixture mutationResultFixtur
 	}
 	count, err := SystemUpdateMany(ctx, fixture.app.System(), fixture.postDescriptor, fixture.title.Eq("overflow"), fixture.updateManyTitle("written"))
 	var failure *golem.Error
-	if count != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+	if count != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeLimitExceeded || failure.Limit != golem.LimitBatchRows || failure.LimitMax != 2 || failure.Message != "request exceeds the batch_rows limit of 2" {
 		t.Fatalf("overflow count=%d failure=%#v err=%v cause=%v", count, failure, err, errors.Unwrap(err))
 	}
 	assertMutationResultTitleCount(t, fixture, "overflow", 3)
