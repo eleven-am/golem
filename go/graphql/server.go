@@ -247,7 +247,7 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 	if negotiated == eventStreamAcceptable {
 		prepared, failure := server.prepareRequest(decoded, true)
 		if failure == nil && prepared.Operation.Definition.Operation == ast.Subscription {
-			server.streamSSE(writer, request, principal, decoded, prepared)
+			server.streamSSE(writer, request, principal, decoded, prepared, refuseJSON)
 			return
 		}
 		if failure == nil {

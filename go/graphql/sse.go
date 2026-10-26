@@ -49,11 +49,16 @@ type acceptedMediaRange struct {
 
 func negotiateEventStream(values []string) eventStreamNegotiation {
 	ranges := parseAccept(values)
-	eventStream := acceptedQuality(ranges, "text", "event-stream")
+	eventStream := 0.0
+	for _, candidate := range ranges {
+		if candidate.kind == "text" && candidate.subtype == "event-stream" && candidate.quality > eventStream {
+			eventStream = candidate.quality
+		}
+	}
 	if eventStream <= 0 {
 		return eventStreamRefused
 	}
-	for _, subtype := range []string{"json", "graphql-response+json"} {
+	for _, subtype := range []string{"json", "graphql-response+json", "graphql+json"} {
 		if acceptedQuality(ranges, "application", subtype) >= eventStream {
 			return eventStreamAcceptable
 		}
@@ -132,14 +137,14 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		refuseSSE(writer, rejected.Errors...)
 		return
 	}
-	server.streamSSE(writer, request, principal, decoded, prepared)
+	server.streamSSE(writer, request, principal, decoded, prepared, refuseSSE)
 }
 
-func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Request, principal P, decoded Request, prepared preparedRequest) {
+func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Request, principal P, decoded Request, prepared preparedRequest, refuse func(http.ResponseWriter, ...Error)) {
 	server.lifecycleMu.Lock()
 	if server.shuttingDown {
 		server.lifecycleMu.Unlock()
-		writer.WriteHeader(http.StatusServiceUnavailable)
+		refuseSSE(writer, publicError("SERVICE_UNAVAILABLE", "GraphQL server is shutting down"))
 		return
 	}
 	server.connections.Add(1)
@@ -159,14 +164,14 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 	}
 	executor, subscribable := server.executor.(SubscriptionExecutor[P])
 	if !subscribable {
-		refuseSSE(writer, publicError("SUBSCRIPTIONS_UNAVAILABLE", "GraphQL subscriptions are unavailable"))
+		refuse(writer, publicError("SUBSCRIPTIONS_UNAVAILABLE", "GraphQL subscriptions are unavailable"))
 		return
 	}
 	opCtx, observation := observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
 	source, err := subscribeSafely(executor, opCtx, principal, prepared.Operation)
 	if err != nil {
 		finishGraphQLChild(observation, err)
-		refuseSSE(writer, PresentError(opCtx, err, nil, server.config.ReportInternalError))
+		refuse(writer, PresentError(opCtx, err, nil, server.config.ReportInternalError))
 		return
 	}
 	defer server.closeResponseStream(opCtx, source)
@@ -189,10 +194,17 @@ func refuseSSE(writer http.ResponseWriter, failures ...Error) {
 			status = http.StatusForbidden
 		case "INTERNAL_SERVER_ERROR":
 			status = http.StatusInternalServerError
+		case "SERVICE_UNAVAILABLE":
+			status = http.StatusServiceUnavailable
 		}
 	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
+	writeResponse(writer, Response{Errors: failures})
+}
+
+func refuseJSON(writer http.ResponseWriter, failures ...Error) {
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writeResponse(writer, Response{Errors: failures})
 }
 

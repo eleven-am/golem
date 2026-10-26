@@ -2,13 +2,17 @@ package graphql
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/eleven-am/golem/go/events"
+	"github.com/eleven-am/golem/go/golem"
 )
 
 const urqlDefaultAccept = "application/graphql-response+json, application/graphql+json, application/json, text/event-stream, multipart/mixed"
@@ -27,8 +31,13 @@ func TestNegotiateEventStreamWeighsQualityAndSpecificity(t *testing.T) {
 		"text/event-stream;q=0.9, application/graphql-response+json;q=0.9": eventStreamAcceptable,
 		"text/event-stream, */*":                                           eventStreamAcceptable,
 		"text/event-stream, */*;q=0.8":                                     eventStreamPreferred,
-		"*/*":                                                              eventStreamAcceptable,
-		"text/*":                                                           eventStreamPreferred,
+		"*/*":                                                              eventStreamRefused,
+		"text/*":                                                           eventStreamRefused,
+		"text/*, application/json;q=0":                                     eventStreamRefused,
+		"text/*, text/event-stream;q=0":                                    eventStreamRefused,
+		"text/event-stream;q=0.2, text/*":                                  eventStreamPreferred,
+		"text/event-stream, application/graphql+json":                      eventStreamAcceptable,
+		"application/graphql+json;q=0.5, text/event-stream":                eventStreamPreferred,
 		"text/event-stream;q=2":                                            eventStreamRefused,
 		"text/event-stream;q=x, application/json":                          eventStreamRefused,
 		"text/event-stream, application/json;q=0":                          eventStreamPreferred,
@@ -88,7 +97,11 @@ func TestSSEAcceptNegotiationChoosesTheTransportPerOperation(t *testing.T) {
 		{"outweighed by quality", "text/event-stream;q=0.5, application/json", query, jsonType, queryJSON},
 		{"outweighed subscription", "text/event-stream;q=0.5, application/json", subscription, eventStreamMediaType, tickStream},
 		{"tied with wildcard", "text/event-stream, */*", query, jsonType, queryJSON},
-		{"wildcard subscription", "*/*", subscription, eventStreamMediaType, tickStream},
+		{"wildcard subscription", "*/*", subscription, jsonType, "SUBSCRIPTION_TRANSPORT_REQUIRED"},
+		{"text wildcard query", "text/*", query, jsonType, queryJSON},
+		{"text wildcard subscription", "text/*", subscription, jsonType, "SUBSCRIPTION_TRANSPORT_REQUIRED"},
+		{"tied with graphql+json", "application/graphql+json, text/event-stream", query, jsonType, queryJSON},
+		{"graphql+json subscription", "application/graphql+json, text/event-stream", subscription, eventStreamMediaType, tickStream},
 		{"refused by quality", "text/event-stream;q=0, application/json", subscription, jsonType, "SUBSCRIPTION_TRANSPORT_REQUIRED"},
 		{"no Accept", "", subscription, jsonType, "SUBSCRIPTION_TRANSPORT_REQUIRED"},
 	} {
@@ -104,6 +117,46 @@ func TestSSEAcceptNegotiationChoosesTheTransportPerOperation(t *testing.T) {
 			refusal := strings.HasPrefix(testCase.want, "SUBSCRIPTION_")
 			if refusal && !strings.Contains(body, `"code":"`+testCase.want+`"`) || !refusal && body != testCase.want {
 				t.Fatalf("body = %q, want %q", body, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSSESubscriptionRefusalsFollowTheNegotiatedConvention(t *testing.T) {
+	const subscription = `{"query":"subscription { ticks }"}`
+	const jsonType = "application/json; charset=utf-8"
+	unsubscribable, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
+		PrincipalFromContext: func(ctx context.Context) (int, bool) {
+			value, ok := ctx.Value(sseAuthKey{}).(int)
+			return value, ok
+		},
+		ReportInternalError: func(context.Context, error) {},
+	}, fuzzExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsubscribableHost := httptest.NewServer(sseAuthenticated(unsubscribable.Handler()))
+	defer unsubscribableHost.Close()
+	_, refusing, refusingHost := newSSEServer(t, events.Limits{}, newSSETestStream())
+	refusing.refusal = golem.RuntimeReadError(golem.CodeForbidden, "subscribe", golem.ModelID{1}, golem.FieldID{2}, "access denied", errors.New("private-cause"))
+	for _, testCase := range []struct {
+		name, url, accept string
+		status            int
+		code              string
+	}{
+		{"unavailable preferred", unsubscribableHost.URL, "text/event-stream", http.StatusBadRequest, "SUBSCRIPTIONS_UNAVAILABLE"},
+		{"unavailable acceptable", unsubscribableHost.URL, urqlDefaultAccept, http.StatusOK, "SUBSCRIPTIONS_UNAVAILABLE"},
+		{"admission preferred", refusingHost.URL, "text/event-stream", http.StatusForbidden, "FORBIDDEN"},
+		{"admission acceptable", refusingHost.URL, urqlDefaultAccept, http.StatusOK, "FORBIDDEN"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response, body := postGraphQL(t, testCase.url, subscription, testCase.accept)
+			var decoded Response
+			if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+				t.Fatalf("refusal is not JSON: %v; body=%q", err, body)
+			}
+			if response.StatusCode != testCase.status || response.Header.Get("Content-Type") != jsonType || len(decoded.Errors) != 1 || decoded.Errors[0].Extensions["code"] != testCase.code || strings.Contains(body, "private") {
+				t.Fatalf("status=%d type=%q body=%q", response.StatusCode, response.Header.Get("Content-Type"), body)
 			}
 		})
 	}

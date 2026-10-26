@@ -56,6 +56,7 @@ func (stream *sseTestStream) Close() error {
 
 type sseExecutor struct {
 	stream     ResponseStream
+	refusal    error
 	subscribed atomic.Int32
 	executed   atomic.Int32
 }
@@ -74,6 +75,9 @@ func (executor *sseExecutor) Execute(_ context.Context, principal int, operation
 
 func (executor *sseExecutor) Subscribe(_ context.Context, principal int, operation Operation) (ResponseStream, error) {
 	executor.subscribed.Add(1)
+	if executor.refusal != nil {
+		return nil, executor.refusal
+	}
 	if principal != 41 || operation.Definition == nil {
 		return nil, errors.New("unexpected subscription admission")
 	}
@@ -331,9 +335,11 @@ func TestSSEShutdownEndsActiveStreams(t *testing.T) {
 		}
 	}
 	<-stream.closed
-	refused := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
-	if refused.response.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("post-shutdown status = %d", refused.response.StatusCode)
+	for _, accept := range []string{"text/event-stream", "application/json, text/event-stream"} {
+		response, body := postGraphQL(t, host.URL, `{"query":"subscription { ticks }"}`, accept)
+		if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Content-Type") != "application/json; charset=utf-8" || body != "{\"errors\":[{\"message\":\"GraphQL server is shutting down\",\"extensions\":{\"code\":\"SERVICE_UNAVAILABLE\"}}]}\n" {
+			t.Fatalf("post-shutdown Accept %q: status=%d type=%q body=%q", accept, response.StatusCode, response.Header.Get("Content-Type"), body)
+		}
 	}
 }
 
