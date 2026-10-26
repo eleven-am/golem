@@ -83,6 +83,38 @@ func (in *interpreter) evalAnalytics(call *ast.CallExpr) {
 	}
 }
 
+func (in *interpreter) evalSubscriptionOptions(call *ast.CallExpr) *[]ir.FieldID {
+	var declared *[]ir.FieldID
+	for _, expression := range call.Args {
+		option, ok := unparen(expression).(*ast.CallExpr)
+		if !ok || in.callOperation(option) != "DeleteSnapshot" {
+			in.errorAt("P7_SUBSCRIPTIONS_OPTION", "Subscriptions accepts only DeleteSnapshot options", expression)
+			continue
+		}
+		if declared != nil {
+			in.errorAt("P7_DELETE_SNAPSHOT_DUPLICATE", "DeleteSnapshot may be declared only once", option)
+			continue
+		}
+		values := make([]ir.FieldID, 0, len(option.Args))
+		seen := map[ir.FieldID]bool{}
+		for _, argument := range option.Args {
+			symbol, valid := in.resolveHandle(argument)
+			if !valid || symbol.Kind != "field" {
+				in.errorAt("P7_DELETE_SNAPSHOT_FIELD", "DeleteSnapshot accepts only scalar handles of this model", argument)
+				continue
+			}
+			if seen[symbol.FieldID] {
+				in.errorAt("P7_DELETE_SNAPSHOT_FIELD_DUPLICATE", "DeleteSnapshot repeats a field", argument)
+				continue
+			}
+			seen[symbol.FieldID] = true
+			values = append(values, symbol.FieldID)
+		}
+		declared = &values
+	}
+	return declared
+}
+
 func (in *interpreter) relationDimension(expression ast.Expr) (ir.RelationDimensionContractIR, bool) {
 	call, ok := unparen(expression).(*ast.CallExpr)
 	if !ok || in.callOperation(call) != "NamedRelationDimension" || len(call.Args) != 2 {
@@ -174,8 +206,8 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		in.evalGraphQL(call)
 	case "Subscriptions":
-		if scope != ir.ProviderScopePortable || len(call.Args) != 0 {
-			in.errorAt("P7_SUBSCRIPTIONS_DECLARATION", "Subscriptions takes no arguments and cannot be provider-scoped", call)
+		if scope != ir.ProviderScopePortable {
+			in.errorAt("P7_SUBSCRIPTIONS_DECLARATION", "Subscriptions cannot be provider-scoped", call)
 			return
 		}
 		if in.graphql == nil {
@@ -187,6 +219,7 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		enabled := true
 		in.graphql.Subscriptions = &enabled
+		in.graphql.DeleteSnapshot = in.evalSubscriptionOptions(call)
 	case "Analytics":
 		if scope != ir.ProviderScopePortable {
 			in.errorAt("P6_ANALYTICS_PROVIDER_SCOPE", "Analytics cannot be provider-scoped", call)
@@ -516,6 +549,7 @@ func (in *interpreter) evalGraphQL(call *ast.CallExpr) {
 	patch := graphqlcontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
 	if in.graphql != nil {
 		patch.Subscriptions = in.graphql.Subscriptions
+		patch.DeleteSnapshot = in.graphql.DeleteSnapshot
 	}
 	seen := map[string]bool{}
 	for _, expression := range call.Args {

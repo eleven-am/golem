@@ -44,6 +44,7 @@ type ModelPatch struct {
 	Hidden                bool
 	HookOwnedCreateFields []ir.FieldID
 	Subscriptions         *bool
+	DeleteSnapshot        *[]ir.FieldID
 	Span                  ir.SourceSpan
 }
 
@@ -177,7 +178,7 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 				model.Subscriptions = *patch.Subscriptions
 			}
 		}
-		diagnostics = append(diagnostics, normalizeEventContract(compilation.Model, model, patch.Span)...)
+		diagnostics = append(diagnostics, normalizeEventContract(compilation.Model, model, patch.DeleteSnapshot, patch.Span)...)
 		diagnostics = append(diagnostics, validateHookOwnedShape(compilation.Model, *model, patch.Span)...)
 		diagnostics = append(diagnostics, validateModel(*model, patch.Span)...)
 	}
@@ -318,9 +319,12 @@ var eventMetadataFields = []string{
 	"causationID", "transactionOrdinal", "recordedAt",
 }
 
-func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic {
+func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, declared *[]ir.FieldID, span ir.SourceSpan) []ir.Diagnostic {
 	if !contract.Subscriptions {
 		contract.Event = nil
+		if declared != nil {
+			return []ir.Diagnostic{ir.NewError("P7_DELETE_SNAPSHOT_WITHOUT_SUBSCRIPTIONS", fmt.Sprintf("model %s declares DeleteSnapshot without Subscriptions", contract.ModelID), span)}
+		}
 		return nil
 	}
 	var model *ir.ModelDeclIR
@@ -353,15 +357,9 @@ func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, sp
 	if len(diagnostics) != 0 {
 		return diagnostics
 	}
-	// P7 event schema v1 deliberately captures the complete locally stored
-	// scalar pre-image. Policy factories are actor-dependent runtime code, so a
-	// static minimal dependency inventory would be unsound. Declaration order is
-	// preserved to make the private row shape deterministic and reconstructible.
-	snapshot := make([]ir.FieldID, 0, len(model.Fields))
-	for _, field := range model.Fields {
-		if field.Kind != ir.FieldRelation && field.Scalar != nil {
-			snapshot = append(snapshot, field.ID)
-		}
+	snapshot, err := ir.DeleteSnapshotFields(*model, logical.Relations, declared)
+	if err != nil {
+		return []ir.Diagnostic{ir.NewError("P7_DELETE_SNAPSHOT_FIELD", err.Error(), span)}
 	}
 	shape, err := ir.BuildEventSchemaShape(*model, logical.Enums, snapshot)
 	if err != nil {
@@ -377,7 +375,7 @@ func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, sp
 	}
 	contract.Event = &ir.EventContractIR{
 		PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType,
-		MetadataFields: append([]string(nil), eventMetadataFields...), DeleteSnapshotFull: true,
+		MetadataFields: append([]string(nil), eventMetadataFields...), DeleteSnapshotFull: ir.DeleteSnapshotIsFull(*model, snapshot),
 		Schema: shape, SchemaFingerprint: fingerprint,
 	}
 	return nil

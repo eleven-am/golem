@@ -7,12 +7,14 @@ import (
 )
 
 const (
-	MaxMutationNestedDepth         = 5
-	MaxMutationTouchedRows         = 1_000
-	MaxMutationFacts               = eventprovider.MaximumCausationFacts
-	MaxMutationOutboxBytes         = 1 << 20
-	MaxMutationStatementParameters = 999
-	MaxMutationUpsertAttempts      = 3
+	MaxMutationNestedDepth             = 5
+	MaxMutationTouchedRows             = 1_000
+	MaxMutationFacts                   = eventprovider.MaximumCausationFacts
+	MaxMutationOutboxBytes             = 1 << 20
+	MaxMutationStatementParameters     = 999
+	MaxMutationUpsertAttempts          = 3
+	MaxMutationDeleteSnapshotBytes     = 1 << 20
+	DefaultMutationDeleteSnapshotBytes = 64 << 10
 )
 
 // MutationLimits bounds the complete touched graph and commit-derived fact
@@ -25,6 +27,7 @@ type MutationLimits struct {
 	MaxOutboxBytes         int
 	MaxStatementParameters int
 	MaxUpsertAttempts      int
+	MaxDeleteSnapshotBytes int
 }
 
 type normalizedMutationLimits struct {
@@ -34,10 +37,11 @@ type normalizedMutationLimits struct {
 	outboxBytes         int
 	statementParameters int
 	upsertAttempts      int
+	deleteSnapshotBytes int
 }
 
 func normalizeMutationLimits(value MutationLimits) (normalizedMutationLimits, error) {
-	if value.MaxNestedDepth < 0 || value.MaxTouchedRows < 0 || value.MaxFacts < 0 || value.MaxOutboxBytes < 0 || value.MaxStatementParameters < 0 || value.MaxUpsertAttempts < 0 {
+	if value.MaxNestedDepth < 0 || value.MaxTouchedRows < 0 || value.MaxFacts < 0 || value.MaxOutboxBytes < 0 || value.MaxStatementParameters < 0 || value.MaxUpsertAttempts < 0 || value.MaxDeleteSnapshotBytes < 0 {
 		return normalizedMutationLimits{}, fmt.Errorf("mutation limits cannot be negative")
 	}
 	result := normalizedMutationLimits{
@@ -47,6 +51,7 @@ func normalizeMutationLimits(value MutationLimits) (normalizedMutationLimits, er
 		outboxBytes:         MaxMutationOutboxBytes,
 		statementParameters: MaxMutationStatementParameters,
 		upsertAttempts:      MaxMutationUpsertAttempts,
+		deleteSnapshotBytes: DefaultMutationDeleteSnapshotBytes,
 	}
 	type limit struct {
 		name        string
@@ -61,6 +66,7 @@ func normalizeMutationLimits(value MutationLimits) (normalizedMutationLimits, er
 		{name: "MaxOutboxBytes", configured: value.MaxOutboxBytes, ceiling: MaxMutationOutboxBytes, destination: &result.outboxBytes},
 		{name: "MaxStatementParameters", configured: value.MaxStatementParameters, ceiling: MaxMutationStatementParameters, destination: &result.statementParameters},
 		{name: "MaxUpsertAttempts", configured: value.MaxUpsertAttempts, ceiling: MaxMutationUpsertAttempts, destination: &result.upsertAttempts},
+		{name: "MaxDeleteSnapshotBytes", configured: value.MaxDeleteSnapshotBytes, ceiling: MaxMutationDeleteSnapshotBytes, destination: &result.deleteSnapshotBytes},
 	}
 	for _, item := range limits {
 		if item.configured > item.ceiling {

@@ -116,6 +116,7 @@ type App[P, A any] struct {
 	eventMu                   sync.Mutex
 	eventHubs                 map[golem.ModelID]*subscription.ModelHub[any]
 	nextSubscription          atomic.Uint64
+	deleteCoverageReported    sync.Map
 	afterCommitError          func(context.Context, golem.AfterCommitFailure)
 	auditPrincipal            func(P) string
 	reportScopedQuery         func(context.Context, golem.ScopedAuditRecord)

@@ -17,6 +17,7 @@ import (
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	graphqlselectset "github.com/eleven-am/golem/go/internal/graphql/select"
+	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -34,7 +35,7 @@ func (capture *p7AllObservationCapture) ObserveEvent(_ context.Context, value ev
 
 func TestPrivateSnapshotAbsentFromGoGraphQLErrorsObserversAndNoticeMetadata(t *testing.T) {
 	const secret = "private-delete-token=never-public"
-	fixture := newP7EventRuntimeFixture(t)
+	fixture := newP7EventRuntimeFixtureWith(t, schematest.NewSubscribedIndexedWithFullDeleteSnapshot(t), nil)
 	observations := &p7AllObservationCapture{}
 	fixture.app.eventObserver = observations
 	ctx, cancel := context.WithCancel(context.Background())

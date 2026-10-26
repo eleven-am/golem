@@ -1,10 +1,12 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"reflect"
+	"sort"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
@@ -219,9 +221,12 @@ func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 		return nil, publicPlanError(prepared, err)
 	}
 	var originalWhere *policyir.Condition
+	coverage := []policyir.Condition{rowConstraint}
 	if bound, exists := prepared.request.Where(); exists {
 		originalWhere = &bound
+		coverage = append(coverage, bound)
 	}
+	caller.app.observeDeleteCoverage(ctx, model, coverage...)
 	key, err := caller.app.eventSubscriberKey(model, metadata, originalWhere, planned)
 	if err != nil {
 		return nil, events.Failure(events.CodeSubscriptionInvalid)
@@ -726,8 +731,7 @@ func (app *App[P, A]) authorizeDeletedEvent(ctx context.Context, caller *Caller[
 	if !present {
 		return deleteAuthorizationUnverifiable
 	}
-	complete, err := snapshot.IsComplete(app.registry)
-	if err != nil || !complete {
+	if !app.deleteSnapshotDeclared(snapshot) {
 		return deleteAuthorizationUnverifiable
 	}
 	policy, ok := caller.policies.Policy(snapshot.ModelID())
@@ -766,22 +770,20 @@ func (app *App[P, A]) deleteSnapshotRecord(ctx context.Context, caller *Caller[P
 		return evaluate.Record{}, false, err
 	}
 	for _, entry := range dependencies.Dependencies().Entries() {
+		if entry.Kind() == dependency.Scalar {
+			if _, present := snapshot.Cell(entry.FieldID()); !present {
+				return evaluate.Record{}, false, nil
+			}
+			continue
+		}
 		if entry.Kind() != dependency.Relation {
 			continue
 		}
-		relationField, ok := app.registry.Field(golem.ModelID(snapshot.ModelID()), golem.FieldID(entry.FieldID()))
-		relationID, relationOK := relationField.RelationID()
-		endpoint, forward := app.registry.ForwardToOneRelation(golem.ModelID(snapshot.ModelID()), relationID)
-		if !ok || !relationOK || !forward || endpoint.FieldID() != golem.FieldID(entry.FieldID()) {
+		endpoint, hydratable := app.deletedRelationHydratable(golem.ModelID(snapshot.ModelID()), entry)
+		if !hydratable {
 			return evaluate.Record{}, false, nil
 		}
-		children := entry.Children()
-		for _, child := range children.Entries() {
-			if child.Kind() != dependency.Scalar {
-				return evaluate.Record{}, false, nil
-			}
-		}
-		related, verifiable, err := app.hydrateDeletedForwardRelation(ctx, caller, snapshot, endpoint, children)
+		related, verifiable, err := app.hydrateDeletedForwardRelation(ctx, caller, snapshot, endpoint, entry.Children())
 		if err != nil || !verifiable {
 			return evaluate.Record{}, false, err
 		}
@@ -789,6 +791,93 @@ func (app *App[P, A]) deleteSnapshotRecord(ctx context.Context, caller *Caller[P
 	}
 	record, err := evaluate.NewRecord(snapshot.ModelID(), fields...)
 	return record, err == nil, err
+}
+
+func (app *App[P, A]) deletedRelationHydratable(model golem.ModelID, entry dependency.Entry) (schema.RelationEndpoint, bool) {
+	if entry.Kind() != dependency.Relation {
+		return schema.RelationEndpoint{}, false
+	}
+	relationField, ok := app.registry.Field(model, golem.FieldID(entry.FieldID()))
+	relationID, relationOK := relationField.RelationID()
+	endpoint, forward := app.registry.ForwardToOneRelation(model, relationID)
+	if !ok || !relationOK || !forward || endpoint.FieldID() != golem.FieldID(entry.FieldID()) {
+		return schema.RelationEndpoint{}, false
+	}
+	for _, child := range entry.Children().Entries() {
+		if child.Kind() != dependency.Scalar {
+			return schema.RelationEndpoint{}, false
+		}
+	}
+	return endpoint, true
+}
+
+func (app *App[P, A]) deleteSnapshotDeclared(snapshot mutationdecode.Row) bool {
+	model, ok := app.registry.Model(golem.ModelID(snapshot.ModelID()))
+	if !ok {
+		return false
+	}
+	_, declared, ok := model.EventSchema()
+	if !ok {
+		return false
+	}
+	cells := snapshot.Cells()
+	if len(cells) != len(declared) {
+		return false
+	}
+	for _, fieldID := range declared {
+		if _, present := snapshot.Cell(policyir.FieldID(fieldID)); !present {
+			return false
+		}
+	}
+	return true
+}
+
+func (app *App[P, A]) observeDeleteCoverage(ctx context.Context, model golem.ModelID, conditions ...policyir.Condition) {
+	if app.eventObserver == nil || len(conditions) == 0 {
+		return
+	}
+	metadata, ok := app.registry.Model(model)
+	if !ok {
+		return
+	}
+	_, declared, ok := metadata.EventSchema()
+	if !ok {
+		return
+	}
+	covered := make(map[golem.FieldID]bool, len(declared))
+	for _, fieldID := range declared {
+		covered[fieldID] = true
+	}
+	plan, err := dependency.Collect(conditions...)
+	if err != nil {
+		return
+	}
+	var missing []golem.FieldID
+	for _, entry := range plan.Dependencies().Entries() {
+		fieldID := golem.FieldID(entry.FieldID())
+		switch entry.Kind() {
+		case dependency.Scalar:
+			if !covered[fieldID] {
+				missing = append(missing, fieldID)
+			}
+		case dependency.Relation:
+			if _, hydratable := app.deletedRelationHydratable(model, entry); !hydratable {
+				missing = append(missing, fieldID)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	sort.Slice(missing, func(i, j int) bool { return bytes.Compare(missing[i][:], missing[j][:]) < 0 })
+	key := append([]byte(nil), model[:]...)
+	for _, fieldID := range missing {
+		key = append(key, fieldID[:]...)
+	}
+	if _, reported := app.deleteCoverageReported.LoadOrStore(string(key), struct{}{}); reported {
+		return
+	}
+	events.Observe(app.eventObserver, ctx, model, golem.EventDeleted, events.ObservationDeleteCoverage, events.OutcomeSuccess, "", 0, 0, 0, 0, int64(len(missing)))
 }
 
 func eventEvaluateField(cell mutationdecode.Cell) (evaluate.Field, error) {

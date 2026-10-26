@@ -160,42 +160,85 @@ func TestContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *tes
 	id := ir.FieldID("10000000000000000000000000000001")
 	title := ir.FieldID("10000000000000000000000000000002")
 	relation := ir.FieldID("10000000000000000000000000000003")
+	author := ir.FieldID("10000000000000000000000000000004")
+	body := ir.FieldID("10000000000000000000000000000005")
+	payload := ir.FieldID("10000000000000000000000000000006")
+	wide := ir.FieldID("10000000000000000000000000000007")
+	tags := ir.FieldID("10000000000000000000000000000008")
 	modelID := ir.ModelID("10000000000000000000000000000010")
 	keyID := ir.KeyID("10000000000000000000000000000011")
-	compilation := ir.CompilationIR{
-		Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{
-			ID: modelID, Go: ir.GoNamedTypeIR{Name: "Post"}, Fields: []ir.FieldIR{
-				{ID: id, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
-				{ID: title, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString}, Nullable: true}},
-				{ID: relation, Kind: ir.FieldRelation, Relation: &ir.RelationFieldIR{}},
-			}, PrimaryKey: &ir.KeyIR{ID: keyID, Kind: ir.KeyPrimary, Fields: []ir.FieldID{id}},
-		}}},
-		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{
-			ModelID: modelID, GraphQLName: "Post", Exposed: true, Fields: []ir.FieldContractIR{
-				{FieldID: id, GraphQLName: "id", Modes: []ir.FieldMode{ir.ModeVisible}},
-				{FieldID: title, GraphQLName: "title", Modes: []ir.FieldMode{ir.ModeVisible}},
-				{FieldID: relation, GraphQLName: "author", Modes: []ir.FieldMode{ir.ModeVisible}},
-			},
-		}}},
+	short, long := uint32(160), uint32(2000)
+	compilation := func() ir.CompilationIR {
+		return ir.CompilationIR{
+			Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{
+				ID: modelID, Go: ir.GoNamedTypeIR{Name: "Post"}, Fields: []ir.FieldIR{
+					{ID: id, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+					{ID: title, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &short}, Nullable: true}},
+					{ID: relation, Kind: ir.FieldRelation, Relation: &ir.RelationFieldIR{}},
+					{ID: author, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+					{ID: body, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString}}},
+					{ID: payload, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeJSON}}},
+					{ID: wide, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &long}}},
+					{ID: tags, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &ir.LogicalTypeIR{Kind: ir.TypeInt32}}}},
+				}, PrimaryKey: &ir.KeyIR{ID: keyID, Kind: ir.KeyPrimary, Fields: []ir.FieldID{id}},
+			}}, Relations: []ir.RelationIR{{SourceModel: modelID, TargetModel: "10000000000000000000000000000020", SourceField: relation, Cardinality: ir.RelationOne, LocalFields: []ir.FieldID{author}}}},
+			Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{
+				ModelID: modelID, GraphQLName: "Post", Exposed: true, Fields: []ir.FieldContractIR{
+					{FieldID: id, GraphQLName: "id", Modes: []ir.FieldMode{ir.ModeVisible}},
+					{FieldID: title, GraphQLName: "title", Modes: []ir.FieldMode{ir.ModeVisible}},
+					{FieldID: relation, GraphQLName: "author", Modes: []ir.FieldMode{ir.ModeVisible}},
+				},
+			}}},
+		}
 	}
 	enabled := true
-	diagnostics := Normalize(&compilation, []ModelPatch{{ModelID: modelID, Subscriptions: &enabled}})
-	if len(diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v", diagnostics)
+	snapshotOf := func(t *testing.T, declared *[]ir.FieldID) ir.EventContractIR {
+		t.Helper()
+		value := compilation()
+		if diagnostics := Normalize(&value, []ModelPatch{{ModelID: modelID, Subscriptions: &enabled, DeleteSnapshot: declared}}); len(diagnostics) != 0 {
+			t.Fatalf("diagnostics = %#v", diagnostics)
+		}
+		model := value.Contract.Models[0]
+		if value.Contract.GraphQLABIVersion != ABIVersion || !model.Subscriptions || model.Roots.Events != "postEvents" || model.Event == nil {
+			t.Fatalf("normalized subscription = %#v", model)
+		}
+		wantMetadata := []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}
+		if !reflect.DeepEqual(model.Event.MetadataFields, wantMetadata) || model.Event.SchemaFingerprint == "" || model.Limits.DefaultPageSize != DefaultPageSize || model.Limits.MaxPageSize != DefaultMaxPageSize {
+			t.Fatalf("event metadata/limits = %#v / %#v", model.Event, model.Limits)
+		}
+		if model.Event.PayloadTypeName != "PostEvent" || model.Event.IdentityTypeName != "" || len(model.Event.Schema.IdentityFields) != 1 || model.Event.Schema.IdentityFields[0].FieldID != id {
+			t.Fatalf("normalized event identity = %#v", model.Event)
+		}
+		return *model.Event
 	}
-	model := compilation.Contract.Models[0]
-	if compilation.Contract.GraphQLABIVersion != ABIVersion || !model.Subscriptions || model.Roots.Events != "postEvents" || model.Event == nil {
-		t.Fatalf("normalized subscription = %#v", model)
+	fields := func(event ir.EventContractIR) []ir.FieldID {
+		result := make([]ir.FieldID, len(event.Schema.SnapshotFields))
+		for index, field := range event.Schema.SnapshotFields {
+			result[index] = field.FieldID
+		}
+		return result
 	}
-	if model.Event.PayloadTypeName != "PostEvent" || model.Event.IdentityTypeName != "" || !model.Event.DeleteSnapshotFull || len(model.Event.Schema.IdentityFields) != 1 || model.Event.Schema.IdentityFields[0].FieldID != id {
-		t.Fatalf("normalized event identity = %#v", model.Event)
+	defaulted := snapshotOf(t, nil)
+	if got := fields(defaulted); !reflect.DeepEqual(got, []ir.FieldID{id, title, author}) || defaulted.DeleteSnapshotFull {
+		t.Fatalf("default bounded snapshot = %v full=%v", got, defaulted.DeleteSnapshotFull)
 	}
-	if got := model.Event.Schema.SnapshotFields; len(got) != 2 || got[0].FieldID != id || got[1].FieldID != title {
-		t.Fatalf("stored-scalar snapshot order = %#v", got)
+	declared := []ir.FieldID{body}
+	explicit := snapshotOf(t, &declared)
+	if got := fields(explicit); !reflect.DeepEqual(got, []ir.FieldID{id, author, body}) || explicit.DeleteSnapshotFull {
+		t.Fatalf("declared snapshot = %v full=%v", got, explicit.DeleteSnapshotFull)
 	}
-	wantMetadata := []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}
-	if !reflect.DeepEqual(model.Event.MetadataFields, wantMetadata) || model.Event.SchemaFingerprint == "" || model.Limits.DefaultPageSize != DefaultPageSize || model.Limits.MaxPageSize != DefaultMaxPageSize {
-		t.Fatalf("event metadata/limits = %#v / %#v", model.Event, model.Limits)
+	if explicit.SchemaFingerprint == defaulted.SchemaFingerprint {
+		t.Fatal("declared and default snapshots share a fingerprint")
+	}
+	everything := []ir.FieldID{tags, wide, payload, body, title}
+	full := snapshotOf(t, &everything)
+	if got := fields(full); !reflect.DeepEqual(got, []ir.FieldID{id, title, author, body, payload, wide, tags}) || !full.DeleteSnapshotFull {
+		t.Fatalf("full declared snapshot = %v full=%v", got, full.DeleteSnapshotFull)
+	}
+	foreign := []ir.FieldID{relation}
+	value := compilation()
+	if diagnostics := Normalize(&value, []ModelPatch{{ModelID: modelID, Subscriptions: &enabled, DeleteSnapshot: &foreign}}); !hasDiagnostic(diagnostics, "P7_DELETE_SNAPSHOT_FIELD") {
+		t.Fatalf("relation snapshot diagnostics = %#v", diagnostics)
 	}
 }
 

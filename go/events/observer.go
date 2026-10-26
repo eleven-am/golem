@@ -13,27 +13,29 @@ type Outcome string
 type SuppressionReason string
 
 const (
-	ObservationPublisherClaim     ObservationKind = "publisher_claim"
-	ObservationPublisherAttempt   ObservationKind = "publisher_attempt"
-	ObservationPublisherAck       ObservationKind = "publisher_ack"
-	ObservationPublisherRetry     ObservationKind = "publisher_retry"
-	ObservationPublisherBlock     ObservationKind = "publisher_block"
-	ObservationDepthPending       ObservationKind = "depth_pending"
-	ObservationDepthBlocked       ObservationKind = "depth_blocked"
-	ObservationDepthRetired       ObservationKind = "depth_retired"
-	ObservationRetention          ObservationKind = "retention"
-	ObservationTransportReceive   ObservationKind = "transport_receive"
-	ObservationTransportReconnect ObservationKind = "transport_reconnect"
-	ObservationHubMembership      ObservationKind = "hub_membership"
-	ObservationEvaluation         ObservationKind = "evaluation"
-	ObservationDelivery           ObservationKind = "delivery"
-	ObservationSuppression        ObservationKind = "suppression"
-	ObservationOverflow           ObservationKind = "overflow"
-	ObservationCancellation       ObservationKind = "cancellation"
-	ObservationCDCReceive         ObservationKind = "cdc_receive"
-	ObservationCDCAck             ObservationKind = "cdc_ack"
-	ObservationLifecycleFailure   ObservationKind = "lifecycle_failure"
-	ObservationTopology           ObservationKind = "topology"
+	ObservationPublisherClaim         ObservationKind = "publisher_claim"
+	ObservationPublisherAttempt       ObservationKind = "publisher_attempt"
+	ObservationPublisherAck           ObservationKind = "publisher_ack"
+	ObservationPublisherRetry         ObservationKind = "publisher_retry"
+	ObservationPublisherBlock         ObservationKind = "publisher_block"
+	ObservationDepthPending           ObservationKind = "depth_pending"
+	ObservationDepthBlocked           ObservationKind = "depth_blocked"
+	ObservationDepthRetired           ObservationKind = "depth_retired"
+	ObservationRetention              ObservationKind = "retention"
+	ObservationTransportReceive       ObservationKind = "transport_receive"
+	ObservationTransportReconnect     ObservationKind = "transport_reconnect"
+	ObservationHubMembership          ObservationKind = "hub_membership"
+	ObservationEvaluation             ObservationKind = "evaluation"
+	ObservationDelivery               ObservationKind = "delivery"
+	ObservationSuppression            ObservationKind = "suppression"
+	ObservationOverflow               ObservationKind = "overflow"
+	ObservationCancellation           ObservationKind = "cancellation"
+	ObservationCDCReceive             ObservationKind = "cdc_receive"
+	ObservationCDCAck                 ObservationKind = "cdc_ack"
+	ObservationLifecycleFailure       ObservationKind = "lifecycle_failure"
+	ObservationDeleteCoverage         ObservationKind = "delete_coverage"
+	ObservationDeleteSnapshotOversize ObservationKind = "delete_snapshot_oversize"
+	ObservationTopology               ObservationKind = "topology"
 )
 
 const (
@@ -100,7 +102,7 @@ func validObservationKind(kind ObservationKind) bool {
 		ObservationTransportReceive, ObservationTransportReconnect, ObservationHubMembership,
 		ObservationEvaluation, ObservationDelivery, ObservationSuppression, ObservationOverflow,
 		ObservationCancellation, ObservationCDCReceive, ObservationCDCAck, ObservationLifecycleFailure,
-		ObservationTopology:
+		ObservationTopology, ObservationDeleteCoverage, ObservationDeleteSnapshotOversize:
 		return true
 	default:
 		return false

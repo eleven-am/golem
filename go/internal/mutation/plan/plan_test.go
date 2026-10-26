@@ -94,10 +94,9 @@ func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 	inputs := boundInputs(t, fixture)
 	predicate := boundBatchPredicate(t, fixture)
 	policy := allowAllPolicy(t, policyir.ModelID(fixture.Post))
-	allStored := []policyir.FieldID{
+	declaredSnapshot := []policyir.FieldID{
 		policyir.FieldID(fixture.PostID),
 		policyir.FieldID(fixture.AuthorID),
-		policyir.FieldID(fixture.PostTitle),
 	}
 	for _, test := range []struct {
 		name      string
@@ -122,7 +121,7 @@ func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 				t.Fatal(err)
 			}
 			root, _ := plan.Graph().Root()
-			if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(root.Fact().PrivateDeleteSnapshot()) != len(allStored) {
+			if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(root.Fact().PrivateDeleteSnapshot()) != len(declaredSnapshot) {
 				t.Fatalf("delete snapshot was not preserved: state=%d fields=%x", root.Fact().DeleteSnapshotState(), root.Fact().PrivateDeleteSnapshot())
 			}
 			for _, field := range root.Fact().PrivateDeleteSnapshot() {

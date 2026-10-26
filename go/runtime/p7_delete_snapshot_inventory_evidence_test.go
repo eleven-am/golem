@@ -146,9 +146,8 @@ func assertP7DurableDeleteSnapshots(t testing.TB, fixture mutationResultFixture,
 		if !present {
 			t.Fatalf("fact %d has no private snapshot", index)
 		}
-		complete, err := snapshot.IsComplete(fixture.schema.Registry)
-		if err != nil || !complete {
-			t.Fatalf("fact %d snapshot complete=%t err=%v", index, complete, err)
+		if _, present := snapshot.Cell(policyir.FieldID(fixture.schema.PostTitle)); present {
+			t.Fatalf("fact %d snapshot captured the unbounded title", index)
 		}
 		gotFields := make([]policyir.FieldID, 0, len(snapshot.Cells()))
 		for _, cell := range snapshot.Cells() {

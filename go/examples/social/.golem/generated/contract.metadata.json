@@ -2,8 +2,8 @@
   "kind": "contract_metadata",
   "formatVersion": 1,
   "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "444f42fab517cb460becd86047c5d84361d22276b3c122fe187322b73805dbf5",
-  "generationDigest": "6564a0da669aebc0a395b98399618798879064285ef6faf85812a68e818368eb",
+  "contractFingerprint": "42fbcf3c995f03bba212fe8a01fd2c7f6e0263537b9b8624d4dbe74f976925ca",
+  "generationDigest": "57cf067d42094574595b011da439e9199afe6490624dc0624f48628f18786434",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -133,7 +133,7 @@
             "transactionOrdinal",
             "recordedAt"
           ],
-          "deleteSnapshotFull": true,
+          "deleteSnapshotFull": false,
           "schema": {
             "formatVersion": 1,
             "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
@@ -177,13 +177,6 @@
                 "nullable": true
               },
               {
-                "fieldId": "74780c9d955be686287e3fac79a30eb2",
-                "type": {
-                  "kind": "string"
-                },
-                "nullable": false
-              },
-              {
                 "fieldId": "93873b13a4b34c536891e08240918eb7",
                 "type": {
                   "kind": "dateTime",
@@ -194,7 +187,7 @@
             ],
             "enums": []
           },
-          "schemaFingerprint": "802a4642ebc1822c53f1fe773c452ddff992abf1897e043296f83f451133153b"
+          "schemaFingerprint": "fa42422f65611bbf5a6dfa35cb0be16cf28be2be327bc495bb3e17536d2cfabf"
         },
         "scopedReads": false,
         "limits": {
@@ -579,7 +572,7 @@
             "transactionOrdinal",
             "recordedAt"
           ],
-          "deleteSnapshotFull": true,
+          "deleteSnapshotFull": false,
           "schema": {
             "formatVersion": 1,
             "modelId": "b11b75f11668a6f7019d05b1740d5118",
@@ -613,13 +606,6 @@
                 "type": {
                   "kind": "string",
                   "maxLength": 160
-                },
-                "nullable": false
-              },
-              {
-                "fieldId": "f8f2f3fcc4efbe5905f9ea29c949762a",
-                "type": {
-                  "kind": "string"
                 },
                 "nullable": false
               },
@@ -690,29 +676,10 @@
                 "nullable": false
               },
               {
-                "fieldId": "11f9c4adff40cc4daa268c6132ad36d8",
-                "type": {
-                  "kind": "json",
-                  "jsonSchemaId": "github.com/eleven-am/golem/go/examples/social/social.PostMetadata"
-                },
-                "nullable": false
-              },
-              {
                 "fieldId": "99dba4ce733b9a849ddcc603c31b5c83",
                 "type": {
                   "kind": "enum",
                   "enumId": "2c24eef9cbc254050b30441dcc1a7ab0"
-                },
-                "nullable": false
-              },
-              {
-                "fieldId": "464e7eb85629348cdcdb079a6ce847a8",
-                "type": {
-                  "kind": "scalarList",
-                  "element": {
-                    "kind": "string"
-                  },
-                  "capability": "scalar-list:json-array:v1"
                 },
                 "nullable": false
               },
@@ -744,7 +711,7 @@
               }
             ]
           },
-          "schemaFingerprint": "4540729d2fb7946545cb434e93e9dbccc21a453ac667064fc76c872847929105"
+          "schemaFingerprint": "7540ab0247e9365c2f7021afa3719dbefdd2fd8ec377e307ddd061ef590f11d6"
         },
         "aggregation": {
           "enabled": true,
