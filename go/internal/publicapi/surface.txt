@@ -2479,6 +2479,9 @@ golem.Int16ToInt32 var SchemaCast[int16, int32]
 golem.Int16ToInt64 var SchemaCast[int16, int64]
 golem.Int32ToInt64 var SchemaCast[int32, int64]
 golem.Int64ToString var SchemaCast[int64, string]
+golem.Isolation func(IsolationLevel) TransactionOption
+golem.IsolationLevel comparable
+golem.IsolationLevel type string
 golem.JSONArray func(...JSONValue) JSONArrayValue
 golem.JSONArrayValue type struct
 golem.JSONBool func(bool) JSONBoolValue
@@ -2679,6 +2682,7 @@ golem.ProviderSchemaDocument type struct
 golem.Providers func(*Schema, ...Provider)
 golem.Query func[Resolver any](*GraphQLSchema, string, Resolver)
 golem.RankBM25 const TextRankingMode = "bm25"
+golem.ReadCommitted const IsolationLevel = "read_committed"
 golem.ReadCount const ReadOperation = 4
 golem.ReadFindFirst const ReadOperation = 2
 golem.ReadFindMany const ReadOperation = 3
@@ -2726,6 +2730,7 @@ golem.RelationToOne const RelationCardinality = "toOne"
 golem.Relation[M any, R any] type interface {} sealed
 golem.Requires func[M any](Field[M], ...Field[M]) ComputedOption[M]
 golem.Restrict const ReferentialAction = "restrict"
+golem.RetryConflicts func(int) TransactionOption
 golem.Row[M any] type struct
 golem.Rules[M any] type struct
 golem.RuntimeAfterCommitFailure func(HookOperation, ModelID, error) AfterCommitFailure
@@ -3022,6 +3027,7 @@ golem.RuntimeToManyOccurrenceCell func(FieldID, RuntimeOccurrenceID, []RuntimeMo
 golem.RuntimeToManyReadCell func(FieldID, []RuntimeModelRow) RuntimeReadCell
 golem.RuntimeToOneOccurrenceCell func(FieldID, RuntimeOccurrenceID, RuntimeModelRow) RuntimeOccurrenceCell
 golem.RuntimeToOneReadCell func(FieldID, RuntimeModelRow) RuntimeReadCell
+golem.RuntimeTransactionOptions func([]TransactionOption) (IsolationLevel, int, error)
 golem.RuntimeTransportField func(RuntimeModelRow, FieldID) RuntimeTransportValue
 golem.RuntimeTransportOccurrence func(RuntimeModelRow, FieldID, RuntimeOccurrenceID) RuntimeTransportValue
 golem.RuntimeTransportRelationCount func(RuntimeModelRow, FieldID, RelationID, RuntimeOccurrenceID) RuntimeTransportValue
@@ -3172,6 +3178,7 @@ golem.Select func[M any](...Selection[M]) Projection[M]
 golem.Selection[M any] type interface {} sealed
 golem.SemanticIndex func[M any](string, string, ...Column[M]) ModelOption[M]
 golem.SemanticResult[M any] type struct
+golem.Serializable const IsolationLevel = "serializable"
 golem.SetCreate func[M any, V any](*CreateHookRequest[M], CreateFieldCapability[M, V], V) error
 golem.SetDefault const ReferentialAction = "setDefault"
 golem.SetNull const ReferentialAction = "setNull"
@@ -3207,6 +3214,7 @@ golem.ToOneRelationOption[M any, R any] type interface {} sealed
 golem.ToOneRelation[M any, R any] type interface {} sealed
 golem.ToOneSchemaField[M any, R any] type struct
 golem.ToOne[M any, R any] type struct
+golem.TransactionOption type interface {} sealed
 golem.UUID comparable
 golem.UUID type [16]uint8
 golem.Unique func[M any](string, ...Column[M]) ModelOption[M]
@@ -4246,7 +4254,7 @@ runtime.CallerSearch func[P any, A any, M any](context.Context, *Caller[P, A], g
 runtime.CallerSimilar func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerTextSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.CallerTextSearchSelect func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
-runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error) error
+runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error, ...golem.TransactionOption) error
 runtime.CallerTx comparable
 runtime.CallerTxAggregate func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
 runtime.CallerTxCount func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) (int64, error)
@@ -4371,7 +4379,7 @@ runtime.SystemSearch func[P any, A any, M any](context.Context, System[P, A], go
 runtime.SystemSimilar func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.SystemTextSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.SystemTextSearchSelect func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
-runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error) error
+runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error, ...golem.TransactionOption) error
 runtime.SystemTx comparable
 runtime.SystemTxAggregate func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
 runtime.SystemTxCount func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) (int64, error)

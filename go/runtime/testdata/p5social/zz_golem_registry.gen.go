@@ -1338,12 +1338,12 @@ func (app *App[P]) System() System[P] {
 	return result
 }
 
-func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerTx[P]) error) error {
+func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerTx[P]) error, options ...golem.TransactionOption) error {
 	if caller == nil {
-		return golemruntime.CallerTransaction(ctx, (*golemruntime.Caller[P, Actor])(nil), nil)
+		return golemruntime.CallerTransaction(ctx, (*golemruntime.Caller[P, Actor])(nil), nil, options...)
 	}
 	if callback == nil {
-		return golemruntime.CallerTransaction(ctx, caller.runtime, nil)
+		return golemruntime.CallerTransaction(ctx, caller.runtime, nil, options...)
 	}
 	return golemruntime.CallerTransaction(ctx, caller.runtime, func(inner *golemruntime.CallerTx[P, Actor]) error {
 		result := &CallerTx[P]{runtime: inner}
@@ -1354,7 +1354,7 @@ func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerT
 		result.Tags = CallerTxTagClient[P]{runtime: inner}
 		result.Comments = CallerTxCommentClient[P]{runtime: inner}
 		return callback(result)
-	})
+	}, options...)
 }
 func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if transaction == nil {
@@ -1394,9 +1394,9 @@ func SystemEscape[P any](transaction *CallerTx[P]) *SystemTx[P] {
 	return result
 }
 
-func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error) error {
+func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error, options ...golem.TransactionOption) error {
 	if callback == nil {
-		return golemruntime.SystemTransaction(ctx, system.runtime, nil)
+		return golemruntime.SystemTransaction(ctx, system.runtime, nil, options...)
 	}
 	return golemruntime.SystemTransaction(ctx, system.runtime, func(inner *golemruntime.SystemTx[P, Actor]) error {
 		result := &SystemTx[P]{runtime: inner}
@@ -1407,7 +1407,7 @@ func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx
 		result.Tags = SystemTxTagClient[P]{runtime: inner}
 		result.Comments = SystemTxCommentClient[P]{runtime: inner}
 		return callback(result)
-	})
+	}, options...)
 }
 func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if transaction == nil {

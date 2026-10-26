@@ -386,6 +386,45 @@ wrapping the context's error. After a cancelled wait, or a deadlock that
 PostgreSQL resolved against you, the transaction cannot be used any further, so
 return the error from your callback and retry the whole transaction.
 
+### Serializable transactions and retry
+
+Instead of a lock key, a transaction can ask PostgreSQL to detect the race:
+
+```go
+err := caller.Transaction(ctx, func(tx *notes.CallerTx[Principal]) error {
+	count, err := tx.Notes.Count(ctx, notes.Notes.Where(notes.Notes.AuthorID.Eq(authorID)))
+	if err != nil || count >= limit {
+		return err
+	}
+	_, err = tx.Notes.Create(ctx, input)
+	return err
+}, golem.Isolation(golem.Serializable), golem.RetryConflicts(3))
+```
+
+`Transaction` on `Caller` and `System` takes optional `golem.TransactionOption`
+values. `golem.Isolation` accepts `golem.ReadCommitted`, the default, and
+`golem.Serializable`; no other level is offered. Under `Serializable`, of two
+transactions that both count and then both insert, one fails with `CONFLICT`,
+at a statement or at commit. A serialization failure (SQLSTATE 40001) or a
+deadlock (40P01) is `CONFLICT` under either level, at commit as well as at a
+statement. On SQLite, where one writer runs at a time, every transaction is
+already serializable, and the option changes nothing.
+
+Under `Serializable`, a transaction sees the database as it was when the
+transaction began. Policy is judged against that view: a permission revoked by
+a transaction that commits after yours began is not seen, and your write is
+ordered before the revocation, or one of the two transactions fails with
+`CONFLICT`. A row another transaction changed after yours began cannot be
+updated or deleted; the write fails with `CONFLICT`.
+
+Without `RetryConflicts`, golem runs your callback exactly once and never
+replays it. `golem.RetryConflicts(n)`, with `n` from 1 to 10, runs it up to `n`
+times in all, starting again only after `CONFLICT`. Every attempt is a new
+transaction; after-commit hooks run once, after the attempt that commits. Any
+other error ends the transaction at once. Only use it with a callback that is
+safe to run again: it must not change state outside the transaction, such as
+sending an email or appending to a slice it does not reset.
+
 ### Mutations return only what you select
 
 This is the API's sharpest edge. A mutation returns a `Row` containing

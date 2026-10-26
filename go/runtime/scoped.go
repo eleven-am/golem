@@ -233,7 +233,7 @@ func reportScoped[P, A any](ctx context.Context, app *App[P, A], request golem.F
 }
 
 func scopedError(model golem.ModelID, cause error) error {
-	return golem.RuntimeReadError(golem.CodeBadUserInput, "scoped", model, golem.FieldID{}, "scoped query could not be executed", cause)
+	return golem.RuntimeReadError(readFaultCode(cause), "scoped", model, golem.FieldID{}, "scoped query could not be executed", cause)
 }
 
 func decodeScopedValue(raw any, expression golem.FrozenScopedExpression, logical compilerir.LogicalTypeIR, provider policyir.Provider) (any, error) {

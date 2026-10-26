@@ -1006,7 +1006,7 @@ func executeRenderedPlan[P, A any](ctx context.Context, app *App[P, A], executor
 	}
 	databaseRows, err := queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read execution failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read execution failed", err)
 	}
 	result := make([]executedRow, 0)
 	correlatedColumns := statement.CorrelatedColumns()
@@ -1083,7 +1083,7 @@ func executeRenderedPlan[P, A any](ctx context.Context, app *App[P, A], executor
 	}
 	if err := databaseRows.Err(); err != nil {
 		databaseRows.Close()
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read result stream failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read result stream failed", err)
 	}
 	if err := databaseRows.Close(); err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read result stream could not be closed", err)
@@ -1372,7 +1372,7 @@ func executePreparedCount[P, A any](ctx context.Context, app *App[P, A], prepare
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
 	}
 	if err := sqlx.GetContext(ctx, queryer, &result, prepared.statement.SQL(), prepared.statement.Args()...); err != nil {
-		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
+		return 0, golem.RuntimeReadError(readFaultCode(err), "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
 	}
 	return result, nil
 }
