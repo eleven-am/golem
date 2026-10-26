@@ -264,9 +264,9 @@ reload and subscribe again. A parent changed by a later transaction, before
 the event was delivered, is judged on its state at delivery, as created and
 updated events are; when the event publisher falls behind, that window grows
 with the backlog. A delete delivered from a CDC source has no recorded
-transaction to consult, so a policy that reaches a related parent ends the
-stream with `GOLEM_SUBSCRIPTION_RESYNC`, while a policy on the row's own
-fields still decides it exactly. A delete whose cascade would touch more rows than
+transaction to consult, so a policy whose verdict depends on a related parent
+ends the stream with `GOLEM_SUBSCRIPTION_RESYNC`, while a policy decided by
+the row's own fields still decides it exactly. A delete whose cascade would touch more rows than
 `MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
 
 On PostgreSQL, concurrent writes that touch the same rows do not deadlock. One
