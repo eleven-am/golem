@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,8 @@ type deleteEvalFields struct {
 	commentPost  golem.ToOne[deleteEvalComment, deleteEvalPost]
 	commentPID   golem.EqualField[deleteEvalComment, golem.UUID]
 	commentBody  golem.TextField[deleteEvalComment, string]
+	postComments golem.ToMany[deleteEvalPost, deleteEvalComment]
+	userPosts    golem.ToMany[deleteEvalUser, deleteEvalPost]
 }
 
 type deleteEvalPolicies struct {
@@ -49,6 +52,8 @@ type deleteEvalPolicies struct {
 	post    func(deleteEvalFields, deleteEvalActor) (golem.Predicate[deleteEvalPost], bool)
 	comment func(deleteEvalFields, deleteEvalActor) (golem.Predicate[deleteEvalComment], bool)
 	hook    func(deleteEvalFields) golem.Predicate[deleteEvalComment]
+
+	postUnavailable *atomic.Bool
 }
 
 type deleteEvalFixture struct {
@@ -133,6 +138,8 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		commentPost:  golem.GeneratedToOne[deleteEvalComment, deleteEvalPost](schemaFixture.CommentPost, schemaFixture.Commenting, schemaFixture.Post),
 		commentPID:   golem.GeneratedEqualField[deleteEvalComment, golem.UUID](schemaFixture.CommentPostID),
 		commentBody:  golem.GeneratedTextField[deleteEvalComment, string](schemaFixture.CommentBody),
+		postComments: golem.GeneratedToMany[deleteEvalPost, deleteEvalComment](schemaFixture.PostComments, schemaFixture.Commenting, schemaFixture.Comment),
+		userPosts:    golem.GeneratedToMany[deleteEvalUser, deleteEvalPost](schemaFixture.UserPosts, schemaFixture.Authorship, schemaFixture.Post),
 	}
 	userIdentity := golem.GeneratedIdentityMetadata(schemaFixture.User, schemaFixture.UserKey, golem.PrimaryIdentity, schemaFixture.UserID)
 	postIdentity := golem.GeneratedIdentityMetadata(schemaFixture.Post, schemaFixture.PostKey, golem.PrimaryIdentity, schemaFixture.PostID)
@@ -167,6 +174,9 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		return rules.Freeze(schemaFixture.User)
 	})
 	postBinding := golem.GeneratedPolicyBinding[deleteEvalActor, deleteEvalPost](schemaFixture.Post, func(actor deleteEvalActor) (golem.FrozenPolicy, error) {
+		if policies.postUnavailable != nil && policies.postUnavailable.Load() {
+			return golem.FrozenPolicy{}, errors.New("post policy is unavailable")
+		}
 		rules := golem.NewRules[deleteEvalPost]()
 		if policies.post == nil {
 			rules.CanRead(golem.All[deleteEvalPost]())

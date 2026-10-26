@@ -2,18 +2,22 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policynormalize "github.com/eleven-am/golem/go/internal/policy/normalize"
 	policyresolve "github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
@@ -54,15 +58,38 @@ type deleteProbe struct {
 	exists    bool
 }
 
+type deleteFactCheck struct {
+	target   policyir.ModelID
+	identity []byte
+	depth    int
+	answered bool
+	present  bool
+	rows     []mutationfact.OutboxRow
+	node     *deleteEvaluator
+}
+
+type deleteEvaluation struct {
+	causation  string
+	generation golem.SchemaDigest
+	maxDepth   int
+	providers  policyir.ProviderSet
+	forward    func(policyir.ModelID, policyir.FieldID, policyir.RelationID) (deleteForwardHop, bool)
+	equality   func(policyir.ModelID, []mutationdecode.IdentityComponent) (policyir.Condition, error)
+	identity   func(policyir.ModelID, []mutationdecode.IdentityComponent) ([]byte, bool)
+	subscribed func(policyir.ModelID) bool
+	snapshot   func(*deleteEvaluation, policyir.ModelID, mutationfact.OutboxRow, int) (*deleteEvaluator, bool)
+	probes     map[string]*deleteProbe
+	order      []*deleteProbe
+	checks     map[string]*deleteFactCheck
+	checkOrder []*deleteFactCheck
+}
+
 type deleteEvaluator struct {
-	model     policyir.ModelID
-	cells     map[policyir.FieldID]mutationdecode.Cell
-	record    evaluate.Record
-	providers policyir.ProviderSet
-	forward   func(policyir.ModelID, policyir.FieldID, policyir.RelationID) (deleteForwardHop, bool)
-	equality  func(policyir.ModelID, []mutationdecode.IdentityComponent) (policyir.Condition, error)
-	probes    map[string]*deleteProbe
-	order     []*deleteProbe
+	model  policyir.ModelID
+	cells  map[policyir.FieldID]mutationdecode.Cell
+	record evaluate.Record
+	depth  int
+	shared *deleteEvaluation
 }
 
 type deleteForwardHop struct {
@@ -76,10 +103,7 @@ type deleteVerdict struct {
 	filter deleteTruth
 }
 
-func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P], fact interface {
-	PrivateDeleteSnapshot() (mutationdecode.Row, bool)
-	DeleteSnapshotState() mutationir.DeleteSnapshotState
-}, identity mutationdecode.Identity) (subscription.Evaluation[any], bool, error) {
+func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P], fact mutationfact.Envelope, identity mutationdecode.Identity) (subscription.Evaluation[any], bool, error) {
 	model := policyir.ModelID(state.model)
 	policy, present := caller.policies.Policy(model)
 	if !present {
@@ -101,6 +125,9 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 		return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
 	row, _, err := readplan.CallerReach(caller.policies, model, nil, app.readLimits.plan.MaxRelationDepth)
+	if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
+		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+	}
 	if err != nil {
 		return app.unverifiableDelete(ctx, state)
 	}
@@ -115,6 +142,9 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	var filter *policyir.Condition
 	if where != nil {
 		_, filter, err = readplan.CallerReach(caller.policies, model, where, app.readLimits.plan.MaxRelationDepth)
+		if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
+			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+		}
 		if err != nil {
 			filter = nil
 			verdict.filter = deleteUnknown
@@ -133,10 +163,7 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 		pending = append(pending, *filter)
 	}
 	if len(pending) != 0 {
-		for _, condition := range pending {
-			evaluator.collect(condition)
-		}
-		if err := app.runDeleteProbes(ctx, caller, evaluator.order); err != nil {
+		if err := app.resolveDeleteEvidence(ctx, caller, evaluator, pending); err != nil {
 			return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 		}
 		if verdict.policy == deleteUnknown {
@@ -167,6 +194,37 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	}
 }
 
+func (app *App[P, A]) resolveDeleteEvidence(ctx context.Context, caller *Caller[P, A], evaluator *deleteEvaluator, conditions []policyir.Condition) error {
+	shared := evaluator.shared
+	for round := 0; round <= shared.maxDepth+2; round++ {
+		for _, condition := range conditions {
+			evaluator.collect(condition)
+		}
+		probes := make([]*deleteProbe, 0, len(shared.order))
+		for _, probe := range shared.order {
+			if !probe.answered {
+				probes = append(probes, probe)
+			}
+		}
+		checks := make([]*deleteFactCheck, 0, len(shared.checkOrder))
+		for _, check := range shared.checkOrder {
+			if !check.answered {
+				checks = append(checks, check)
+			}
+		}
+		if len(probes) == 0 && len(checks) == 0 {
+			return nil
+		}
+		if err := app.runDeleteFactChecks(ctx, caller, shared, checks); err != nil {
+			return err
+		}
+		if err := app.runDeleteProbes(ctx, caller, probes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (app *App[P, A]) unverifiableDelete(ctx context.Context, state *callerEventSubscription[P]) (subscription.Evaluation[any], bool, error) {
 	events.Observe(app.eventObserver, ctx, state.model, golem.EventDeleted, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, 0, 0, 1)
 	return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionResync)
@@ -184,16 +242,46 @@ func (app *App[P, A]) eventDeleteFilter(ctx context.Context, caller *Caller[P, A
 	return &where, nil
 }
 
-func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact interface {
-	PrivateDeleteSnapshot() (mutationdecode.Row, bool)
-	DeleteSnapshotState() mutationir.DeleteSnapshotState
-}, identity mutationdecode.Identity) (*deleteEvaluator, error) {
-	cells := make(map[policyir.FieldID]mutationdecode.Cell)
-	if fact.DeleteSnapshotState() == mutationir.DeleteSnapshotStoredScalars {
-		if snapshot, present := fact.PrivateDeleteSnapshot(); present && snapshot.ModelID() == model && app.deleteSnapshotDeclared(snapshot) {
-			for _, cell := range snapshot.Cells() {
-				cells[cell.FieldID()] = cell
+func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact mutationfact.Envelope, identity mutationdecode.Identity) (*deleteEvaluator, error) {
+	causation := fact.CausationID()
+	shared := &deleteEvaluation{
+		causation: golem.UUID(causation).String(), generation: fact.Generation(),
+		maxDepth: app.readLimits.plan.MaxRelationDepth, providers: app.providers,
+		forward: func(owner policyir.ModelID, field policyir.FieldID, relation policyir.RelationID) (deleteForwardHop, bool) {
+			endpoint, ok := app.registry.ForwardToOneRelation(golem.ModelID(owner), golem.RelationID(relation))
+			if !ok || endpoint.FieldID() != golem.FieldID(field) || len(endpoint.Correlation()) == 0 {
+				return deleteForwardHop{}, false
 			}
+			hop := deleteForwardHop{target: endpoint.TargetModelID()}
+			for _, pair := range endpoint.Correlation() {
+				hop.parentField = append(hop.parentField, pair.ParentFieldID())
+				hop.childField = append(hop.childField, pair.ChildFieldID())
+			}
+			return hop, true
+		},
+		equality: func(target policyir.ModelID, components []mutationdecode.IdentityComponent) (policyir.Condition, error) {
+			return equalityCondition(app.registry, app.provider, target, components)
+		},
+		identity:   app.deleteParentIdentity,
+		subscribed: app.deleteFactsCaptured,
+		snapshot:   app.deleteSnapshotNode,
+		probes:     make(map[string]*deleteProbe),
+		checks:     make(map[string]*deleteFactCheck),
+	}
+	var snapshot *mutationdecode.Row
+	if fact.DeleteSnapshotState() == mutationir.DeleteSnapshotStoredScalars {
+		if row, present := fact.PrivateDeleteSnapshot(); present && row.ModelID() == model && app.deleteSnapshotDeclared(row) {
+			snapshot = &row
+		}
+	}
+	return newDeleteNode(shared, model, snapshot, identity, 0)
+}
+
+func newDeleteNode(shared *deleteEvaluation, model policyir.ModelID, snapshot *mutationdecode.Row, identity mutationdecode.Identity, depth int) (*deleteEvaluator, error) {
+	cells := make(map[policyir.FieldID]mutationdecode.Cell)
+	if snapshot != nil {
+		for _, cell := range snapshot.Cells() {
+			cells[cell.FieldID()] = cell
 		}
 	}
 	for _, component := range identity.Components() {
@@ -215,25 +303,74 @@ func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact interface 
 	if err != nil {
 		return nil, err
 	}
-	return &deleteEvaluator{
-		model: model, cells: cells, record: record, providers: app.providers,
-		forward: func(owner policyir.ModelID, field policyir.FieldID, relation policyir.RelationID) (deleteForwardHop, bool) {
-			endpoint, ok := app.registry.ForwardToOneRelation(golem.ModelID(owner), golem.RelationID(relation))
-			if !ok || endpoint.FieldID() != golem.FieldID(field) || len(endpoint.Correlation()) == 0 {
-				return deleteForwardHop{}, false
-			}
-			hop := deleteForwardHop{target: endpoint.TargetModelID()}
-			for _, pair := range endpoint.Correlation() {
-				hop.parentField = append(hop.parentField, pair.ParentFieldID())
-				hop.childField = append(hop.childField, pair.ChildFieldID())
-			}
-			return hop, true
-		},
-		equality: func(target policyir.ModelID, components []mutationdecode.IdentityComponent) (policyir.Condition, error) {
-			return equalityCondition(app.registry, app.provider, target, components)
-		},
-		probes: make(map[string]*deleteProbe),
-	}, nil
+	return &deleteEvaluator{model: model, cells: cells, record: record, depth: depth, shared: shared}, nil
+}
+
+func (app *App[P, A]) deleteFactsCaptured(model policyir.ModelID) bool {
+	metadata, ok := app.registry.Model(golem.ModelID(model))
+	return ok && metadata.SubscriptionsEnabled()
+}
+
+func (app *App[P, A]) deleteParentIdentity(target policyir.ModelID, components []mutationdecode.IdentityComponent) ([]byte, bool) {
+	model, ok := app.registry.Model(golem.ModelID(target))
+	if !ok {
+		return nil, false
+	}
+	primary := model.PrimaryKey()
+	if len(primary) == 0 || len(primary) != len(components) {
+		return nil, false
+	}
+	fields := make([]policyir.FieldID, len(primary))
+	for index, field := range primary {
+		fields[index] = policyir.FieldID(field)
+	}
+	cells := make([]mutationdecode.Cell, len(components))
+	for index, component := range components {
+		value, present := component.PolicyValue()
+		if !present {
+			return nil, false
+		}
+		cells[index] = mutationdecode.Value(component.FieldID(), value)
+	}
+	row, err := mutationdecode.NewRow(app.registry, target, cells)
+	if err != nil {
+		return nil, false
+	}
+	identity, err := mutationdecode.ExtractOrderedIdentity(app.registry, row, fields)
+	if err != nil {
+		return nil, false
+	}
+	encoded, err := mutationfact.EncodeIdentity(identity)
+	if err != nil {
+		return nil, false
+	}
+	return encoded, true
+}
+
+func (app *App[P, A]) deleteSnapshotNode(shared *deleteEvaluation, target policyir.ModelID, stored mutationfact.OutboxRow, depth int) (*deleteEvaluator, bool) {
+	if depth > shared.maxDepth {
+		return nil, false
+	}
+	fact, err := mutationfact.ValidateStoredRow(stored, app.eventSchemas)
+	if err != nil || fact.Action() != mutationir.FactDeleted || fact.ModelID() != target || fact.Generation() != shared.generation {
+		return nil, false
+	}
+	if golem.UUID(fact.CausationID()).String() != shared.causation || fact.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
+		return nil, false
+	}
+	snapshot, present := fact.PrivateDeleteSnapshot()
+	if !present || snapshot.ModelID() != target || !app.deleteSnapshotDeclared(snapshot) {
+		return nil, false
+	}
+	identity, present := fact.BeforeIdentity()
+	if !present {
+		return nil, false
+	}
+	node, err := newDeleteNode(shared, target, &snapshot, identity, depth)
+	if err != nil {
+		return nil, false
+	}
+	return node, true
 }
 
 func (evaluator *deleteEvaluator) collect(condition policyir.Condition) {
@@ -241,6 +378,9 @@ func (evaluator *deleteEvaluator) collect(condition policyir.Condition) {
 }
 
 func (evaluator *deleteEvaluator) collectAt(condition policyir.Condition, positive bool) {
+	if condition.ModelID() != evaluator.model {
+		return
+	}
 	switch condition.Kind() {
 	case policyir.ConditionLogical:
 		op, children, ok := condition.Logical()
@@ -251,28 +391,145 @@ func (evaluator *deleteEvaluator) collectAt(condition policyir.Condition, positi
 			evaluator.collectAt(child, positive != (op == policyir.LogicalNot))
 		}
 	case policyir.ConditionRelation:
-		if deleteHopStale(condition, positive) {
+		_, _, target, cardinality, child, ok := condition.Relation()
+		if !ok || cardinality != policyir.RelationToOne {
 			return
 		}
-		parent, match, ok := evaluator.relationProbes(condition)
+		correlation, null, known := evaluator.correlation(condition)
+		if !known || null {
+			return
+		}
+		parent, match, ok := evaluator.relationProbesFor(condition, correlation)
 		if !ok {
 			return
 		}
 		evaluator.register(parent)
-		if match != nil {
+		check := evaluator.registerHopCheck(target, correlation)
+		if child != nil {
+			for _, model := range deleteRelationTargets(*child) {
+				evaluator.registerCheck(model, nil)
+			}
+		}
+		if match != nil && !deleteHopStale(condition, positive) {
 			evaluator.register(*match)
+		}
+		if check != nil && check.node != nil && child != nil {
+			if childPositive, ok := deleteChildPolarity(condition, positive); ok {
+				check.node.collectAt(*child, childPositive)
+			}
 		}
 	}
 }
 
+func deleteChildPolarity(condition policyir.Condition, positive bool) (bool, bool) {
+	operator, ok := condition.Operator()
+	if !ok {
+		return false, false
+	}
+	switch operator {
+	case policyir.OperatorRelationIs, policyir.OperatorRelationIsNotNull:
+		return positive, true
+	case policyir.OperatorRelationIsNot, policyir.OperatorRelationIsNull:
+		return !positive, true
+	default:
+		return false, false
+	}
+}
+
+func deleteRelationTargets(condition policyir.Condition) []policyir.ModelID {
+	seen := make(map[policyir.ModelID]struct{})
+	var result []policyir.ModelID
+	var walk func(policyir.Condition)
+	walk = func(condition policyir.Condition) {
+		switch condition.Kind() {
+		case policyir.ConditionLogical:
+			_, children, ok := condition.Logical()
+			if !ok {
+				return
+			}
+			for _, child := range children {
+				walk(child)
+			}
+		case policyir.ConditionRelation:
+			_, _, target, _, child, ok := condition.Relation()
+			if !ok {
+				return
+			}
+			if _, duplicate := seen[target]; !duplicate {
+				seen[target] = struct{}{}
+				result = append(result, target)
+			}
+			if child != nil {
+				walk(*child)
+			}
+		}
+	}
+	walk(condition)
+	return result
+}
+
+func (evaluator *deleteEvaluator) hopCheckKey(target policyir.ModelID, correlation []mutationdecode.IdentityComponent) (policyir.ModelID, []byte, bool) {
+	shared := evaluator.shared
+	if !shared.subscribed(target) {
+		return policyir.ModelID{}, nil, false
+	}
+	if identity, ok := shared.identity(target, correlation); ok {
+		return target, identity, true
+	}
+	return target, nil, true
+}
+
+func (evaluator *deleteEvaluator) registerHopCheck(target policyir.ModelID, correlation []mutationdecode.IdentityComponent) *deleteFactCheck {
+	model, identity, ok := evaluator.hopCheckKey(target, correlation)
+	if !ok {
+		return nil
+	}
+	return evaluator.registerCheck(model, identity)
+}
+
+func deleteCheckKey(model policyir.ModelID, identity []byte) string {
+	if identity == nil {
+		return "M" + string(model[:])
+	}
+	return "I" + string(model[:]) + string(identity)
+}
+
+func (evaluator *deleteEvaluator) registerCheck(model policyir.ModelID, identity []byte) *deleteFactCheck {
+	shared := evaluator.shared
+	if !shared.subscribed(model) {
+		return nil
+	}
+	key := deleteCheckKey(model, identity)
+	depth := evaluator.depth + 1
+	if existing := shared.checks[key]; existing != nil {
+		if !existing.answered && depth < existing.depth {
+			existing.depth = depth
+		}
+		return existing
+	}
+	check := &deleteFactCheck{target: model, identity: identity, depth: depth}
+	shared.checks[key] = check
+	shared.checkOrder = append(shared.checkOrder, check)
+	return check
+}
+
+func (evaluator *deleteEvaluator) answeredCheck(model policyir.ModelID, identity []byte) (*deleteFactCheck, bool) {
+	check := evaluator.shared.checks[deleteCheckKey(model, identity)]
+	if check == nil || !check.answered {
+		return nil, false
+	}
+	return check, true
+}
+
 func (evaluator *deleteEvaluator) register(probe deleteProbe) {
 	key, err := deleteProbeKey(probe)
-	if err != nil || evaluator.probes[key] != nil {
+	shared := evaluator.shared
+	if err != nil || shared.probes[key] != nil {
 		return
 	}
 	stored := &deleteProbe{target: probe.target, condition: probe.condition}
-	evaluator.probes[key] = stored
-	evaluator.order = append(evaluator.order, stored)
+	shared.probes[key] = stored
+	shared.order = append(shared.order, stored)
 }
 
 func (evaluator *deleteEvaluator) lookup(probe deleteProbe) (*deleteProbe, bool) {
@@ -280,7 +537,7 @@ func (evaluator *deleteEvaluator) lookup(probe deleteProbe) (*deleteProbe, bool)
 	if err != nil {
 		return nil, false
 	}
-	stored := evaluator.probes[key]
+	stored := evaluator.shared.probes[key]
 	if stored == nil || !stored.answered {
 		return nil, false
 	}
@@ -367,7 +624,7 @@ func (evaluator *deleteEvaluator) leaf(condition policyir.Condition) deleteTruth
 	if _, present := evaluator.cells[field]; !present {
 		return deleteUnknown
 	}
-	value, err := evaluate.Condition(condition, evaluator.record, evaluator.providers)
+	value, err := evaluate.Condition(condition, evaluator.record, evaluator.shared.providers)
 	if err != nil {
 		return deleteUnknown
 	}
@@ -375,7 +632,7 @@ func (evaluator *deleteEvaluator) leaf(condition policyir.Condition) deleteTruth
 }
 
 func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positive bool) deleteTruth {
-	field, _, target, cardinality, _, ok := condition.Relation()
+	field, _, target, cardinality, child, ok := condition.Relation()
 	if !ok || cardinality != policyir.RelationToOne {
 		return deleteUnknown
 	}
@@ -396,22 +653,47 @@ func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positiv
 		if err != nil {
 			return deleteUnknown
 		}
-		value, err := evaluate.Condition(condition, record, evaluator.providers)
+		value, err := evaluate.Condition(condition, record, evaluator.shared.providers)
 		if err != nil {
 			return deleteUnknown
 		}
 		return deleteTruthOf(value)
-	}
-	if deleteHopStale(condition, positive) {
-		return deleteUnknown
 	}
 	parentProbe, matchProbe, ok := evaluator.relationProbesFor(condition, correlation)
 	if !ok {
 		return deleteUnknown
 	}
 	parent, answered := evaluator.lookup(parentProbe)
-	if !answered || !parent.exists {
+	if !answered {
 		return deleteUnknown
+	}
+	model, identity, ok := evaluator.hopCheckKey(target, correlation)
+	if !ok {
+		return deleteUnknown
+	}
+	check, answered := evaluator.answeredCheck(model, identity)
+	if !answered {
+		return deleteUnknown
+	}
+	if check.present {
+		if check.node == nil || parent.exists {
+			return deleteUnknown
+		}
+		return check.node.fromSnapshot(operator, child, positive)
+	}
+	if !parent.exists || deleteHopStale(condition, positive) {
+		return deleteUnknown
+	}
+	if child != nil {
+		for _, nested := range deleteRelationTargets(*child) {
+			if !evaluator.shared.subscribed(nested) {
+				return deleteUnknown
+			}
+			changed, answered := evaluator.answeredCheck(nested, nil)
+			if !answered || changed.present {
+				return deleteUnknown
+			}
+		}
 	}
 	switch operator {
 	case policyir.OperatorRelationIsNotNull:
@@ -434,6 +716,147 @@ func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positiv
 	default:
 		return deleteUnknown
 	}
+}
+
+func (node *deleteEvaluator) fromSnapshot(operator policyir.OperatorID, child *policyir.Condition, positive bool) deleteTruth {
+	switch operator {
+	case policyir.OperatorRelationIsNotNull:
+		return deleteTrue
+	case policyir.OperatorRelationIsNull:
+		return deleteFalse
+	case policyir.OperatorRelationIs:
+		if child == nil {
+			return deleteTrue
+		}
+		return node.truthAt(*child, positive)
+	case policyir.OperatorRelationIsNot:
+		if child == nil {
+			return deleteFalse
+		}
+		return node.truthAt(*child, !positive).not()
+	default:
+		return deleteUnknown
+	}
+}
+
+func (app *App[P, A]) runDeleteFactChecks(ctx context.Context, caller *Caller[P, A], shared *deleteEvaluation, checks []*deleteFactCheck) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	query, args, err := app.deleteFactCheckStatement(shared.causation, checks)
+	if err != nil {
+		return err
+	}
+	if maximum := app.readLimits.plan.MaxStatementParameters; maximum > 0 && len(args) > maximum {
+		return fmt.Errorf("delete fact lookup exceeds the parameter limit")
+	}
+	if err := caller.executor.requireAdmitted(ctx); err != nil {
+		return err
+	}
+	queryer, err := caller.executor.queryerFor(app.database)
+	if err != nil {
+		return err
+	}
+	rows, err := queryer.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := make([][]mutationfact.OutboxRow, len(checks))
+	for rows.Next() {
+		index, stored, err := app.scanDeleteFact(rows)
+		if err != nil {
+			return err
+		}
+		if index < 0 || index >= len(checks) {
+			return fmt.Errorf("delete fact lookup returned an unknown check")
+		}
+		found[index] = append(found[index], stored)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index, check := range checks {
+		check.rows = found[index]
+		check.present = len(check.rows) != 0
+		check.answered = true
+		if check.identity != nil && len(check.rows) == 1 && check.rows[0].Action == "deleted" {
+			if node, ok := shared.snapshot(shared, check.target, check.rows[0], check.depth); ok {
+				check.node = node
+			}
+		}
+	}
+	return nil
+}
+
+func (app *App[P, A]) deleteFactCheckStatement(causation string, checks []*deleteFactCheck) (string, []any, error) {
+	namespace, ok := app.registry.PhysicalSystemNamespace(app.eventProvider)
+	if !ok || namespace == "" || strings.ContainsAny(string(namespace), "\x00\"") {
+		return "", nil, fmt.Errorf("delete fact lookup has no system namespace")
+	}
+	table := `"` + string(namespace) + `"."_golem_outbox"`
+	columns := `"event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","before_identity","after_identity","causation_id","transaction_ordinal","metadata","delete_snapshot","recorded_at"`
+	var args []any
+	mark := func(value any) string {
+		args = append(args, value)
+		if app.provider == policyir.ProviderPostgreSQL {
+			return fmt.Sprintf("$%d", len(args))
+		}
+		return "?"
+	}
+	parts := make([]string, len(checks))
+	for index, check := range checks {
+		model := fmt.Sprintf("%x", check.target[:])
+		where := `"causation_id" = ` + mark(causation) + ` AND "model_id" = ` + mark(model)
+		limit := 1
+		if check.identity != nil {
+			where += ` AND ("before_identity" = ` + mark(check.identity) + ` OR "after_identity" = ` + mark(check.identity) + `)`
+			limit = 2
+		}
+		parts[index] = fmt.Sprintf(`SELECT * FROM (SELECT %d AS "golem_check",%s FROM %s WHERE %s ORDER BY "transaction_ordinal" LIMIT %d) AS "golem_c%d"`, index, columns, table, where, limit, index)
+	}
+	return strings.Join(parts, " UNION ALL "), args, nil
+}
+
+type deleteFactScan struct {
+	Check                 int64  `db:"golem_check"`
+	EventID               string `db:"event_id"`
+	FactVersion           int64  `db:"fact_version"`
+	CodecIdentity         string `db:"codec_identity"`
+	GenerationFingerprint string `db:"generation_fingerprint"`
+	ModelID               string `db:"model_id"`
+	Action                string `db:"action"`
+	BeforeIdentity        []byte `db:"before_identity"`
+	AfterIdentity         []byte `db:"after_identity"`
+	CausationID           string `db:"causation_id"`
+	TransactionOrdinal    int64  `db:"transaction_ordinal"`
+	Metadata              []byte `db:"metadata"`
+	DeleteSnapshot        []byte `db:"delete_snapshot"`
+}
+
+func (app *App[P, A]) scanDeleteFact(rows interface{ Scan(...any) error }) (int, mutationfact.OutboxRow, error) {
+	var value deleteFactScan
+	destinations := []any{&value.Check, &value.EventID, &value.FactVersion, &value.CodecIdentity, &value.GenerationFingerprint, &value.ModelID, &value.Action, &value.BeforeIdentity, &value.AfterIdentity, &value.CausationID, &value.TransactionOrdinal, &value.Metadata, &value.DeleteSnapshot}
+	var recorded time.Time
+	var micros int64
+	if app.provider == policyir.ProviderPostgreSQL {
+		destinations = append(destinations, &recorded)
+	} else {
+		destinations = append(destinations, &micros)
+	}
+	if err := rows.Scan(destinations...); err != nil {
+		return 0, mutationfact.OutboxRow{}, err
+	}
+	if app.provider != policyir.ProviderPostgreSQL {
+		recorded = time.UnixMicro(micros)
+	}
+	return int(value.Check), mutationfact.OutboxRow{
+		EventID: value.EventID, FactVersion: value.FactVersion, CodecIdentity: value.CodecIdentity,
+		GenerationFingerprint: value.GenerationFingerprint, ModelID: value.ModelID, Action: value.Action,
+		BeforeIdentity: value.BeforeIdentity, AfterIdentity: value.AfterIdentity, CausationID: value.CausationID,
+		TransactionOrdinal: value.TransactionOrdinal, Metadata: value.Metadata, DeleteSnapshot: value.DeleteSnapshot,
+		RecordedAt: recorded.UTC(),
+	}, nil
 }
 
 func deleteHopStale(condition policyir.Condition, positive bool) bool {
@@ -507,7 +930,7 @@ func deleteNestedHopNegative(condition policyir.Condition, positive bool) bool {
 
 func (evaluator *deleteEvaluator) correlation(condition policyir.Condition) ([]mutationdecode.IdentityComponent, bool, bool) {
 	field, relation, target, _, _, _ := condition.Relation()
-	hop, ok := evaluator.forward(condition.ModelID(), field, relation)
+	hop, ok := evaluator.shared.forward(condition.ModelID(), field, relation)
 	if !ok || policyir.ModelID(hop.target) != target {
 		return nil, false, false
 	}
@@ -542,24 +965,9 @@ func (evaluator *deleteEvaluator) correlation(condition policyir.Condition) ([]m
 	}
 }
 
-func (evaluator *deleteEvaluator) relationProbes(condition policyir.Condition) (deleteProbe, *deleteProbe, bool) {
-	if condition.ModelID() != evaluator.model {
-		return deleteProbe{}, nil, false
-	}
-	_, _, _, cardinality, _, ok := condition.Relation()
-	if !ok || cardinality != policyir.RelationToOne {
-		return deleteProbe{}, nil, false
-	}
-	correlation, null, known := evaluator.correlation(condition)
-	if !known || null {
-		return deleteProbe{}, nil, false
-	}
-	return evaluator.relationProbesFor(condition, correlation)
-}
-
 func (evaluator *deleteEvaluator) relationProbesFor(condition policyir.Condition, correlation []mutationdecode.IdentityComponent) (deleteProbe, *deleteProbe, bool) {
 	_, _, target, _, child, _ := condition.Relation()
-	key, err := evaluator.equality(target, correlation)
+	key, err := evaluator.shared.equality(target, correlation)
 	if err != nil {
 		return deleteProbe{}, nil, false
 	}
