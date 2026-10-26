@@ -3,6 +3,7 @@ package bind
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -11,13 +12,68 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 const golemPackagePath = "github.com/eleven-am/golem/go/golem"
 
+type ValueError struct {
+	Reason  golem.Reason
+	Maximum uint32
+	Cause   error
+}
+
+func (failure *ValueError) Error() string {
+	if failure == nil {
+		return ""
+	}
+	if failure.Cause == nil {
+		return string(failure.Reason)
+	}
+	return string(failure.Reason) + ": " + failure.Cause.Error()
+}
+
+func (failure *ValueError) Unwrap() error { return failure.Cause }
+
+func valueFailure(reason golem.Reason, maximum uint32, cause error) error {
+	return &ValueError{Reason: reason, Maximum: maximum, Cause: cause}
+}
+
 func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, registry *schema.Registry) (policyir.Value, error) {
+	value, err := bindLogicalValue(raw, logical, typ, registry)
+	if err == nil {
+		return value, nil
+	}
+	var typed *ValueError
+	if errors.As(err, &typed) {
+		return policyir.Value{}, err
+	}
+	return policyir.Value{}, valueFailure(golem.ReasonInvalidValue, 0, err)
+}
+
+func constructorReason(kind compilerir.LogicalTypeKind) golem.Reason {
+	switch kind {
+	case compilerir.TypeInt16, compilerir.TypeInt32, compilerir.TypeInt64, compilerir.TypeDate, compilerir.TypeTime:
+		return golem.ReasonValueRange
+	case compilerir.TypeDecimal, compilerir.TypeDateTime:
+		return golem.ReasonValuePrecision
+	default:
+		return golem.ReasonInvalidValue
+	}
+}
+
+func fitReason(kind compilerir.LogicalTypeKind) golem.Reason {
+	switch kind {
+	case compilerir.TypeDecimal, compilerir.TypeTime, compilerir.TypeDateTime:
+		return golem.ReasonValuePrecision
+	default:
+		return golem.ReasonInvalidValue
+	}
+}
+
+func bindLogicalValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, registry *schema.Registry) (policyir.Value, error) {
 	if raw == nil {
 		return policyir.Value{}, fmt.Errorf("nil is not a scalar value; use the explicit null operation")
 	}
@@ -75,7 +131,7 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		}
 		text := value.String()
 		if logical.MaxLength != nil && uint32(utf8.RuneCountInString(text)) > *logical.MaxLength {
-			return result, fmt.Errorf("string exceeds maximum rune length %d", *logical.MaxLength)
+			return result, valueFailure(golem.ReasonValueTooLong, *logical.MaxLength, fmt.Errorf("string exceeds maximum rune length %d", *logical.MaxLength))
 		}
 		result, err = policyir.PortableStringValue(text)
 	case compilerir.TypeBytes:
@@ -84,7 +140,7 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		}
 		bytesValue := bytes.Clone(value.Bytes())
 		if logical.MaxLength != nil && uint32(len(bytesValue)) > *logical.MaxLength {
-			return result, fmt.Errorf("bytes exceed maximum byte length %d", *logical.MaxLength)
+			return result, valueFailure(golem.ReasonValueTooLong, *logical.MaxLength, fmt.Errorf("bytes exceed maximum byte length %d", *logical.MaxLength))
 		}
 		result = policyir.BytesValue(bytesValue)
 	case compilerir.TypeUUID:
@@ -112,7 +168,7 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		}
 		instant = instant.UTC()
 		if instant.Year() < 1 || instant.Year() > 9999 {
-			return result, fmt.Errorf("datetime is outside the portable year range 0001-9999")
+			return result, valueFailure(golem.ReasonValueRange, 0, fmt.Errorf("datetime is outside the portable year range 0001-9999"))
 		}
 		result, err = policyir.NewDateTimeValue(instant.Unix(), uint32(instant.Nanosecond()))
 	case compilerir.TypeEnum:
@@ -174,10 +230,17 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		return result, fmt.Errorf("unsupported logical type %q", logical.Kind)
 	}
 	if err != nil {
-		return policyir.Value{}, err
+		var typed *ValueError
+		if errors.As(err, &typed) {
+			return policyir.Value{}, err
+		}
+		return policyir.Value{}, valueFailure(constructorReason(logical.Kind), 0, err)
 	}
 	if result.Kind() != typ.Kind() {
 		return policyir.Value{}, fmt.Errorf("bound value kind %d does not match field kind %d", result.Kind(), typ.Kind())
+	}
+	if err := mutationir.ValueFitsType(result, typ); err != nil {
+		return policyir.Value{}, valueFailure(fitReason(logical.Kind), 0, err)
 	}
 	return result, nil
 }

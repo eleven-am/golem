@@ -109,6 +109,9 @@ func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], executo
 		}
 		statement, renderErr := readsql.RenderBatch(child, endpoint, keys[start:end], app.registry, app.provider, app.capabilities)
 		if renderErr != nil {
+			if limited, ok := publicLimitError(operationName(operation), golem.ModelID(parent.ModelID()), renderErr); ok {
+				return nil, limited
+			}
 			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(parent.ModelID()), golem.FieldID(relation.FieldID()), "bounded relation batch did not render", renderErr)
 		}
 		decoded, decodeErr := executeBatchStatement(ctx, app, executor, operation, child, statement)

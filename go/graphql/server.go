@@ -368,7 +368,7 @@ func graphQLObservationResult(response Response) (observe.Outcome, observe.Reaso
 			return observe.OutcomeRefused, observe.ReasonNotFound
 		case "CONFLICT":
 			return observe.OutcomeRefused, observe.ReasonConflict
-		case "QUERY_LIMIT_EXCEEDED", "INPUT_LIMIT_EXCEEDED":
+		case "QUERY_LIMIT_EXCEEDED", "INPUT_LIMIT_EXCEEDED", string(golem.CodeLimitExceeded):
 			return observe.OutcomeRefused, observe.ReasonLimit
 		}
 	}
@@ -531,7 +531,7 @@ func publicError(code, message string) Error {
 func PresentError(ctx context.Context, err error, path []any, report func(context.Context, error)) Error {
 	var failure *golem.Error
 	if errors.As(err, &failure) {
-		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(failure.Code)}}
+		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: publicErrorExtensions(failure)}
 	}
 	if code, ok := events.CodeOf(err); ok {
 		return Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
@@ -543,6 +543,18 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 	result.Path = append([]any(nil), path...)
 	return result
 }
+func publicErrorExtensions(failure *golem.Error) map[string]any {
+	extensions := map[string]any{"code": string(failure.Code)}
+	if failure.Reason != "" {
+		extensions["reason"] = string(failure.Reason)
+	}
+	if failure.Limit != "" {
+		extensions["limit"] = string(failure.Limit)
+		extensions["max"] = failure.LimitMax
+	}
+	return extensions
+}
+
 func writeResponse(writer io.Writer, response Response) {
 	buffer := responseBuffers.Get().(*bytes.Buffer)
 	defer func() {

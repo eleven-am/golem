@@ -121,7 +121,7 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 	text := "SELECT " + strings.Join(fields, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(context.alias) + " WHERE " + fragment.text + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", uint64(plan.Bounds().MaxRows())+1)
 	capture := Statement{role: CaptureExactSet, text: text, bindings: fragment.bindings, columns: columns, cardinality: AtMostSentinelRows, reader: rowlock.Reader{Alias: context.alias, Columns: strings.Join(fields, ", "), Match: fragment.text}}
 	if uint32(len(capture.bindings)) > plan.Bounds().MaxParameters() {
-		return Program{}, fail(CodeLimit, node.ModelID(), policyir.FieldID{}, "capture statement exceeds parameter bound", nil)
+		return Program{}, failLimit(golem.LimitStatementParameters, int(plan.Bounds().MaxParameters()), node.ModelID(), "capture statement exceeds parameter bound")
 	}
 	return Program{context: context, transaction: transaction, capture: capture, maxRows: plan.Bounds().MaxRows(), primary: primary, semantic: plan.SemanticIndexed()}, nil
 }

@@ -170,7 +170,7 @@ func (builder *builder) buildRelations(parent policyir.ModelID, parentOperation 
 		return nil, nil
 	}
 	if depth > builder.request.MaxDepth {
-		return nil, fail(CodeDepth, golem.ModelID(parent), golem.FieldID{}, "nested mutation depth exceeds configured bound", nil)
+		return nil, &Error{Code: CodeDepth, Model: golem.ModelID(parent), Limit: golem.LimitNestedDepth, Maximum: int(builder.request.MaxDepth), Detail: "nested mutation depth exceeds configured bound"}
 	}
 	ordered := append([]golem.FrozenNestedMutation(nil), mutations...)
 	for _, frozen := range ordered {
@@ -267,7 +267,7 @@ func (builder *builder) buildRelation(parent policyir.ModelID, parentOperation m
 		return result, nil
 	case golem.MutationRelationCreateMany:
 		if uint32(len(branches)) > builder.request.MaxRows {
-			return nil, fail(CodeShape, frozen.ParentModelID(), frozen.FieldID(), "nested create-many exceeds configured row bound", nil)
+			return nil, &Error{Code: CodeShape, Model: frozen.ParentModelID(), Field: frozen.FieldID(), Limit: golem.LimitBatchRows, Maximum: int(builder.request.MaxRows), Detail: "nested create-many exceeds configured row bound"}
 		}
 		position, positionErr := mutationir.NewRelationPosition(mutationir.RelationPositionInput{ParentModel: parent, Field: policyir.FieldID(frozen.FieldID()), Relation: policyir.RelationID(frozen.RelationID()), TargetModel: policyir.ModelID(frozen.TargetModelID()), Kind: mutationir.PositionEndpoint})
 		if positionErr != nil {

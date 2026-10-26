@@ -132,7 +132,7 @@ func TestRuntimeRecursivelyScopesRootRelationPolicyAndRejectsCyclesBeforeSQL(t *
 	}
 	count, err := CallerCount(ctx, cycleCaller, userDescriptor)
 	var failure *golem.Error
-	if count != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Message != "read is not permitted" {
+	if count != 0 || !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Reason != golem.ReasonPolicyInvalid || failure.Message != "policy cannot be applied to this request" {
 		t.Fatalf("cycle count=%d error=%v", count, err)
 	}
 	if cause := errors.Unwrap(failure); cause == nil || !strings.Contains(cause.Error(), "cyclic relation policy") {

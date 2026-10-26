@@ -54,7 +54,7 @@ func enumerateCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, r
 	}
 	budget := remaining - len(parents)
 	if budget < 0 {
-		return nil, mutationbatch.LimitError(model, fmt.Sprintf("deleted rows exceed %d", limits.touchedRows))
+		return nil, &mutationLimitError{limit: golem.LimitTouchedRows, max: limits.touchedRows}
 	}
 	deleted := make(map[string]struct{}, len(parents))
 	for _, row := range parents {
@@ -109,7 +109,7 @@ func enumerateCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, r
 					}
 				}
 				if len(effects.deleted)+len(nulled) > budget {
-					return nil, mutationbatch.LimitError(source, fmt.Sprintf("cascaded rows exceed the %d of %d touched rows that remain", budget, limits.touchedRows))
+					return nil, &mutationLimitError{limit: golem.LimitTouchedRows, max: limits.touchedRows}
 				}
 			}
 			if len(next) != 0 {

@@ -30,10 +30,6 @@ type RowsRequest struct {
 	MaxParameters uint32
 }
 
-func LimitError(model policyir.ModelID, detail string) error {
-	return fail(CodeLimit, model, policyir.FieldID{}, detail, nil)
-}
-
 func RenderDependents(request DependentsRequest) ([]Statement, error) {
 	if request.MaxRows == 0 || request.MaxParameters == 0 || len(request.Parents) == 0 {
 		return nil, fail(CodeInput, request.Parent, policyir.FieldID{}, "dependent capture requires parents and positive bounds", nil)
@@ -61,7 +57,7 @@ func RenderDependents(request DependentsRequest) ([]Statement, error) {
 	}
 	chunk := int(request.MaxParameters) / len(parent.primary)
 	if chunk < 1 {
-		return nil, fail(CodeLimit, request.Parent, policyir.FieldID{}, "parameter bound cannot hold one parent identity", nil)
+		return nil, failLimit(golem.LimitStatementParameters, int(request.MaxParameters), request.Parent, "parameter bound cannot hold one parent identity")
 	}
 	identities, err := parent.identities(request.Parents)
 	if err != nil {
@@ -96,7 +92,7 @@ func RenderRows(request RowsRequest) ([]Statement, error) {
 	}
 	chunk := int(request.MaxParameters) / len(context.primary)
 	if chunk < 1 {
-		return nil, fail(CodeLimit, request.Model, policyir.FieldID{}, "parameter bound cannot hold one identity", nil)
+		return nil, failLimit(golem.LimitStatementParameters, int(request.MaxParameters), request.Model, "parameter bound cannot hold one identity")
 	}
 	identities, err := context.identities(request.Rows)
 	if err != nil {

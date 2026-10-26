@@ -10,12 +10,10 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
-	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/observeexec"
-	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
 )
@@ -338,7 +336,7 @@ func (state *mutationState) touch(ctx context.Context, rows int) error {
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
 	if rows > state.limits.touchedRows-state.touched {
-		return mutationbatch.LimitError(policyir.ModelID{}, fmt.Sprintf("touched rows exceed %d", state.limits.touchedRows))
+		return &mutationLimitError{limit: golem.LimitTouchedRows, max: state.limits.touchedRows}
 	}
 	state.touched += rows
 	state.touches = append(state.touches, mutationTouch{owner: state.currentScope(ctx), rows: rows})
@@ -376,10 +374,10 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
 	if len(state.facts) >= state.limits.facts {
-		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_LIMIT: facts exceed %d", state.limits.facts)
+		return mutationfact.OutboxRow{}, &mutationLimitError{limit: golem.LimitFacts, max: state.limits.facts}
 	}
 	if state.ordinal == ^uint32(0) {
-		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_LIMIT: transaction ordinal exhausted")
+		return mutationfact.OutboxRow{}, &mutationLimitError{limit: golem.LimitTransactionOrdinal, max: int(^uint32(0))}
 	}
 	ordinal := state.ordinal + 1
 	event, err := newMutationEventID()
@@ -410,7 +408,7 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 		}
 	}
 	if row.EncodedBytes() > state.limits.outboxBytes-state.bytes {
-		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_LIMIT: outbox bytes exceed %d", state.limits.outboxBytes)
+		return mutationfact.OutboxRow{}, &mutationLimitError{limit: golem.LimitOutboxBytes, max: state.limits.outboxBytes}
 	}
 	oversized = dropped
 	state.ordinal = ordinal
@@ -450,10 +448,10 @@ func (state *mutationState) appendOutboxRow(ctx context.Context, row mutationfac
 		return fmt.Errorf("P4_MUTATION_STATE: fact causation or ordinal does not match transaction")
 	}
 	if len(state.facts) >= state.limits.facts {
-		return fmt.Errorf("P4_MUTATION_LIMIT: facts exceed %d", state.limits.facts)
+		return &mutationLimitError{limit: golem.LimitFacts, max: state.limits.facts}
 	}
 	if row.EncodedBytes() > state.limits.outboxBytes-state.bytes {
-		return fmt.Errorf("P4_MUTATION_LIMIT: outbox bytes exceed %d", state.limits.outboxBytes)
+		return &mutationLimitError{limit: golem.LimitOutboxBytes, max: state.limits.outboxBytes}
 	}
 	state.ordinal = wantOrdinal
 	state.bytes += row.EncodedBytes()

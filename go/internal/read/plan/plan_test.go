@@ -467,8 +467,17 @@ func TestMaskRelationHydrationIsPrivateUnpagedAndLimitChecked(t *testing.T) {
 	selected := DefaultLimits()
 	selected.MaxSelected = 2
 	_, err = Caller(request, fixture.Registry, policies, selected)
-	if !errors.As(err, &failure) || failure.Code != CodeLimit {
-		t.Fatalf("dependency selection error=%v", err)
+	if !errors.As(err, &failure) || failure.Code != CodeLimit || failure.Reason != golem.ReasonPolicyInvalid || failure.Limit != "" {
+		t.Fatalf("dependency selection error=%#v", failure)
+	}
+	selected.MaxSelected = 1
+	_, err = Caller(minimalRequest, fixture.Registry, policies, selected)
+	if !errors.As(err, &failure) || failure.Code != CodeLimit || failure.Reason != golem.ReasonPolicyInvalid || failure.Limit != "" {
+		t.Fatalf("policy-only selection overflow error=%#v", failure)
+	}
+	_, err = Caller(request, fixture.Registry, policies, selected)
+	if !errors.As(err, &failure) || failure.Code != CodeLimit || failure.Reason != golem.ReasonLimitExceeded || failure.Limit != golem.LimitSelectedFields || failure.Maximum != 1 {
+		t.Fatalf("caller selection overflow error=%#v", failure)
 	}
 }
 

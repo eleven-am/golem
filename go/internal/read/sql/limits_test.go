@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -44,6 +45,27 @@ func TestConfiguredStatementBoundsAcceptExactBoundaryAndRefuseOverflow(t *testin
 	}
 	if err := ValidateStatementComplexity(model, "x AS y AS z AS q", 20, 2); err == nil {
 		t.Fatal("configured alias overflow accepted")
+	}
+}
+
+func TestInvalidConfiguredStatementBoundsAreConfigurationErrorsNotCallerLimits(t *testing.T) {
+	model := policyir.ModelID{4}
+	for name, err := range map[string]error{
+		"zero parameters":       enforceStatementParameterLimitWith(model, nil, 0),
+		"parameters above":      enforceStatementParameterLimitWith(model, nil, MaxStatementParameters+1),
+		"zero bytes":            ValidateStatementComplexity(model, "", 0, 2),
+		"bytes above ceiling":   ValidateStatementComplexity(model, "", MaxStatementBytes+1, 2),
+		"zero aliases":          ValidateStatementComplexity(model, "", 20, 0),
+		"aliases above ceiling": ValidateStatementComplexity(model, "", 20, MaxStatementAliases+1),
+	} {
+		var failure *Error
+		if !errors.As(err, &failure) || failure.Code != CodeInput || failure.Limit != "" || failure.Maximum != 0 || StatementCapacityExceeded(err) {
+			t.Fatalf("%s error=%#v", name, failure)
+		}
+	}
+	var failure *Error
+	if err := enforceStatementParameterLimitWith(model, []any{1, 2}, 1); !errors.As(err, &failure) || failure.Code != CodeRender || failure.Limit != golem.LimitStatementParameters || failure.Maximum != 1 {
+		t.Fatalf("configured parameter overflow=%#v", failure)
 	}
 }
 

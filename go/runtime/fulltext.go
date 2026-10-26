@@ -128,7 +128,7 @@ func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	}
 	candidates, err := renderFullTextCandidates(app, prepared, planned, indexName, rankingParameters)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "textSearch", prepared.ModelID(), golem.FieldID{}, "full-text candidate statement could not be rendered", err)
+		return nil, publicReadRenderError("textSearch", prepared.ModelID(), "full-text candidate statement could not be rendered", err)
 	}
 	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
@@ -146,7 +146,7 @@ func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	}
 	base, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "textSearch", prepared.ModelID(), golem.FieldID{}, "full-text row statement could not be rendered", err)
+		return nil, publicReadRenderError("textSearch", prepared.ModelID(), "full-text row statement could not be rendered", err)
 	}
 	hydrationRanks := make([]semanticruntime.Rank, len(ranks))
 	for position, rank := range ranks {

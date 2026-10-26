@@ -29,11 +29,14 @@ const (
 )
 
 type Error struct {
-	Code   ErrorCode
-	Model  policyir.ModelID
-	Field  policyir.FieldID
-	Detail string
-	Cause  error
+	Code    ErrorCode
+	Reason  golem.Reason
+	Model   policyir.ModelID
+	Field   policyir.FieldID
+	Limit   golem.Limit
+	Maximum int
+	Detail  string
+	Cause   error
 }
 
 func (failure *Error) Error() string {
@@ -303,11 +306,11 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		return Plan{}, fail(CodeLimit, request.ModelID(), policyir.FieldID{}, "limits are invalid", nil)
 	}
 	if depth > limits.MaxRelationDepth {
-		return Plan{}, fail(CodeLimit, request.ModelID(), policyir.FieldID{}, "relation depth limit exceeded", nil)
+		return Plan{}, failLimit(golem.LimitDepth, limits.MaxRelationDepth, request.ModelID(), "relation depth limit exceeded")
 	}
 	effectiveMaxTake := modelRowCap(registry, request.ModelID(), configuredRowCap)
 	if take, ok := request.Take(); ok && effectiveMaxTake > 0 && (take > effectiveMaxTake || take < -effectiveMaxTake) {
-		return Plan{}, fail(CodeLimit, request.ModelID(), policyir.FieldID{}, "take exceeds the model maximum", nil)
+		return Plan{}, failLimit(golem.LimitTake, effectiveMaxTake, request.ModelID(), "take exceeds the model maximum")
 	}
 
 	model := request.ModelID()
@@ -335,7 +338,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "read action gate could not be resolved", gateErr)
 		}
 		if !allowed {
-			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "read action is not granted", nil)
+			return Plan{}, failReason(CodePolicy, golem.ReasonNotGranted, model, policyir.FieldID{}, "read action is not granted")
 		}
 		expander = newPolicyExpander(policies, limits.MaxRelationDepth)
 		row, err = expander.model(model, depth)
@@ -493,7 +496,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		selections = append(defaults, selections...)
 	}
 	if len(selections) > limits.MaxSelected {
-		return Plan{}, fail(CodeLimit, model, policyir.FieldID{}, "selected field limit exceeded", nil)
+		return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, model, "selected field limit exceeded")
 	}
 
 	planned := make(map[policyir.FieldID]int)
@@ -595,7 +598,10 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		}
 	}
 	if len(result.fields)+len(result.relations)+len(result.counts)+len(result.hydrations) > limits.MaxSelected {
-		return Plan{}, fail(CodeLimit, model, policyir.FieldID{}, "selected and policy-only fields exceed the limit", nil)
+		if len(selections)+len(result.orders)+len(result.distinct) > limits.MaxSelected {
+			return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, model, "selected and policy-only fields exceed the limit")
+		}
+		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only fields exceed the selected field limit")
 	}
 	return result, nil
 }
@@ -613,7 +619,7 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 			injectScalarDependencies(plan, registry, []policyir.FieldID{entry.FieldID()}, planned)
 		case dependency.Relation:
 			if depth+1 > limits.MaxRelationDepth {
-				return fail(CodeLimit, plan.model, entry.FieldID(), "policy-only relation depth limit exceeded", nil)
+				return failReason(CodeLimit, golem.ReasonPolicyInvalid, plan.model, entry.FieldID(), "policy-only relation depth limit exceeded")
 			}
 			target, ok := entry.TargetModel()
 			if !ok {
@@ -656,7 +662,7 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system bool, depth, configuredRowCap int) (Plan, error) {
 	model := tree.ModelID()
 	if model == (policyir.ModelID{}) || depth > limits.MaxRelationDepth {
-		return Plan{}, fail(CodeLimit, model, policyir.FieldID{}, "policy-only relation depth limit exceeded", nil)
+		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only relation depth limit exceeded")
 	}
 	var row policyir.Condition
 	var err error
@@ -701,7 +707,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		injectScalarDependencies(&result, registry, []policyir.FieldID{field}, planned)
 	}
 	if len(result.fields)+len(result.hydrations) > limits.MaxSelected {
-		return Plan{}, fail(CodeLimit, model, policyir.FieldID{}, "policy-only dependency fields exceed the limit", nil)
+		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only dependency fields exceed the limit")
 	}
 	return result, nil
 }
@@ -766,7 +772,7 @@ func classifyField(registry *schema.Registry, policy policyir.Policy, model poli
 		return classify.Classification{}, fail(CodePolicy, model, field, "field classification is absent", nil)
 	}
 	if classification.Access() == classify.AccessNever || requireDischarged && classification.Access() == classify.AccessConditional && !classification.DischargedByConstraint() {
-		return classify.Classification{}, fail(CodeField, model, field, "field is not readable in this statement position", nil)
+		return classify.Classification{}, failReason(CodeField, golem.ReasonFieldNotReadable, model, field, "field is not readable in this statement position")
 	}
 	return classification, nil
 }
@@ -816,6 +822,14 @@ func policyAbsence(policies PolicySet, model policyir.ModelID) error {
 
 func fail(code ErrorCode, model policyir.ModelID, field policyir.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Model: model, Field: field, Detail: detail, Cause: cause}
+}
+
+func failReason(code ErrorCode, reason golem.Reason, model policyir.ModelID, field policyir.FieldID, detail string) error {
+	return &Error{Code: code, Reason: reason, Model: model, Field: field, Detail: detail}
+}
+
+func failLimit(limit golem.Limit, maximum int, model policyir.ModelID, detail string) error {
+	return &Error{Code: CodeLimit, Reason: golem.ReasonLimitExceeded, Model: model, Limit: limit, Maximum: maximum, Detail: detail}
 }
 
 func (plan Plan) clone() Plan {

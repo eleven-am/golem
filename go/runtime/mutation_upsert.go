@@ -814,6 +814,9 @@ func executePreparedRootUpsert[P, A, M any](ctx context.Context, app *App[P, A],
 }
 
 func publicRootUpsertError(model golem.ModelID, err error) error {
+	if limited, ok := publicLimitError("upsert", model, err); ok {
+		return limited
+	}
 	var kernel *mutationupsert.Error
 	if errors.As(err, &kernel) && kernel.Code == mutationupsert.CodeConflict {
 		return golem.RuntimeOperationError(golem.CodeConflict, "upsert", model, golem.FieldID{}, "mutation conflicted", err)
@@ -835,7 +838,10 @@ func publicRootUpsertError(model golem.ModelID, err error) error {
 		case golem.CodeConflict:
 			message = "mutation conflicted"
 		}
-		return golem.RuntimeOperationError(public.Code, "upsert", model, public.Field, message, err)
+		if public.Reason != "" {
+			message = public.Message
+		}
+		return rebasePublicError(public, "upsert", model, message, err)
 	}
 	return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", model, golem.FieldID{}, "mutation could not be completed", err)
 }
