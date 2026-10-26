@@ -160,6 +160,11 @@ func fieldContracts(fields ...compilerir.FieldID) []compilerir.FieldContractIR {
 
 func normalizeSubscribedEvents(t testing.TB, model compilerir.ModelIR, contract *compilerir.ContractIR) {
 	t.Helper()
+	normalizeDeclaredSubscribedEvents(t, model, contract, nil)
+}
+
+func normalizeDeclaredSubscribedEvents(t testing.TB, model compilerir.ModelIR, contract *compilerir.ContractIR, declared map[compilerir.ModelID][]compilerir.FieldID) {
+	t.Helper()
 	models := make(map[compilerir.ModelID]compilerir.ModelDeclIR, len(model.Models))
 	for _, logical := range model.Models {
 		models[logical.ID] = logical
@@ -173,11 +178,13 @@ func normalizeSubscribedEvents(t testing.TB, model compilerir.ModelIR, contract 
 		if !exists {
 			t.Fatalf("subscription fixture model %s is absent", entry.ModelID)
 		}
-		snapshot := make([]compilerir.FieldID, 0, len(logical.Fields))
-		for _, field := range logical.Fields {
-			if field.Kind != compilerir.FieldRelation && field.Scalar != nil {
-				snapshot = append(snapshot, field.ID)
-			}
+		var fields *[]compilerir.FieldID
+		if values, present := declared[entry.ModelID]; present {
+			fields = &values
+		}
+		snapshot, err := compilerir.DeleteSnapshotFields(logical, model.Relations, fields)
+		if err != nil {
+			t.Fatalf("derive fixture delete snapshot for %s: %v", entry.ModelID, err)
 		}
 		shape, err := compilerir.BuildEventSchemaShape(logical, model.Enums, snapshot)
 		if err != nil {
@@ -198,7 +205,7 @@ func normalizeSubscribedEvents(t testing.TB, model compilerir.ModelIR, contract 
 		entry.Event = &compilerir.EventContractIR{
 			PayloadTypeName: name + "Event", IdentityTypeName: identityType,
 			MetadataFields:     []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
-			DeleteSnapshotFull: true, Schema: shape, SchemaFingerprint: fingerprint,
+			DeleteSnapshotFull: compilerir.DeleteSnapshotIsFull(logical, snapshot), Schema: shape, SchemaFingerprint: fingerprint,
 		}
 	}
 }

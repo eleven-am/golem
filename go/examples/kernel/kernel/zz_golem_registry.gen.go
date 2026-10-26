@@ -631,6 +631,12 @@ func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pendi
 	}
 	return golemruntime.CallerTxEnqueue(ctx, transaction.runtime, pending)
 }
+func (transaction *CallerTx[P]) LockKeys(ctx context.Context, keys ...golem.LockKey) error {
+	if transaction == nil {
+		return golemruntime.CallerTxLockKeys(ctx, (*golemruntime.CallerTx[P, Actor])(nil), keys...)
+	}
+	return golemruntime.CallerTxLockKeys(ctx, transaction.runtime, keys...)
+}
 
 // SystemEscape leaves the authorized path. It returns the unrestricted
 // system clients for the caller transaction itself, so their reads and
@@ -669,4 +675,10 @@ func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pendi
 		return golemruntime.SystemTxEnqueue(ctx, (*golemruntime.SystemTx[P, Actor])(nil), pending)
 	}
 	return golemruntime.SystemTxEnqueue(ctx, transaction.runtime, pending)
+}
+func (transaction *SystemTx[P]) LockKeys(ctx context.Context, keys ...golem.LockKey) error {
+	if transaction == nil {
+		return golemruntime.SystemTxLockKeys(ctx, (*golemruntime.SystemTx[P, Actor])(nil), keys...)
+	}
+	return golemruntime.SystemTxLockKeys(ctx, transaction.runtime, keys...)
 }

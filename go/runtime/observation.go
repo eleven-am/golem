@@ -239,6 +239,10 @@ func mapEventObservation(kind events.ObservationKind) (observe.Kind, observe.Ope
 		return observe.KindCDC, observe.OperationCDCReceive, observe.PhaseFinish
 	case events.ObservationCDCAck:
 		return observe.KindCDC, observe.OperationCDCAcknowledge, observe.PhaseAcknowledge
+	case events.ObservationDeleteCoverage:
+		return observe.KindSubscription, observe.OperationSubscriptionDeleteCoverage, observe.PhaseOpen
+	case events.ObservationDeleteSnapshotOversize:
+		return observe.KindEvent, observe.OperationEventDeleteSnapshotOversize, observe.PhaseFinish
 	default:
 		return observe.KindEvent, observe.OperationEventPublisherAttempt, observe.PhaseFinish
 	}

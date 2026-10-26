@@ -264,6 +264,8 @@ events.Observation type struct
 events.ObservationCDCAck const ObservationKind = "cdc_ack"
 events.ObservationCDCReceive const ObservationKind = "cdc_receive"
 events.ObservationCancellation const ObservationKind = "cancellation"
+events.ObservationDeleteCoverage const ObservationKind = "delete_coverage"
+events.ObservationDeleteSnapshotOversize const ObservationKind = "delete_snapshot_oversize"
 events.ObservationDelivery const ObservationKind = "delivery"
 events.ObservationDepthBlocked const ObservationKind = "depth_blocked"
 events.ObservationDepthPending const ObservationKind = "depth_pending"
@@ -1925,6 +1927,7 @@ golem.DeleteHookRequest[M any] type struct
 golem.DeleteHookResult[M any] type struct
 golem.DeleteManyHookRequest[M any] type struct
 golem.DeleteManyHookResult[M any] type struct
+golem.DeleteSnapshot func[M any](...Column[M]) SubscriptionOption[M]
 golem.DimensionField func[M any, V any](ScalarColumn[M, V]) RelationDimensionPath[M, V]
 golem.DimensionGT func[M any, V OrderedAnalyticsValue](OrderedGroupDimension[M, V], V) GroupPredicate[M]
 golem.DimensionGTE func[M any, V OrderedAnalyticsValue](OrderedGroupDimension[M, V], V) GroupPredicate[M]
@@ -3179,7 +3182,8 @@ golem.SortDescending const SortDirection = 2
 golem.SortDirection comparable
 golem.SortDirection type uint8
 golem.Stored const GeneratedStorage = "stored"
-golem.Subscriptions func[M any]() ModelOption[M]
+golem.SubscriptionOption[M any] type interface {} sealed
+golem.Subscriptions func[M any](...SubscriptionOption[M]) ModelOption[M]
 golem.Take func[M any](int) ReadOption[M]
 golem.TextComparison comparable
 golem.TextComparison[M any, V ~string] type struct
@@ -3619,6 +3623,7 @@ observe.OperationAnalyticsRelationGroupBy const Operation = "analytics.relation_
 observe.OperationCDCAcknowledge const Operation = "cdc.acknowledge"
 observe.OperationCDCReceive const Operation = "cdc.receive"
 observe.OperationCallerTransaction const Operation = "transaction.caller"
+observe.OperationEventDeleteSnapshotOversize const Operation = "event.delete_snapshot_oversize"
 observe.OperationEventDepthBlocked const Operation = "event.depth_blocked"
 observe.OperationEventDepthPending const Operation = "event.depth_pending"
 observe.OperationEventDepthRetired const Operation = "event.depth_retired"
@@ -3674,6 +3679,7 @@ observe.OperationSemanticRefresh const Operation = "semantic.refresh"
 observe.OperationShutdownHTTP const Operation = "shutdown.http"
 observe.OperationShutdownPublisher const Operation = "shutdown.publisher"
 observe.OperationSubscriptionCancellation const Operation = "subscription.cancellation"
+observe.OperationSubscriptionDeleteCoverage const Operation = "subscription.delete_coverage"
 observe.OperationSubscriptionDelivery const Operation = "subscription.delivery"
 observe.OperationSubscriptionEvaluation const Operation = "subscription.evaluation"
 observe.OperationSubscriptionMembership const Operation = "subscription.membership"
@@ -4299,6 +4305,7 @@ runtime.Config.ResolvePrincipal field func(context.Context, P) (A, error)
 runtime.Config.SnapshotActor field func(A) (A, error)
 runtime.Config.SnapshotPrincipal field func(P) (P, error)
 runtime.Config[P any, A any] type struct
+runtime.DefaultMutationDeleteSnapshotBytes const untyped int = 65536
 runtime.DispatchCallerOperation func[P any, A any](context.Context, *Caller[P, A], any, func(context.Context, *Caller[P, A]) (any, error)) (any, error)
 runtime.EventFactory type interface {Build, EventSchemaDigest, ModelID}
 runtime.EventFactory.Build func(internal/event/typedvalue.ValidatedEvent) (any, error)
@@ -4308,6 +4315,7 @@ runtime.EventFactoryRegistry type struct
 runtime.GeneratedEventFactoryRegistry func(golem.SchemaDigest, ...PackageEventFactories) (EventFactoryRegistry, error)
 runtime.GeneratedPackageEventFactories func(golem.SchemaDigest, ...EventFactory) PackageEventFactories
 runtime.MaxBatchLoaderKeys const untyped int = 90000
+runtime.MaxMutationDeleteSnapshotBytes const untyped int = 1048576
 runtime.MaxMutationFacts const untyped int = 1000
 runtime.MaxMutationNestedDepth const untyped int = 5
 runtime.MaxMutationOutboxBytes const untyped int = 1048576
@@ -4316,7 +4324,8 @@ runtime.MaxMutationTouchedRows const untyped int = 1000
 runtime.MaxMutationUpsertAttempts const untyped int = 3
 runtime.MutationLimits comparable
 runtime.MutationLimits type struct
-runtime.MutationLimits unkeyed literal {MaxNestedDepth, MaxTouchedRows, MaxFacts, MaxOutboxBytes, MaxStatementParameters, MaxUpsertAttempts}
+runtime.MutationLimits unkeyed literal {MaxNestedDepth, MaxTouchedRows, MaxFacts, MaxOutboxBytes, MaxStatementParameters, MaxUpsertAttempts, MaxDeleteSnapshotBytes}
+runtime.MutationLimits.MaxDeleteSnapshotBytes field int
 runtime.MutationLimits.MaxFacts field int
 runtime.MutationLimits.MaxNestedDepth field int
 runtime.MutationLimits.MaxOutboxBytes field int
