@@ -117,9 +117,56 @@ removes nested relation methods, because nested inputs cannot express a
 per-row version expectation. Changes of that kind are stated in the release
 notes rather than discovered from a compile error.
 
+**Kernel mode changes what is generated, not the surface.** An application
+that declares `golem.WithoutGraphQL` gets no GraphQL files and no `GraphQL`
+method on its `App`. The `graphql` package is still public and unchanged; such
+an application simply never imports it.
+
 ## Before 1.0
 
 A 1.0 would claim that removals stop happening without a major version. That
 claim needs the surface record to have held still across several releases
-first. Since the record began at go/v0.4.0 it has taken no removals through
-go/v0.6.0; every release since has only added to it.
+first. It has not yet. Since the record began at go/v0.4.0, the go/v0.6.x
+releases removed one entry: go/v0.6.1 added a field to
+`graphql.GeneratedExecutorConfig`, which changed its unkeyed-literal shape.
+go/v0.7.0 has breaking changes, listed with what to do in
+[MIGRATION.md](./MIGRATION.md).
+
+### What go/v0.7.0 changed in the surface
+
+Removed or changed, which can break a caller:
+
+- `runtime.CallerTransaction` and `runtime.SystemTransaction`, and the
+  generated `Transaction` methods, take variadic `golem.TransactionOption`
+  values. Calls compile unchanged; function values of the old type do not.
+- `golem.Subscriptions` takes variadic `SubscriptionOption` values, with the
+  same consequence.
+- The unkeyed-literal shapes of `events.Limits`, `runtime.Config`,
+  `graphql.Config` and `runtime.MutationLimits` changed, because fields were
+  added.
+
+Added:
+
+- **Errors:** `golem.CodeLimitExceeded`; the `Reason` and `Limit` types and
+  their constants; `Error.Reason`, `Error.Limit`, `Error.LimitMax` and
+  `(*Error).Is`; `RuntimeLimitError` and `RuntimeOperationErrorWithReason`.
+- **Kernel mode:** `golem.WithoutGraphQL`.
+- **Transactions:** `LockKey`, `NewLockKey`, `MustLockKey`;
+  `TransactionOption`, `Isolation`, `IsolationLevel`, `ReadCommitted`,
+  `Serializable`, `RetryConflicts`; `runtime.CallerTxLockKeys` and
+  `SystemTxLockKeys`.
+- **Operations:** `golem.Operations`, `golem.TxOperation`,
+  `OperationRules.CanCount`, `OperationRules.CanAggregate`,
+  `runtime.RunCallerTxOperation` and `observe.OperationMutationOperation`.
+- **Policy cache:** `runtime.PolicyCacheConfig`, `Config.PolicyCache`,
+  `Config.PolicyCacheKey` and `App.InvalidatePolicies`.
+- **Events:** `golem.DeleteSnapshot`, `SubscriptionOption` and
+  `golem.EventRecheck`; `MutationLimits.MaxDeleteSnapshotBytes`;
+  `events.Limits` fields `KeepAlive`, `RequireExclusiveProcessLocalPublisher`,
+  `RevalidateEvery` and `MaxSubscriptionsPerPrincipal`; the codes
+  `CodeSubscriptionForbidden` and `CodeSubscriptionLimit`;
+  `events.Cancelled`; new observation kinds and suppression reasons;
+  `Config.SubscriptionPrincipalKey`; `graphql.SubscriptionRecheck` and
+  `graphql.Config.SubscriptionRecheck`.
+
+The package count is unchanged at eighteen.

@@ -11,7 +11,8 @@ them is code that ran.
 - **[QUICKSTART.md](./QUICKSTART.md)** — an empty directory to a running
   application in four commands.
 - **[GUIDE.md](./GUIDE.md)** — relations, authorization, queries and
-  mutations. What you need for a real application.
+  mutations, hooks, events, kernel mode, limits and error codes. What you need
+  for a real application.
 
 ## Capabilities
 
@@ -33,6 +34,8 @@ them is code that ran.
 
 - **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — what each `go/v*` release
   changed, what to check before upgrading, and what is deliberately absent.
+- **[MIGRATION.md](./MIGRATION.md)** — upgrading from go/v0.6.x to go/v0.7.0:
+  every breaking change and what to do about it.
 
 ## The idea
 
