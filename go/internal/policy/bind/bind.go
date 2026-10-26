@@ -27,6 +27,7 @@ type binder struct {
 	providers ir.ProviderSet
 	rule      uint32
 	hasRule   bool
+	exact     bool
 }
 
 // Predicate binds one frozen public predicate against the exact provider set
@@ -37,6 +38,19 @@ func Predicate(frozen golem.FrozenPredicate, registry *schema.Registry, provider
 	if err != nil {
 		return ir.Condition{}, err
 	}
+	condition, err := value.predicate(frozen.View(), "predicate")
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	return condition, nil
+}
+
+func ExactPredicate(frozen golem.FrozenPredicate, registry *schema.Registry, providers ir.ProviderSet) (ir.Condition, error) {
+	value, err := newBinder(registry, providers)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	value.exact = true
 	condition, err := value.predicate(frozen.View(), "predicate")
 	if err != nil {
 		return ir.Condition{}, err
@@ -301,10 +315,20 @@ func (b *binder) scalar(view golem.FrozenConditionView, model ir.ModelID, path s
 	if !ok {
 		return ir.Condition{}, b.failureFor(CodeOperator, path+".mode", model, field, ir.RelationID{}, operatorID, "unknown comparison mode tag %d", view.Mode())
 	}
+	if typ.Kind() == ir.ValueDateTime && !b.exact {
+		condition, rewritten, err := b.offGridDateTime(view.Operand(), model, field, fact, typ, operatorID, mode, path)
+		if rewritten || err != nil {
+			return condition, err
+		}
+	}
 	operand, err := b.operand(view.Operand(), typ, operatorID, path+".operand")
 	if err != nil {
 		return ir.Condition{}, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
 	}
+	return b.scalarLeaf(model, field, fact, typ, operatorID, mode, operand, path)
+}
+
+func (b *binder) scalarLeaf(model ir.ModelID, field ir.FieldID, fact schema.Field, typ ir.TypeRef, operatorID ir.OperatorID, mode ir.ComparisonMode, operand ir.Operand, path string) (ir.Condition, error) {
 	requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionScalar, FieldType: typ, Operand: operand, Mode: mode, Providers: b.providers})
 	if err != nil {
 		return ir.Condition{}, b.wrap(CodeOperator, path, model, field, ir.RelationID{}, operatorID, err)
@@ -315,6 +339,118 @@ func (b *binder) scalar(view golem.FrozenConditionView, model ir.ModelID, path s
 	condition, err := ir.NewScalar(model, field, typ, operatorID, mode, operand, requirements)
 	if err != nil {
 		return ir.Condition{}, b.wrap(CodeInternal, path, model, field, ir.RelationID{}, operatorID, err)
+	}
+	return condition, nil
+}
+
+func (b *binder) offGridDateTime(view golem.FrozenOperandView, model ir.ModelID, field ir.FieldID, fact schema.Field, typ ir.TypeRef, operatorID ir.OperatorID, mode ir.ComparisonMode, path string) (ir.Condition, bool, error) {
+	if view == nil {
+		return ir.Condition{}, false, nil
+	}
+	var public []golem.FrozenValueView
+	var paths []string
+	switch view.Kind() {
+	case golem.FrozenOperandOne:
+		if operatorID == ir.OperatorIn || operatorID == ir.OperatorNotIn {
+			return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "membership operator requires a many operand")
+		}
+		value, ok := view.One()
+		if !ok || value == nil {
+			return ir.Condition{}, false, nil
+		}
+		public, paths = []golem.FrozenValueView{value}, []string{path + ".operand.one"}
+	case golem.FrozenOperandMany:
+		if operatorID != ir.OperatorIn && operatorID != ir.OperatorNotIn {
+			return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "comparison operator requires one operand")
+		}
+		public = view.Many()
+		paths = make([]string, len(public))
+		for index := range public {
+			paths[index] = fmt.Sprintf("%s.operand.many[%d]", path, index)
+		}
+	default:
+		return ir.Condition{}, false, nil
+	}
+	onGrid := make([]ir.Value, 0, len(public))
+	var floor ir.Value
+	offGrid := false
+	for index, item := range public {
+		if item == nil || item.Kind() != golem.FrozenValueDateTime {
+			return ir.Condition{}, false, nil
+		}
+		seconds, nanoseconds, ok := item.DateTime()
+		if !ok || nanoseconds >= 1_000_000_000 || nanoseconds%1_000 == 0 {
+			bound, err := b.value(item, typ, paths[index])
+			if err != nil {
+				return ir.Condition{}, true, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
+			}
+			onGrid = append(onGrid, bound)
+			continue
+		}
+		bound, err := b.dateTime(seconds, nanoseconds-nanoseconds%1_000, paths[index])
+		if err != nil {
+			return ir.Condition{}, true, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
+		}
+		if !offGrid {
+			floor, offGrid = bound, true
+		}
+	}
+	if !offGrid {
+		return ir.Condition{}, false, nil
+	}
+	switch operatorID {
+	case ir.OperatorLessThan, ir.OperatorLessThanOrEqual:
+		condition, err := b.dateTimeBound(model, field, fact, typ, ir.OperatorLessThanOrEqual, mode, floor, path)
+		return condition, true, err
+	case ir.OperatorGreaterThan, ir.OperatorGreaterThanOrEqual:
+		condition, err := b.dateTimeBound(model, field, fact, typ, ir.OperatorGreaterThan, mode, floor, path)
+		return condition, true, err
+	case ir.OperatorEqual, ir.OperatorNotEqual:
+		condition, err := b.dateTimeGap(model, field, fact, typ, mode, floor, operatorID == ir.OperatorNotEqual, path)
+		return condition, true, err
+	case ir.OperatorIn, ir.OperatorNotIn:
+		if len(onGrid) == 0 {
+			condition, err := b.dateTimeGap(model, field, fact, typ, mode, floor, operatorID == ir.OperatorNotIn, path)
+			return condition, true, err
+		}
+		operand, err := ir.ManyOperand(onGrid)
+		if err != nil {
+			return ir.Condition{}, true, b.wrap(CodeValue, path+".operand", model, field, ir.RelationID{}, operatorID, err)
+		}
+		condition, err := b.scalarLeaf(model, field, fact, typ, operatorID, mode, operand, path)
+		return condition, true, err
+	default:
+		return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "operator takes no datetime operand")
+	}
+}
+
+func (b *binder) dateTimeBound(model ir.ModelID, field ir.FieldID, fact schema.Field, typ ir.TypeRef, operatorID ir.OperatorID, mode ir.ComparisonMode, floor ir.Value, path string) (ir.Condition, error) {
+	operand, err := ir.OneOperand(floor)
+	if err != nil {
+		return ir.Condition{}, b.wrap(CodeValue, path+".operand", model, field, ir.RelationID{}, operatorID, err)
+	}
+	return b.scalarLeaf(model, field, fact, typ, operatorID, mode, operand, path)
+}
+
+func (b *binder) dateTimeGap(model ir.ModelID, field ir.FieldID, fact schema.Field, typ ir.TypeRef, mode ir.ComparisonMode, floor ir.Value, negate bool, path string) (ir.Condition, error) {
+	above, err := b.dateTimeBound(model, field, fact, typ, ir.OperatorGreaterThan, mode, floor, path)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	below, err := b.dateTimeBound(model, field, fact, typ, ir.OperatorLessThanOrEqual, mode, floor, path)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	gap, err := ir.NewLogical(model, ir.LogicalAnd, []ir.Condition{above, below})
+	if err != nil {
+		return ir.Condition{}, b.wrap(CodeCondition, path, model, field, ir.RelationID{}, 0, err)
+	}
+	if !negate {
+		return gap, nil
+	}
+	condition, err := ir.NewLogical(model, ir.LogicalNot, []ir.Condition{gap})
+	if err != nil {
+		return ir.Condition{}, b.wrap(CodeCondition, path, model, field, ir.RelationID{}, 0, err)
 	}
 	return condition, nil
 }
@@ -804,15 +940,15 @@ func (b *binder) value(view golem.FrozenValueView, typ ir.TypeRef, path string) 
 		if !ok {
 			return ir.Value{}, b.failure(CodeValue, path, "datetime accessor disagrees with its tag")
 		}
-		instant := time.Unix(seconds, int64(nanoseconds)).UTC()
-		if instant.Year() < 1 || instant.Year() > 9999 {
-			return ir.Value{}, b.failure(CodeValue, path, "datetime is outside the portable year range 0001-9999")
+		if nanoseconds < 1_000_000_000 && nanoseconds%1_000 != 0 {
+			if _, err := b.dateTime(seconds, nanoseconds-nanoseconds%1_000, path); err != nil {
+				return ir.Value{}, err
+			}
+			failure := b.failure(CodeValue, path, "datetime operand is finer than the microsecond precision a stored value can hold").(*Error)
+			failure.Reason = golem.ReasonValuePrecision
+			return ir.Value{}, failure
 		}
-		bound, err := ir.NewDateTimeValue(seconds, nanoseconds)
-		if err != nil {
-			return ir.Value{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, 0, err)
-		}
-		return bound, nil
+		return b.dateTime(seconds, nanoseconds, path)
 	case ir.ValueJSON:
 		value, ok := view.JSON()
 		if !ok {
@@ -826,6 +962,18 @@ func (b *binder) value(view golem.FrozenValueView, typ ir.TypeRef, path string) 
 	default:
 		return ir.Value{}, b.failure(CodeValue, path, "logical kind %d has no current frozen public value codec", typ.Kind())
 	}
+}
+
+func (b *binder) dateTime(seconds int64, nanoseconds uint32, path string) (ir.Value, error) {
+	instant := time.Unix(seconds, int64(nanoseconds)).UTC()
+	if instant.Year() < 1 || instant.Year() > 9999 {
+		return ir.Value{}, b.failure(CodeValue, path, "datetime is outside the portable year range 0001-9999")
+	}
+	bound, err := ir.NewDateTimeValue(seconds, nanoseconds)
+	if err != nil {
+		return ir.Value{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, 0, err)
+	}
+	return bound, nil
 }
 
 func bindJSONValue(value golem.JSONValue) (ir.JSONValue, error) {

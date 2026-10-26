@@ -181,6 +181,9 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 	} else {
 		planned, err = analytics.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
 	}
+	if refused, ok := publicBindReasonError(app.registry, "analytics", descriptor, err); ok {
+		return preparedAnalyticsStatement{}, refused
+	}
 	if err != nil {
 		if refused, ok := policyUnavailableReadError("analytics", descriptor, err); ok {
 			return preparedAnalyticsStatement{}, refused
