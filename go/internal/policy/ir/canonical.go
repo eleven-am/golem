@@ -21,31 +21,29 @@ func CanonicalCondition(condition Condition) ([]byte, error) {
 	if err := condition.Validate(); err != nil {
 		return nil, err
 	}
-	body, err := condition.canonicalBody()
-	if err != nil {
+	if err := prepareCanonical(condition.node); err != nil {
 		return nil, err
 	}
 	model := condition.node.modelID()
-	encoded := make([]byte, 0, len(conditionDomain)+len(model)+len(body))
+	encoded := make([]byte, 0, len(conditionDomain)+len(model)+canonicalSize(condition.node))
 	encoded = append(encoded, conditionDomain...)
 	encoded = append(encoded, model[:]...)
-	return append(encoded, body...), nil
+	return appendCanonical(encoded, condition.node), nil
 }
 
 type CanonicalKey struct {
 	model ModelID
-	body  []byte
+	node  conditionNode
 }
 
 func CanonicalKeyOf(condition Condition) (CanonicalKey, error) {
 	if err := condition.Validate(); err != nil {
 		return CanonicalKey{}, err
 	}
-	body, err := condition.canonicalBody()
-	if err != nil {
+	if err := prepareCanonical(condition.node); err != nil {
 		return CanonicalKey{}, err
 	}
-	return CanonicalKey{model: condition.node.modelID(), body: body}, nil
+	return CanonicalKey{model: condition.node.modelID(), node: condition.node}, nil
 }
 func (key CanonicalKey) Compare(other CanonicalKey) int {
 	for index := range key.model {
@@ -56,21 +54,157 @@ func (key CanonicalKey) Compare(other CanonicalKey) int {
 			return 1
 		}
 	}
-	return bytes.Compare(key.body, other.body)
+	if key.node == other.node {
+		return 0
+	}
+	return compareCanonical(key.node, other.node)
 }
-func (condition Condition) canonicalBody() ([]byte, error) {
-	state := condition.node.memo()
-	if cached := state.canonical.Load(); cached != nil {
-		return *cached, nil
+
+type canonicalParts struct {
+	encoded []byte
+	split   uint32
+}
+
+func (parts *canonicalParts) head() []byte { return parts.encoded[:parts.split] }
+func (parts *canonicalParts) tail() []byte { return parts.encoded[parts.split:] }
+
+func childCount(node conditionNode) int {
+	switch typed := node.(type) {
+	case *logicalNode:
+		return len(typed.children)
+	case *relationNode:
+		if typed.child.node != nil {
+			return 1
+		}
 	}
-	encoder := canonicalEncoder{}
-	encoder.node(condition)
+	return 0
+}
+func childAt(node conditionNode, index int) conditionNode {
+	switch typed := node.(type) {
+	case *logicalNode:
+		return typed.children[index].node
+	case *relationNode:
+		return typed.child.node
+	}
+	return nil
+}
+func prepareCanonical(node conditionNode) error {
+	state := node.memo()
+	if state.canonical.Load() != nil {
+		return nil
+	}
+	for index := 0; index < childCount(node); index++ {
+		if err := prepareCanonical(childAt(node, index)); err != nil {
+			return err
+		}
+	}
+	var scratch [256]byte
+	encoder := canonicalEncoder{buffer: scratch[:0]}
+	split := encoder.own(node)
 	if encoder.err != nil {
-		return nil, encoder.err
+		return encoder.err
 	}
-	body := encoder.buffer.Bytes()
-	state.canonical.Store(&body)
-	return body, nil
+	encoded := make([]byte, len(encoder.buffer))
+	copy(encoded, encoder.buffer)
+	state.canonical.Store(&canonicalParts{encoded: encoded, split: uint32(split)})
+	return nil
+}
+func canonicalSize(node conditionNode) int {
+	parts := node.memo().canonical.Load()
+	size := len(parts.encoded)
+	for index := 0; index < childCount(node); index++ {
+		size += canonicalSize(childAt(node, index))
+	}
+	return size
+}
+func appendCanonical(output []byte, node conditionNode) []byte {
+	parts := node.memo().canonical.Load()
+	output = append(output, parts.head()...)
+	for index := 0; index < childCount(node); index++ {
+		output = appendCanonical(output, childAt(node, index))
+	}
+	return append(output, parts.tail()...)
+}
+
+type canonicalFrame struct {
+	node conditionNode
+	step int
+}
+type canonicalCursor struct {
+	inline   [32]canonicalFrame
+	overflow []canonicalFrame
+	depth    int
+}
+
+func (cursor *canonicalCursor) frame(index int) *canonicalFrame {
+	if index < len(cursor.inline) {
+		return &cursor.inline[index]
+	}
+	return &cursor.overflow[index-len(cursor.inline)]
+}
+func (cursor *canonicalCursor) push(node conditionNode) {
+	frame := canonicalFrame{node: node}
+	switch extra := cursor.depth - len(cursor.inline); {
+	case extra < 0:
+		cursor.inline[cursor.depth] = frame
+	case extra < len(cursor.overflow):
+		cursor.overflow[extra] = frame
+	default:
+		cursor.overflow = append(cursor.overflow, frame)
+	}
+	cursor.depth++
+}
+func (cursor *canonicalCursor) next() []byte {
+	for cursor.depth > 0 {
+		top := cursor.frame(cursor.depth - 1)
+		parts := top.node.memo().canonical.Load()
+		children := childCount(top.node)
+		switch {
+		case top.step == 0:
+			top.step = 1
+			if head := parts.head(); len(head) > 0 {
+				return head
+			}
+		case top.step <= children:
+			child := childAt(top.node, top.step-1)
+			top.step++
+			cursor.push(child)
+		default:
+			cursor.depth--
+			if tail := parts.tail(); len(tail) > 0 {
+				return tail
+			}
+		}
+	}
+	return nil
+}
+func compareCanonical(left, right conditionNode) int {
+	var leftCursor, rightCursor canonicalCursor
+	leftCursor.push(left)
+	rightCursor.push(right)
+	var leftBytes, rightBytes []byte
+	for {
+		if len(leftBytes) == 0 {
+			leftBytes = leftCursor.next()
+		}
+		if len(rightBytes) == 0 {
+			rightBytes = rightCursor.next()
+		}
+		switch {
+		case len(leftBytes) == 0 && len(rightBytes) == 0:
+			return 0
+		case len(leftBytes) == 0:
+			return -1
+		case len(rightBytes) == 0:
+			return 1
+		}
+		length := min(len(leftBytes), len(rightBytes))
+		if order := bytes.Compare(leftBytes[:length], rightBytes[:length]); order != 0 {
+			return order
+		}
+		leftBytes = leftBytes[length:]
+		rightBytes = rightBytes[length:]
+	}
 }
 func ConditionFingerprint(condition Condition) (Fingerprint, error) {
 	encoded, err := CanonicalCondition(condition)
@@ -97,7 +231,7 @@ func CanonicalPolicy(policy Policy) ([]byte, error) {
 	if encoder.err != nil {
 		return nil, encoder.err
 	}
-	return encoder.buffer.Bytes(), nil
+	return encoder.buffer, nil
 }
 func hashCanonical(domain string, encoded []byte) Fingerprint {
 	hash := sha256.New()
@@ -109,13 +243,13 @@ func hashCanonical(domain string, encoded []byte) Fingerprint {
 }
 
 type canonicalEncoder struct {
-	buffer bytes.Buffer
+	buffer []byte
 	err    error
 }
 
 func (e *canonicalEncoder) raw(value []byte) {
 	if e.err == nil {
-		_, e.err = e.buffer.Write(value)
+		e.buffer = append(e.buffer, value...)
 	}
 }
 func (e *canonicalEncoder) u8(value uint8) { e.raw([]byte{value}) }
@@ -291,16 +425,15 @@ func (e *canonicalEncoder) condition(condition Condition) {
 		e.fail("unknown condition variant")
 		return
 	}
-	body, err := condition.canonicalBody()
-	if err != nil {
+	if err := prepareCanonical(condition.node); err != nil {
 		e.err = err
 		return
 	}
-	e.raw(body)
+	e.buffer = appendCanonical(e.buffer, condition.node)
 }
-func (e *canonicalEncoder) node(condition Condition) {
-	e.u8(uint8(condition.Kind()))
-	switch node := condition.node.(type) {
+func (e *canonicalEncoder) own(condition conditionNode) int {
+	e.u8(uint8(condition.kind()))
+	switch node := condition.(type) {
 	case *constantNode:
 		e.id16(node.model)
 		e.boolean(node.truth)
@@ -308,10 +441,9 @@ func (e *canonicalEncoder) node(condition Condition) {
 		e.id16(node.model)
 		e.u8(uint8(node.operator))
 		e.count(len(node.children))
-		for _, child := range node.children {
-			e.condition(child)
-		}
+		split := len(e.buffer)
 		e.requirements(node.requirements)
+		return split
 	case *scalarNode:
 		e.id16(node.model)
 		e.id16(node.field)
@@ -347,12 +479,14 @@ func (e *canonicalEncoder) node(condition Condition) {
 			e.u8(0)
 		} else {
 			e.u8(1)
-			e.condition(node.child)
 		}
+		split := len(e.buffer)
 		e.requirements(node.requirements)
+		return split
 	default:
 		e.fail("unknown condition variant")
 	}
+	return len(e.buffer)
 }
 func (e *canonicalEncoder) rule(rule Rule) {
 	e.u8(uint8(rule.action))

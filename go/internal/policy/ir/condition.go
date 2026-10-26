@@ -211,7 +211,7 @@ func requirementsCover(set, subset []Requirement) bool {
 }
 
 type nodeState struct {
-	canonical atomic.Pointer[[]byte]
+	canonical atomic.Pointer[canonicalParts]
 	normal    atomic.Bool
 }
 
