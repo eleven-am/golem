@@ -163,6 +163,43 @@ func TestPolicyWithSubMicrosecondActorTimeFreezesAndBinds(t *testing.T) {
 	}
 }
 
+func TestMisshapedOffGridDateTimeOperandsReportTheShapeNotThePrecision(t *testing.T) {
+	fixture := schematest.NewMutationExactValues(t)
+	field := golem.GeneratedNullableOrderedField[precisionPost, time.Time](fixture.PostDateTime)
+	v := time.Date(2026, 10, 25, 12, 0, 0, 123456001, time.UTC)
+	for name, check := range map[string]struct {
+		predicate golem.Predicate[precisionPost]
+		operator  golem.FrozenOperator
+	}{
+		"in-with-one":   {field.LT(v), golem.FrozenOperatorIn},
+		"lt-with-many":  {field.In(v), golem.FrozenOperatorLT},
+		"is-null-value": {field.LT(v), golem.FrozenOperatorIsNull},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frozen, err := check.predicate.Freeze(modelDescriptor[precisionPost](fixture.Post))
+			if err != nil {
+				t.Fatal(err)
+			}
+			binder, err := newBinder(fixture.Registry, ir.PortableProviders())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = binder.scalar(reshapedCondition{FrozenConditionView: frozen.View().Root(), operator: check.operator}, ir.ModelID(fixture.Post), "predicate")
+			var failure *Error
+			if !errors.As(err, &failure) || failure.Code != CodeOperator || failure.Reason != "" || failure.FieldID != ir.FieldID(fixture.PostDateTime) {
+				t.Fatalf("misshaped operand err=%v", err)
+			}
+		})
+	}
+}
+
+type reshapedCondition struct {
+	golem.FrozenConditionView
+	operator golem.FrozenOperator
+}
+
+func (condition reshapedCondition) Operator() golem.FrozenOperator { return condition.operator }
+
 type datetimeProbe struct {
 	predicate golem.Predicate[precisionPost]
 	truth     func(*time.Time) bool

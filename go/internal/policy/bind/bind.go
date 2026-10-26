@@ -352,7 +352,7 @@ func (b *binder) offGridDateTime(view golem.FrozenOperandView, model ir.ModelID,
 	switch view.Kind() {
 	case golem.FrozenOperandOne:
 		if operatorID == ir.OperatorIn || operatorID == ir.OperatorNotIn {
-			return ir.Condition{}, false, nil
+			return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "membership operator requires a many operand")
 		}
 		value, ok := view.One()
 		if !ok || value == nil {
@@ -361,7 +361,7 @@ func (b *binder) offGridDateTime(view golem.FrozenOperandView, model ir.ModelID,
 		public, paths = []golem.FrozenValueView{value}, []string{path + ".operand.one"}
 	case golem.FrozenOperandMany:
 		if operatorID != ir.OperatorIn && operatorID != ir.OperatorNotIn {
-			return ir.Condition{}, false, nil
+			return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "comparison operator requires one operand")
 		}
 		public = view.Many()
 		paths = make([]string, len(public))
@@ -420,7 +420,7 @@ func (b *binder) offGridDateTime(view golem.FrozenOperandView, model ir.ModelID,
 		condition, err := b.scalarLeaf(model, field, fact, typ, operatorID, mode, operand, path)
 		return condition, true, err
 	default:
-		return ir.Condition{}, false, nil
+		return ir.Condition{}, true, b.failureFor(CodeOperator, path+".operand", model, field, ir.RelationID{}, operatorID, "operator takes no datetime operand")
 	}
 }
 
