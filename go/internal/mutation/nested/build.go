@@ -303,7 +303,7 @@ func (builder *builder) buildRelation(parent policyir.ModelID, parentOperation m
 			if target, ok := branch.Target(); ok {
 				bound, bindErr := builder.target(target, frozen.TargetModelID())
 				if bindErr != nil {
-					return nil, fail(CodeBinding, frozen.TargetModelID(), frozen.FieldID(), "set target did not bind", bindErr)
+					return nil, bindFailure(bindErr, frozen.TargetModelID(), frozen.FieldID(), "set target did not bind")
 				}
 				desired = append(desired, bound.Target())
 				if err := builder.classify(completeTargetCondition(bound), classify.UseSelector, mutationir.SetRelation, endpoint); err != nil {
@@ -385,7 +385,7 @@ func (builder *builder) sourceDependencyProbe(endpoint schema.RelationEndpoint, 
 	}
 	bound, err := builder.target(public, endpoint.TargetModelID())
 	if err != nil {
-		return mutationir.NodeInput{}, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "source dependency target did not bind", err)
+		return mutationir.NodeInput{}, bindFailure(err, endpoint.TargetModelID(), endpoint.FieldID(), "source dependency target did not bind")
 	}
 	condition := completeTargetCondition(bound)
 	if err := builder.classify(condition, classify.UseSelector, mutationir.Connect, endpoint); err != nil {
@@ -495,7 +495,7 @@ func (builder *builder) targetMembershipNode(endpoint schema.RelationEndpoint, a
 	}
 	bound, err := builder.target(target, endpoint.TargetModelID())
 	if err != nil {
-		return mutationir.NodeInput{}, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "nested membership target did not bind", err)
+		return mutationir.NodeInput{}, bindFailure(err, endpoint.TargetModelID(), endpoint.FieldID(), "nested membership target did not bind")
 	}
 	if err := builder.classify(completeTargetCondition(bound), classify.UseSelector, operationFor(action), endpoint); err != nil {
 		return mutationir.NodeInput{}, err
