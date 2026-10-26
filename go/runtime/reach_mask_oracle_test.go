@@ -19,24 +19,30 @@ type reachUser struct {
 }
 
 type reachPost struct {
-	id     string
-	author string
-	title  string
+	id       string
+	author   *string
+	title    string
+	nullable *string
 }
+
+func reachText(value string) *string { return &value }
 
 var reachUsers = []reachUser{
 	{"00000000-0000-0000-0000-000000000001", "alice"},
 	{"00000000-0000-0000-0000-000000000002", "bob"},
 	{"00000000-0000-0000-0000-000000000003", "carol"},
 	{"00000000-0000-0000-0000-000000000004", "dave"},
+	{"00000000-0000-0000-0000-000000000005", "erin"},
 }
 
 var reachPosts = []reachPost{
-	{"00000000-0000-0000-0000-000000000011", "00000000-0000-0000-0000-000000000001", "allowed-mask"},
-	{"00000000-0000-0000-0000-000000000012", "00000000-0000-0000-0000-000000000001", "allowed-public"},
-	{"00000000-0000-0000-0000-000000000013", "00000000-0000-0000-0000-000000000002", "denied-mask"},
-	{"00000000-0000-0000-0000-000000000014", "00000000-0000-0000-0000-000000000004", "allowed-public"},
-	{"00000000-0000-0000-0000-000000000015", "00000000-0000-0000-0000-000000000004", "denied-public"},
+	{"00000000-0000-0000-0000-000000000011", reachText("00000000-0000-0000-0000-000000000001"), "allowed-mask", reachText("x")},
+	{"00000000-0000-0000-0000-000000000012", reachText("00000000-0000-0000-0000-000000000001"), "allowed-public", reachText("xy")},
+	{"00000000-0000-0000-0000-000000000013", reachText("00000000-0000-0000-0000-000000000002"), "denied-mask", nil},
+	{"00000000-0000-0000-0000-000000000014", reachText("00000000-0000-0000-0000-000000000004"), "allowed-public", nil},
+	{"00000000-0000-0000-0000-000000000015", reachText("00000000-0000-0000-0000-000000000004"), "denied-public", reachText("x")},
+	{"00000000-0000-0000-0000-000000000016", reachText("00000000-0000-0000-0000-000000000005"), "allowed-erin", nil},
+	{"00000000-0000-0000-0000-000000000017", nil, "allowed-orphan", nil},
 }
 
 type reachHandles struct {
@@ -46,6 +52,7 @@ type reachHandles struct {
 	userName golem.TextField[testUser, string]
 	postID   golem.EqualField[testPost, golem.UUID]
 	title    golem.TextField[testPost, string]
+	nullable golem.NullableTextField[testPost, string]
 	author   golem.ToOne[testPost, testUser]
 	written  golem.ToMany[testUser, testPost]
 }
@@ -58,6 +65,7 @@ func newReachHandles(fixture schematest.Fixture) reachHandles {
 		userName: golem.GeneratedTextField[testUser, string](fixture.UserName),
 		postID:   golem.GeneratedEqualField[testPost, golem.UUID](fixture.PostID),
 		title:    golem.GeneratedTextField[testPost, string](fixture.PostTitle),
+		nullable: golem.GeneratedNullableTextField[testPost, string](fixture.PostNullableText),
 		author:   golem.GeneratedToOne[testPost, testUser](fixture.PostAuthor, fixture.Authorship, fixture.User),
 		written:  golem.GeneratedToMany[testUser, testPost](fixture.UserPosts, fixture.Authorship, fixture.Post),
 	}
@@ -106,7 +114,7 @@ func seedReachRows(t *testing.T, database *sqlx.DB, users, posts string) {
 		}
 	}
 	for _, row := range reachPosts {
-		if _, err := database.ExecContext(ctx, database.Rebind(`INSERT INTO `+posts+`("id","author_id","title","big_int","decimal_value") VALUES (?,?,?,?,?)`), row.id, row.author, row.title, int64(0), "0"); err != nil {
+		if _, err := database.ExecContext(ctx, database.Rebind(`INSERT INTO `+posts+`("id","author_id","title","big_int","decimal_value","nullable_text") VALUES (?,?,?,?,?,?)`), row.id, row.author, row.title, int64(0), "0", row.nullable); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -161,7 +169,7 @@ func readablePostTitle(title string) bool { return strings.HasPrefix(title, "all
 func visiblePostsOf(user reachUser) []reachPost {
 	result := make([]reachPost, 0)
 	for _, post := range reachPosts {
-		if post.author == user.id && readablePostTitle(post.title) {
+		if post.author != nil && *post.author == user.id && readablePostTitle(post.title) {
 			result = append(result, post)
 		}
 	}
@@ -186,7 +194,45 @@ type reachMaskCase struct {
 func reachMaskCases() []reachMaskCase {
 	containsMask := func(post reachPost) bool { return strings.Contains(post.title, "mask") }
 	endsPublic := func(post reachPost) bool { return strings.HasSuffix(post.title, "public") }
+	nullableX := func(post reachPost) bool { return post.nullable != nil && strings.Contains(*post.nullable, "x") }
 	return []reachMaskCase{
+		{
+			name: "EveryNullableContains",
+			mask: func(h reachHandles) golem.Predicate[testUser] { return h.written.Every(h.nullable.Contains("x")) },
+			expected: func(user reachUser) bool {
+				return !reachAny(visiblePostsOf(user), func(post reachPost) bool { return !nullableX(post) })
+			},
+		},
+		{
+			name: "NotEveryNullableContains",
+			mask: func(h reachHandles) golem.Predicate[testUser] {
+				return golem.Not(h.written.Every(h.nullable.Contains("x")))
+			},
+			expected: func(user reachUser) bool {
+				return reachAny(visiblePostsOf(user), func(post reachPost) bool { return !nullableX(post) })
+			},
+		},
+		{
+			name:     "NoneNullableContains",
+			mask:     func(h reachHandles) golem.Predicate[testUser] { return h.written.None(h.nullable.Contains("x")) },
+			expected: func(user reachUser) bool { return !reachAny(visiblePostsOf(user), nullableX) },
+		},
+		{
+			name: "SomeNotNullableContains",
+			mask: func(h reachHandles) golem.Predicate[testUser] {
+				return h.written.Some(golem.Not(h.nullable.Contains("x")))
+			},
+			expected: func(user reachUser) bool {
+				return reachAny(visiblePostsOf(user), func(post reachPost) bool { return !nullableX(post) })
+			},
+		},
+		{
+			name: "NotSomeNullableContains",
+			mask: func(h reachHandles) golem.Predicate[testUser] {
+				return golem.Not(h.written.Some(h.nullable.Contains("x")))
+			},
+			expected: func(user reachUser) bool { return !reachAny(visiblePostsOf(user), nullableX) },
+		},
 		{
 			name:     "SomeContains",
 			mask:     func(h reachHandles) golem.Predicate[testUser] { return h.written.Some(h.title.Contains("mask")) },
@@ -286,7 +332,7 @@ func scopedNameVisibility(t *testing.T, ctx context.Context, caller *Caller[test
 }
 
 func TestReachMaskInProcessAgreesWithSQLMaskAcrossProviders(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	for index, open := range reachDatabases(t, "reach_oracle", fixture) {
 		open := open
@@ -321,7 +367,7 @@ func TestReachMaskInProcessAgreesWithSQLMaskAcrossProviders(t *testing.T) {
 }
 
 func TestSQLFieldMaskOverUnreadableRelationTargetDoesNotRevealIt(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	for index, open := range reachDatabases(t, "reach_leak", fixture) {
 		open := open
@@ -345,7 +391,7 @@ func TestSQLFieldMaskOverUnreadableRelationTargetDoesNotRevealIt(t *testing.T) {
 }
 
 func TestCallerReadWithNonRestatingRelationPolicySucceeds(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	policies := reachPolicies{
 		user: func(rules *golem.Rules[testUser]) {
@@ -384,6 +430,157 @@ func TestCallerReadWithNonRestatingRelationPolicySucceeds(t *testing.T) {
 			}
 			if count != 2 {
 				t.Fatalf("count=%d want=2", count)
+			}
+		})
+	}
+}
+
+func reachAuthorOf(post reachPost) (reachUser, bool) {
+	if post.author == nil {
+		return reachUser{}, false
+	}
+	for _, user := range reachUsers {
+		if user.id == *post.author {
+			return user, true
+		}
+	}
+	return reachUser{}, false
+}
+
+func readableReachAuthor(user reachUser) bool {
+	return strings.HasPrefix(user.name, "a") || strings.HasPrefix(user.name, "e")
+}
+
+func visibleAuthorMatches(post reachPost, match func(reachUser) bool) bool {
+	author, present := reachAuthorOf(post)
+	return present && readableReachAuthor(author) && match(author)
+}
+
+type reachPostMaskCase struct {
+	name     string
+	mask     func(reachHandles) golem.Predicate[testPost]
+	expected func(reachPost) bool
+}
+
+func reachPostMaskCases() []reachPostMaskCase {
+	hasI := func(user reachUser) bool { return strings.Contains(user.name, "i") }
+	any := func(reachUser) bool { return true }
+	return []reachPostMaskCase{
+		{
+			name:     "Is",
+			mask:     func(h reachHandles) golem.Predicate[testPost] { return h.author.Is(h.userName.Contains("i")) },
+			expected: func(post reachPost) bool { return visibleAuthorMatches(post, hasI) },
+		},
+		{
+			name:     "IsNull",
+			mask:     func(h reachHandles) golem.Predicate[testPost] { return h.author.IsNull() },
+			expected: func(post reachPost) bool { return !visibleAuthorMatches(post, any) },
+		},
+		{
+			name:     "IsNotNull",
+			mask:     func(h reachHandles) golem.Predicate[testPost] { return h.author.IsNotNull() },
+			expected: func(post reachPost) bool { return visibleAuthorMatches(post, any) },
+		},
+		{
+			name: "NotIs",
+			mask: func(h reachHandles) golem.Predicate[testPost] {
+				return golem.Not(h.author.Is(h.userName.Contains("i")))
+			},
+			expected: func(post reachPost) bool { return !visibleAuthorMatches(post, hasI) },
+		},
+		{
+			name:     "IsNot",
+			mask:     func(h reachHandles) golem.Predicate[testPost] { return h.author.IsNot(h.userName.Contains("i")) },
+			expected: func(post reachPost) bool { return !visibleAuthorMatches(post, hasI) },
+		},
+	}
+}
+
+func reachPostMaskPolicies(handles reachHandles, mask golem.Predicate[testPost]) reachPolicies {
+	return reachPolicies{
+		user: func(rules *golem.Rules[testUser]) {
+			rules.CanRead(handles.userName.StartsWith("a").Or(handles.userName.StartsWith("e")))
+		},
+		post: func(rules *golem.Rules[testPost]) {
+			rules.CanRead(golem.All[testPost]())
+			rules.CannotReadFields(golem.All[testPost](), handles.title)
+			rules.CanReadFields(mask, handles.title)
+		},
+	}
+}
+
+func inProcessTitleVisibility(t *testing.T, ctx context.Context, caller *Caller[testPrincipal, testActor], handles reachHandles) map[string]bool {
+	t.Helper()
+	rows, err := CallerFindMany(ctx, caller, handles.posts, golem.Select[testPost](handles.postID, handles.title))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		id, present := golem.Value(row, handles.postID).Get()
+		if !present {
+			t.Fatal("in-process row lost its identity")
+		}
+		title := golem.Value(row, handles.title)
+		if !title.IsSelected() {
+			t.Fatal("in-process row lost the selected title")
+		}
+		result[id.String()] = !title.IsNull()
+	}
+	return result
+}
+
+func scopedTitleVisibility(t *testing.T, ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles) map[string]bool {
+	t.Helper()
+	scope := golem.GeneratedScope[testPost](fixture.Post)
+	id := golem.GeneratedScopedEqualField(scope, handles.postID)
+	title := golem.GeneratedScopedTextField(scope, handles.title)
+	rows, err := CallerScoped(ctx, caller, handles.posts, golem.From(scope).Select(id, title))
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		identity, present := golem.ScopedValue(row, id).Get()
+		if !present {
+			t.Fatal("scoped row lost its identity")
+		}
+		_, shown := golem.ScopedValue(row, title).Get()
+		visible[identity.String()] = shown
+	}
+	return visible
+}
+
+func TestReachToOneNegativeMasksAgreeAcrossInProcessAndSQL(t *testing.T) {
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
+	handles := newReachHandles(fixture)
+	for index, open := range reachDatabases(t, "reach_to_one", fixture) {
+		open := open
+		t.Run(reachDatabaseName(index), func(t *testing.T) {
+			target := open(t)
+			for _, candidate := range reachPostMaskCases() {
+				t.Run(candidate.name, func(t *testing.T) {
+					ctx := context.Background()
+					app := openReachApp(t, ctx, target.database, target.provider, target.bundle, fixture, handles, reachPostMaskPolicies(handles, candidate.mask(handles)))
+					caller, err := app.ForPrincipal(ctx, testPrincipal{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					inProcess := inProcessTitleVisibility(t, ctx, caller, handles)
+					inSQL := scopedTitleVisibility(t, ctx, caller, fixture, handles)
+					if len(inProcess) != len(reachPosts) || len(inSQL) != len(reachPosts) {
+						t.Fatalf("rows in-process=%d sql=%d want=%d", len(inProcess), len(inSQL), len(reachPosts))
+					}
+					for _, post := range reachPosts {
+						want := candidate.expected(post)
+						if inProcess[post.id] != want {
+							t.Errorf("post %s in-process visible=%v want=%v", post.id, inProcess[post.id], want)
+						}
+						if inSQL[post.id] != want {
+							t.Errorf("post %s SQL mask visible=%v want=%v", post.id, inSQL[post.id], want)
+						}
+					}
+				})
 			}
 		})
 	}

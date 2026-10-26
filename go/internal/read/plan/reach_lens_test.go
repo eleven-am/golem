@@ -268,7 +268,7 @@ func TestSelfRelationCycleWithRelationFreeTargetIsStillAccepted(t *testing.T) {
 	}
 }
 
-func TestMutuallyRecursiveRelationFieldRuleIsStillRejected(t *testing.T) {
+func TestMutuallyRecursiveRelationFieldGrantIsRejectedByTheWidenedRowExpansion(t *testing.T) {
 	handles := newReachHandles(t)
 	userRules := golem.NewRules[planUser]()
 	userRules.CanRead(handles.userName.Contains("a"))
@@ -279,8 +279,39 @@ func TestMutuallyRecursiveRelationFieldRuleIsStillRejected(t *testing.T) {
 
 	_, err := handles.planUsers(t, policies, golem.Select[planUser](handles.userName))
 	var failure *Error
-	if !errors.As(err, &failure) || failure.Code != CodePolicy {
+	if !errors.As(err, &failure) || failure.Code != CodePolicy || failure.Model != policyir.ModelID(handles.fixture.User) || failure.Detail != "cyclic relation policy cannot be expanded safely" {
 		t.Fatalf("mutually recursive relation field rule error=%v", err)
+	}
+}
+
+func TestFieldConditionCycleIsRejectedByTheReachLensAfterTheRowExpands(t *testing.T) {
+	modelA, modelB, modelC := expansionModel(30), expansionModel(31), expansionModel(32)
+	trueA, _ := policyir.NewConstant(modelA, true)
+	trueB, _ := policyir.NewConstant(modelB, true)
+	trueC, _ := policyir.NewConstant(modelC, true)
+	aToC := expansionRelation(t, modelA, expansionField(30), expansionRelationID(30), modelC, policyir.OperatorRelationSome, &trueC)
+	aToB := expansionRelation(t, modelA, expansionField(31), expansionRelationID(31), modelB, policyir.OperatorRelationSome, &trueB)
+	bToA := expansionRelation(t, modelB, expansionField(32), expansionRelationID(32), modelA, policyir.OperatorRelationSome, &trueA)
+	policies := policyMap{
+		modelA: expansionPolicy(t, modelA, &aToC),
+		modelB: expansionPolicy(t, modelB, &bToA),
+		modelC: expansionPolicy(t, modelC, nil),
+	}
+	expander := newPolicyExpander(policies, 8)
+	if _, err := expander.model(modelA, 0); err != nil {
+		t.Fatalf("the acyclic row expansion was refused: %v", err)
+	}
+	reach := expander.reach(modelA, 0)
+	if _, err := reach.Read(aToC); err != nil {
+		t.Fatalf("an acyclic field condition was refused: %v", err)
+	}
+	_, err := reach.Read(aToB)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodePolicy || failure.Model != modelA || failure.Detail != "cyclic relation policy cannot be expanded safely" {
+		t.Fatalf("a field condition re-entering a relation-bearing root was accepted: %v", err)
+	}
+	if _, err := newPolicyExpander(policies, 8).condition(aToB, 0); err != nil {
+		t.Fatalf("the same condition outside the root lens should expand, so the lens is what rejects it: %v", err)
 	}
 }
 
