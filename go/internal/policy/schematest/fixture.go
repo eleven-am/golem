@@ -100,6 +100,10 @@ func NewIndexedExactScoped(t testing.TB) Fixture {
 	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, false, "public", "_golem", false, false, true)
 }
 
+func NewIndexedFullExactScopedNullableAuthor(t testing.TB) Fixture {
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, true, "public", "_golem", false, true, true)
+}
+
 // NewMutationVocabulary exposes exact numeric fields plus one nullable numeric
 // field for live public Set/Null/Increment/Decrement mutation acceptance.
 func NewMutationVocabulary(t testing.TB) Fixture {

@@ -523,7 +523,7 @@ func (builder *builder) classifyOne(condition policyir.Condition, use classify.U
 	if err != nil {
 		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position constraint could not combine", err)
 	}
-	request, err := classify.NewRequestWithConstraint(builder.request.Registry, policy, condition.ModelID(), fields, use, selectingAction, complete)
+	request, err := classify.NewRequestWithReach(builder.request.Registry, policy, condition.ModelID(), fields, use, selectingAction, complete, classify.RawReach())
 	if err != nil {
 		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position classification request is invalid", err)
 	}

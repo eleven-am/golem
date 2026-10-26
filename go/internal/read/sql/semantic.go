@@ -97,7 +97,7 @@ func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, pro
 		if !selected.Conditional() || selected.DischargedByConstraint() {
 			continue
 		}
-		mask, has := selected.Mask()
+		mask, has := selected.SQLMask()
 		if !has {
 			return SemanticCandidates{}, fail(CodeRender, plan.ModelID(), field, "conditional semantic identity field has no mask", nil)
 		}

@@ -7,6 +7,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/dependency"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
+	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
 // UseKind names the position a statement puts a field in. The runtime records
@@ -342,7 +343,18 @@ func (policy ModelPolicy[M]) classifyRequest(use classify.UseKind, action ir.Act
 	if err != nil {
 		return classify.Request{}, failModel(ErrorPolicyAnalysis, "the reach predicate could not be normalized", policy.model)
 	}
-	request, err := classify.NewRequestWithConstraint(policy.registry, policy.bound, ir.ModelID(policy.model), fields, use, action, narrowed)
+	lens := classify.RawReach()
+	if action == ir.ActionRead {
+		if policy.reach == nil {
+			return classify.Request{}, fail(ErrorInvalidInput, "model policy was not produced by Model")
+		}
+		lens = readplan.ReadLens(policy.reach, ir.ModelID(policy.model), readplan.DefaultLimits().MaxRelationDepth)
+		narrowed, err = lens.Selecting(narrowed)
+		if err != nil {
+			return classify.Request{}, failModel(ErrorPolicyAnalysis, "the reach predicate could not be expanded over the relation targets' read policies", policy.model)
+		}
+	}
+	request, err := classify.NewRequestWithReach(policy.registry, policy.bound, ir.ModelID(policy.model), fields, use, action, narrowed, lens)
 	if err != nil {
 		return classify.Request{}, failModel(ErrorPolicyAnalysis, "the supplied reach does not preserve the row constraint this actor holds for the selecting action", policy.model)
 	}

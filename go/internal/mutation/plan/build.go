@@ -417,7 +417,7 @@ func classifyPosition(request RootRequest, policy policyir.Policy, action policy
 	if classifier == nil {
 		classifier = defaultClassifier{}
 	}
-	classificationRequest, err := classify.NewRequestWithConstraint(request.Registry, policy, request.Model, fields, use, action, complete)
+	classificationRequest, err := classify.NewRequestWithReach(request.Registry, policy, request.Model, fields, use, action, complete, classify.RawReach())
 	if err != nil {
 		return fail(CodeClassification, request, policyir.FieldID{}, "classification request is invalid", err)
 	}

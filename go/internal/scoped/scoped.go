@@ -1152,7 +1152,7 @@ func renderScopedRawColumn(value golem.FrozenScopedExpression, plan Plan, regist
 	}
 	column := dialect.Quote(aliases[value.Occurrence]) + "." + dialect.Quote(physicalField.ColumnName())
 	if classified, ok := item.classified[value.Field]; ok {
-		if mask, masked := classified.Mask(); masked && !classified.DischargedByConstraint() {
+		if mask, masked := classified.SQLMask(); masked && !classified.DischargedByConstraint() {
 			resolver := policysql.SchemaResolver(registry)
 			fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: mask, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: aliases[value.Occurrence]}, policyAliases)
 			if err != nil {
