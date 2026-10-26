@@ -71,26 +71,27 @@ func GolemGeneratedApplicationEventFactories() (golemruntime.EventFactoryRegistr
 }
 
 type Config[P any] struct {
-	Database               *provider.Database
-	Embeddings             embedding.Registry
-	Queue                  *golemruntime.QueueConfig
-	ReadLimits             golemruntime.ReadLimits
-	MutationLimits         golemruntime.MutationLimits
-	AnalyticsLimits        golemruntime.AnalyticsLimits
-	EventLimits            events.Limits
-	EventTransport         events.EventTransport
-	Observer               observe.Observer
-	CDCAdapters            []events.CDCAdapter
-	ReportEventOperator    events.OperatorAudit
-	HistoricalEventBundles []golem.SchemaBundle
-	AfterCommitError       func(context.Context, golem.AfterCommitFailure)
-	AuditPrincipal         func(P) string
-	ReportScopedQuery      func(context.Context, golem.ScopedAuditRecord)
-	ResolvePrincipal       func(context.Context, P) (Actor, error)
-	SnapshotPrincipal      func(P) (P, error)
-	SnapshotActor          func(Actor) (Actor, error)
-	PolicyCache            golemruntime.PolicyCacheConfig
-	PolicyCacheKey         func(Actor) (string, bool)
+	Database                 *provider.Database
+	Embeddings               embedding.Registry
+	Queue                    *golemruntime.QueueConfig
+	ReadLimits               golemruntime.ReadLimits
+	MutationLimits           golemruntime.MutationLimits
+	AnalyticsLimits          golemruntime.AnalyticsLimits
+	EventLimits              events.Limits
+	EventTransport           events.EventTransport
+	Observer                 observe.Observer
+	CDCAdapters              []events.CDCAdapter
+	ReportEventOperator      events.OperatorAudit
+	HistoricalEventBundles   []golem.SchemaBundle
+	AfterCommitError         func(context.Context, golem.AfterCommitFailure)
+	AuditPrincipal           func(P) string
+	ReportScopedQuery        func(context.Context, golem.ScopedAuditRecord)
+	ResolvePrincipal         func(context.Context, P) (Actor, error)
+	SnapshotPrincipal        func(P) (P, error)
+	SnapshotActor            func(Actor) (Actor, error)
+	PolicyCache              golemruntime.PolicyCacheConfig
+	PolicyCacheKey           func(Actor) (string, bool)
+	SubscriptionPrincipalKey func(P) (string, bool)
 }
 
 type App[P any] struct {
@@ -1461,6 +1462,7 @@ func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemr
 	engineConfig.SnapshotActor = config.SnapshotActor
 	engineConfig.PolicyCache = config.PolicyCache
 	engineConfig.PolicyCacheKey = config.PolicyCacheKey
+	engineConfig.SubscriptionPrincipalKey = config.SubscriptionPrincipalKey
 	engine, err := golemruntime.Open(ctx, engineConfig)
 	if err != nil {
 		return nil, err
@@ -1597,12 +1599,12 @@ func (app *App[P]) System() System[P] {
 	return result
 }
 
-func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerTx[P]) error) error {
+func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerTx[P]) error, options ...golem.TransactionOption) error {
 	if caller == nil {
-		return golemruntime.CallerTransaction(ctx, (*golemruntime.Caller[P, Actor])(nil), nil)
+		return golemruntime.CallerTransaction(ctx, (*golemruntime.Caller[P, Actor])(nil), nil, options...)
 	}
 	if callback == nil {
-		return golemruntime.CallerTransaction(ctx, caller.runtime, nil)
+		return golemruntime.CallerTransaction(ctx, caller.runtime, nil, options...)
 	}
 	return golemruntime.CallerTransaction(ctx, caller.runtime, func(inner *golemruntime.CallerTx[P, Actor]) error {
 		result := &CallerTx[P]{runtime: inner}
@@ -1614,7 +1616,7 @@ func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerT
 		result.DocumentChanges = CallerTxDocumentChangeClient[P]{runtime: inner}
 		result.Invites = CallerTxInviteClient[P]{runtime: inner}
 		return callback(result)
-	})
+	}, options...)
 }
 func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if transaction == nil {
@@ -1655,9 +1657,9 @@ func SystemEscape[P any](transaction *CallerTx[P]) *SystemTx[P] {
 	return result
 }
 
-func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error) error {
+func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error, options ...golem.TransactionOption) error {
 	if callback == nil {
-		return golemruntime.SystemTransaction(ctx, system.runtime, nil)
+		return golemruntime.SystemTransaction(ctx, system.runtime, nil, options...)
 	}
 	return golemruntime.SystemTransaction(ctx, system.runtime, func(inner *golemruntime.SystemTx[P, Actor]) error {
 		result := &SystemTx[P]{runtime: inner}
@@ -1669,7 +1671,7 @@ func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx
 		result.DocumentChanges = SystemTxDocumentChangeClient[P]{runtime: inner}
 		result.Invites = SystemTxInviteClient[P]{runtime: inner}
 		return callback(result)
-	})
+	}, options...)
 }
 func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if transaction == nil {
