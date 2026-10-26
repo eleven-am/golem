@@ -211,28 +211,25 @@ func assertMutationBoundaryRefusals(t *testing.T, counts *mutationBoundaryCounts
 func TestRefusedMutationDoesNotBeginTransactionOrIssueSQL(t *testing.T) {
 	assertRefused := func(t *testing.T, fixture mutationResultFixture, counts *mutationBoundaryCounts) {
 		t.Helper()
-		caller, err := fixture.app.ForPrincipal(context.Background(), mutationResultPrincipal{})
+		denied := reopenMutationResultWithPostWriteDenials(t, fixture)
+		caller, err := denied.app.ForPrincipal(context.Background(), mutationResultPrincipal{})
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		// Title is conditionally readable only for posts whose related author is
-		// Alice, while the update policy is unconditional. Naming title in this
-		// selector guard therefore cannot be discharged over the complete update
-		// reach and must be classified/refused before the execution boundary.
 		selector := golem.GeneratedUniqueSelectorValue[mutationResultPost](fixture.schema.Post, fixture.schema.PostKey,
 			golem.GeneratedSelectorComponent(fixture.schema.PostID, golem.UUID{15: 11}))
 		target := selector.And(fixture.title.Eq("classified-secret"))
 		counts.reset()
-		_, err = CallerUpdate(context.Background(), caller, fixture.postDescriptor, target, fixture.updateTitle("must-not-run"))
+		_, err = CallerUpdate(context.Background(), caller, denied.postDescriptor, target, denied.updateTitle("must-not-run"))
 		if err == nil {
-			t.Fatal("classification-refused mutation unexpectedly succeeded")
+			t.Fatal("ungranted mutation unexpectedly succeeded")
 		}
 		if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
 			t.Fatalf("refused mutation crossed SQL boundary: begins=%d queries=%d execs=%d", begins, queries, execs)
 		}
 		var failure *golem.Error
-		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+		if !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Reason != golem.ReasonNotGranted {
 			t.Fatalf("refusal=%#v err=%v", failure, err)
 		}
 	}
@@ -744,12 +741,12 @@ func TestMissingOptionalCurrentToOneReturnsNotFoundAndDisconnectIsNoOpAcrossProv
 		}
 		for _, operation := range operations {
 			operation := operation
-			t.Run("invisible-"+operation.name, func(t *testing.T) {
+			t.Run("ungranted-"+operation.name, func(t *testing.T) {
 				input := golem.GeneratedUpdateInput[mutationResultPost](denied.schema.Post, operation.value)
 				_, err := CallerUpdate(ctx, deniedCaller, denied.postDescriptor, denied.target(205), input)
 				var failure *golem.Error
-				if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound {
-					t.Fatalf("invisible current to-one failure=%#v err=%v", failure, err)
+				if !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Reason != golem.ReasonNotGranted {
+					t.Fatalf("ungranted current to-one failure=%#v err=%v", failure, err)
 				}
 			})
 		}

@@ -5,6 +5,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
@@ -24,6 +25,7 @@ const (
 // Error intentionally omits predicates, selector values, and provider details.
 type Error struct {
 	Code      ErrorCode
+	Reason    golem.Reason
 	Operation mutationir.Operation
 	Model     policyir.ModelID
 	Field     policyir.FieldID

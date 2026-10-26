@@ -220,6 +220,11 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "row constraint could not be resolved", err)
 		}
 		RecordGrant(request.Policies, request.Model, action, nil)
+		granted := row
+		row, err = request.writeReach(row)
+		if err != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "row constraint read reach could not be resolved", err)
+		}
 		if operation != mutationir.Create {
 			selection, node.InfluencingFields, err = selectExisting(request, policy, action)
 			if err != nil {
@@ -242,8 +247,12 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 			if operation == mutationir.Create && request.Operation == mutationir.Create {
 				allowed, gateErr := resolve.ActionAllowed(condition)
 				if gateErr != nil || !allowed {
-					return mutationir.NodeInput{}, fail(CodePolicy, request, field, "create field has no grant", gateErr)
+					return mutationir.NodeInput{}, failReason(CodePolicy, golem.ReasonNotGranted, request, field, "create field has no grant", gateErr)
 				}
+			}
+			condition, err = request.writeReach(condition)
+			if err != nil {
+				return mutationir.NodeInput{}, fail(CodePolicy, request, field, "field condition read reach could not be resolved", err)
 			}
 			authorization, err := mutationir.NewFieldAuthorization(field, condition)
 			if err != nil {
@@ -252,9 +261,9 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 			node.FieldConditions = append(node.FieldConditions, authorization)
 		}
 		if operation == mutationir.Create && request.Operation == mutationir.Create {
-			allowed, gateErr := resolve.ActionAllowed(row)
+			allowed, gateErr := resolve.ActionAllowed(granted)
 			if gateErr != nil || !allowed {
-				return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "create action has no grant", gateErr)
+				return mutationir.NodeInput{}, failReason(CodePolicy, golem.ReasonNotGranted, request, policyir.FieldID{}, "create action is not granted", gateErr)
 			}
 		}
 		reference, referenceErr := ReferenceCondition(request.Registry, request.Policies, request.Model, scalar, request.ReadRelationDepth)
@@ -353,7 +362,11 @@ func selectExisting(request RootRequest, policy policyir.Policy, action policyir
 		return nil, nil, fail(CodePolicy, request, policyir.FieldID{}, "selecting constraint could not be resolved", err)
 	}
 	RecordGrant(request.Policies, request.Model, action, nil)
-	conditions := []policyir.Condition{row}
+	allowed, err := resolve.ActionAllowed(row)
+	if err != nil || !allowed {
+		return nil, nil, failReason(CodePolicy, golem.ReasonNotGranted, request, policyir.FieldID{}, ActionName(action)+" action is not granted", err)
+	}
+	var conditions []policyir.Condition
 	var position policyir.Condition
 	use := classify.UseSelector
 	if request.Target != nil {
@@ -373,13 +386,13 @@ func selectExisting(request RootRequest, policy policyir.Policy, action policyir
 	} else {
 		return nil, nil, fail(CodeRequest, request, policyir.FieldID{}, "existing-row operation lacks target position", nil)
 	}
-	complete, err := conjoin(request.Model, conditions...)
-	if err != nil {
-		return nil, nil, fail(CodeRequirements, request, policyir.FieldID{}, "complete selecting constraint could not be constructed", err)
-	}
 	fields, err := rootPositionFields(position)
 	if err != nil {
 		return nil, nil, fail(CodeRequest, request, policyir.FieldID{}, "relation-traversing mutation positions are not in the root-scalar planner", err)
+	}
+	complete, err := ExistingConstraint(request.Policies, request.Model, row, fields, request.ReadRelationDepth, conditions...)
+	if err != nil {
+		return nil, nil, fail(CodePolicy, request, policyir.FieldID{}, "complete selecting constraint could not be constructed", err)
 	}
 	if err := classifyPosition(request, policy, action, use, complete, fields); err != nil {
 		return nil, nil, err
@@ -411,30 +424,30 @@ func targetPosition(request RootRequest) (policyir.Condition, error) {
 
 func classifyPosition(request RootRequest, policy policyir.Policy, action policyir.Action, use classify.UseKind, complete policyir.Condition, fields []policyir.FieldID) error {
 	if len(fields) == 0 {
-		return fail(CodeClassification, request, policyir.FieldID{}, "mutation position contains no classifiable fields", nil)
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, policyir.FieldID{}, "mutation position contains no classifiable fields", nil)
 	}
 	classifier := request.Classifier
 	if classifier == nil {
 		classifier = defaultClassifier{}
 	}
-	classificationRequest, err := classify.NewRequestWithReach(request.Registry, policy, request.Model, fields, use, action, complete, classify.RawReach())
+	classificationRequest, err := classify.NewRequestWithReach(request.Registry, policy, request.Model, fields, use, action, complete, WriteLens(request.Policies, request.Model, request.ReadRelationDepth))
 	if err != nil {
-		return fail(CodeClassification, request, policyir.FieldID{}, "classification request is invalid", err)
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, policyir.FieldID{}, "classification request is invalid", err)
 	}
 	classified, err := classifier.Fields(classificationRequest)
 	if err != nil {
-		return fail(CodeClassification, request, policyir.FieldID{}, "mutation position classification failed", err)
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, policyir.FieldID{}, "mutation position classification failed", err)
 	}
 	if classified.ModelID() != request.Model || classified.UseKind() != use || classified.SelectingAction() != action {
-		return fail(CodeClassification, request, policyir.FieldID{}, "classifier returned facts for another question", nil)
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, policyir.FieldID{}, "classifier returned facts for another question", nil)
 	}
 	for _, field := range fields {
 		result, ok := classified.Field(field)
 		if !ok {
-			return fail(CodeClassification, request, field, "classifier omitted a mutation position", nil)
+			return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, field, "classifier omitted a mutation position", nil)
 		}
 		if result.Access() == classify.AccessNever || result.Access() == classify.AccessConditional && !result.DischargedByConstraint() {
-			return fail(CodeClassification, request, field, "mutation position is not readable over complete selecting reach", nil)
+			return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, request, field, "mutation position is not readable over complete selecting reach", nil)
 		}
 	}
 	return nil

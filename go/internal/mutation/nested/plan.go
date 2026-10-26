@@ -14,7 +14,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
-	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
 func (builder *builder) updateNode(endpoint schema.RelationEndpoint, branch golem.FrozenNestedMutationBranch, branchKind mutationir.Branch, classifyTarget bool, depth uint16) (mutationir.NodeInput, error) {
@@ -335,17 +334,24 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested model policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, node.Model))
 	}
 	action := actionFor(node.Operation)
-	var row policyir.Condition
-	var err error
 	if readReach {
 		action = policyir.ActionRead
-		row, err = readplan.ReadReach(builder.request.Policies, node.Model, builder.request.ReadRelationDepth)
-	} else {
-		row, err = resolve.RowConstraint(policy, action, node.Model)
-		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, nil)
 	}
+	granted, err := resolve.RowConstraint(policy, action, node.Model)
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint could not resolve", err)
+	}
+	if !readReach {
+		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, nil)
+	}
+	if existingWrite(node.Operation) && !readReach {
+		if err := grantGate(granted, action, node.Model); err != nil {
+			return mutationir.NodeInput{}, err
+		}
+	}
+	row, err := builder.reach(node.Model, granted)
+	if err != nil {
+		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint read reach could not resolve", err)
 	}
 	if node.Operation == mutationir.Create || node.Operation == mutationir.Update || node.Operation == mutationir.UpdateMany || node.Operation == mutationir.Connect || node.Operation == mutationir.Disconnect || node.Operation == mutationir.SetRelation {
 		value := row
@@ -359,12 +365,9 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 		node.ReferenceCondition = reference
 	}
 	if existing(node.Operation) {
-		complete := row
-		if position != nil {
-			complete, err = conjoin(node.Model, row, *position)
-			if err != nil {
-				return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested selecting condition could not combine", err)
-			}
+		complete, completeErr := builder.existingConstraint(node.Model, node.Operation, granted, position)
+		if completeErr != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested selecting condition could not combine", completeErr)
 		}
 		selection, selectionErr := mutationir.NewSelectionRequirement(action, complete)
 		if selectionErr != nil {
@@ -381,6 +384,10 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &fieldID)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition could not resolve", conditionErr)
+		}
+		condition, conditionErr = builder.reach(node.Model, condition)
+		if conditionErr != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition read reach could not resolve", conditionErr)
 		}
 		authorization, authorizationErr := mutationir.NewFieldAuthorization(operation.FieldID(), condition)
 		if authorizationErr != nil {
@@ -438,6 +445,10 @@ func (builder *builder) decorateOwnedFields(node mutationir.NodeInput, fields []
 		}
 		recorded := field
 		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &recorded)
+		condition, conditionErr = builder.reach(node.Model, condition)
+		if conditionErr != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field condition read reach could not resolve", conditionErr)
+		}
 		authorization, authorizationErr := mutationir.NewFieldAuthorization(field, condition)
 		if authorizationErr != nil {
 			return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field authorization is invalid", authorizationErr)
@@ -519,13 +530,18 @@ func (builder *builder) classifyOne(condition policyir.Condition, use classify.U
 		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position action constraint could not resolve", err)
 	}
 	mutationplan.RecordGrant(builder.request.Policies, condition.ModelID(), selectingAction, nil)
-	complete, err := conjoin(condition.ModelID(), row, condition)
-	if err != nil {
-		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position constraint could not combine", err)
+	if existingWrite(operation) && selectingAction != policyir.ActionRead {
+		if err := grantGate(row, selectingAction, condition.ModelID()); err != nil {
+			return err
+		}
 	}
-	request, err := classify.NewRequestWithReach(builder.request.Registry, policy, condition.ModelID(), fields, use, selectingAction, complete, classify.RawReach())
+	complete, err := mutationplan.ExistingConstraint(builder.request.Policies, condition.ModelID(), row, fields, builder.request.ReadRelationDepth, condition)
 	if err != nil {
-		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position classification request is invalid", err)
+		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position constraint could not combine", err)
+	}
+	request, err := classify.NewRequestWithReach(builder.request.Registry, policy, condition.ModelID(), fields, use, selectingAction, complete, mutationplan.WriteLens(builder.request.Policies, condition.ModelID(), builder.request.ReadRelationDepth))
+	if err != nil {
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position classification request is invalid", err)
 	}
 	classifier := builder.request.Classifier
 	if classifier == nil {
@@ -533,12 +549,12 @@ func (builder *builder) classifyOne(condition policyir.Condition, use classify.U
 	}
 	result, err := classifier.Fields(request)
 	if err != nil {
-		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position classification failed", err)
+		return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position classification failed", err)
 	}
 	for _, field := range fields {
 		value, present := result.Field(field)
 		if !present || value.Access() == classify.AccessNever || value.Access() == classify.AccessConditional && !value.DischargedByConstraint() {
-			return fail(CodeClassification, golem.ModelID(condition.ModelID()), golem.FieldID(field), "nested position is not readable over its complete selecting reach", nil)
+			return failReason(CodeClassification, golem.ReasonAuthorizationUnproven, golem.ModelID(condition.ModelID()), golem.FieldID(field), "nested position is not readable over its complete selecting reach", nil)
 		}
 	}
 	return nil
@@ -626,6 +642,38 @@ func actionFor(operation mutationir.Operation) policyir.Action {
 	}
 	return policyir.ActionUpdate
 }
+func existingWrite(operation mutationir.Operation) bool {
+	switch operation {
+	case mutationir.Update, mutationir.Delete, mutationir.Upsert, mutationir.UpdateMany, mutationir.DeleteMany:
+		return true
+	default:
+		return false
+	}
+}
+
+func grantGate(row policyir.Condition, action policyir.Action, model policyir.ModelID) error {
+	allowed, err := resolve.ActionAllowed(row)
+	if err != nil || !allowed {
+		return &Error{Code: CodePolicy, Reason: golem.ReasonNotGranted, Model: golem.ModelID(model), Detail: mutationplan.ActionName(action) + " action is not granted", Cause: err}
+	}
+	return nil
+}
+
+func (builder *builder) reach(model policyir.ModelID, condition policyir.Condition) (policyir.Condition, error) {
+	return mutationplan.WriteReach(builder.request.Policies, model, condition, builder.request.ReadRelationDepth)
+}
+
+func (builder *builder) existingConstraint(model policyir.ModelID, operation mutationir.Operation, row policyir.Condition, position *policyir.Condition) (policyir.Condition, error) {
+	if position != nil {
+		return mutationplan.ExistingConstraint(builder.request.Policies, model, row, directFields(*position), builder.request.ReadRelationDepth, *position)
+	}
+	complete, err := mutationplan.ExistingConstraint(builder.request.Policies, model, row, nil, builder.request.ReadRelationDepth)
+	if err != nil || operation != mutationir.Update && operation != mutationir.Delete {
+		return complete, err
+	}
+	return mutationplan.ReadableConstraint(builder.request.Policies, model, complete, builder.request.ReadRelationDepth)
+}
+
 func existing(operation mutationir.Operation) bool {
 	switch operation {
 	case mutationir.Create, mutationir.CreateMany:
