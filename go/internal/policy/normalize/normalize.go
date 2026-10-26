@@ -3,8 +3,8 @@
 package normalize
 
 import (
-	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/eleven-am/golem/go/internal/policy/ir"
@@ -28,16 +28,15 @@ func Condition(input ir.Condition) (ir.Condition, error) {
 // Binding and normalization remain separate operations by design. Callers bind
 // a frozen policy first, then pass the successfully bound policy here.
 func Policy(input ir.Policy) (ir.Policy, error) {
-	rules := input.Rules()
-	validated, err := ir.NewPolicy(input.ModelID(), rules)
+	validated, err := ir.NewPolicy(input.ModelID(), input.Rules())
 	if err != nil {
 		return ir.Policy{}, fmt.Errorf("normalize policy: %w", err)
 	}
 
 	model := validated.ModelID()
-	rules = validated.Rules()
-	normalized := make([]ir.Rule, len(rules))
-	for index, rule := range rules {
+	normalized := make([]ir.Rule, validated.RuleCount())
+	for index := range normalized {
+		rule := validated.RuleAt(index)
 		condition, present := rule.Condition()
 		var conditionPointer *ir.Condition
 		if present {
@@ -72,6 +71,17 @@ func Policy(input ir.Policy) (ir.Policy, error) {
 }
 
 func condition(input ir.Condition) (ir.Condition, error) {
+	if ir.IsSealedNormal(input) {
+		return input, nil
+	}
+	result, err := rewrite(input)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	return ir.SealNormal(result), nil
+}
+
+func rewrite(input ir.Condition) (ir.Condition, error) {
 	switch input.Kind() {
 	case ir.ConditionConstant:
 		truth, _ := input.Constant()
@@ -92,29 +102,33 @@ func condition(input ir.Condition) (ir.Condition, error) {
 }
 
 func normalizeLogical(input ir.Condition) (ir.Condition, error) {
-	operator, children, _ := input.Logical()
+	operator, _ := input.LogicalOperator()
 	if operator == ir.LogicalNot {
-		child, err := condition(children[0])
+		child, err := condition(input.Child(0))
 		if err != nil {
 			return ir.Condition{}, err
 		}
 		if truth, ok := child.Constant(); ok {
 			return ir.NewConstant(input.ModelID(), !truth)
 		}
-		if nestedOperator, nestedChildren, ok := child.Logical(); ok && nestedOperator == ir.LogicalNot {
-			return nestedChildren[0], nil
+		if nestedOperator, ok := child.LogicalOperator(); ok && nestedOperator == ir.LogicalNot {
+			return child.Child(0), nil
 		}
 		return ir.NewLogical(input.ModelID(), ir.LogicalNot, []ir.Condition{child})
 	}
 
-	normalized := make([]ir.Condition, 0, len(children))
-	for _, child := range children {
-		child, err := condition(child)
+	count := input.ChildCount()
+	normalized := make([]ir.Condition, 0, count)
+	for index := 0; index < count; index++ {
+		child, err := condition(input.Child(index))
 		if err != nil {
 			return ir.Condition{}, err
 		}
-		if nestedOperator, nestedChildren, ok := child.Logical(); ok && nestedOperator == operator {
-			normalized = append(normalized, nestedChildren...)
+		if nestedOperator, ok := child.LogicalOperator(); ok && nestedOperator == operator {
+			normalized = slices.Grow(normalized, child.ChildCount()+count-index-1)
+			for nested := 0; nested < child.ChildCount(); nested++ {
+				normalized = append(normalized, child.Child(nested))
+			}
 		} else {
 			normalized = append(normalized, child)
 		}
@@ -142,7 +156,7 @@ func normalizeLogical(input ir.Condition) (ir.Condition, error) {
 	case 1:
 		return unique[0].condition, nil
 	default:
-		children = make([]ir.Condition, len(unique))
+		children := make([]ir.Condition, len(unique))
 		for index := range unique {
 			children[index] = unique[index].condition
 		}
@@ -152,22 +166,22 @@ func normalizeLogical(input ir.Condition) (ir.Condition, error) {
 
 type canonicalChild struct {
 	condition ir.Condition
-	bytes     []byte
+	key       ir.CanonicalKey
 }
 
 func canonicalUnique(children []ir.Condition) ([]canonicalChild, error) {
 	encoded := make([]canonicalChild, 0, len(children))
 	for _, child := range children {
-		canonical, err := ir.CanonicalCondition(child)
+		key, err := ir.CanonicalKeyOf(child)
 		if err != nil {
 			return nil, fmt.Errorf("normalize condition: encode child: %w", err)
 		}
-		encoded = append(encoded, canonicalChild{condition: child, bytes: canonical})
+		encoded = append(encoded, canonicalChild{condition: child, key: key})
 	}
-	sort.Slice(encoded, func(i, j int) bool { return bytes.Compare(encoded[i].bytes, encoded[j].bytes) < 0 })
+	sort.Slice(encoded, func(i, j int) bool { return encoded[i].key.Compare(encoded[j].key) < 0 })
 	unique := encoded[:0]
 	for _, child := range encoded {
-		if len(unique) == 0 || !bytes.Equal(unique[len(unique)-1].bytes, child.bytes) {
+		if len(unique) == 0 || unique[len(unique)-1].key.Compare(child.key) != 0 {
 			unique = append(unique, child)
 		}
 	}
@@ -202,13 +216,14 @@ func normalizeJSON(input ir.Condition) (ir.Condition, error) {
 }
 
 func normalizeRelation(input ir.Condition) (ir.Condition, error) {
-	field, relationID, target, cardinality, child, _ := input.Relation()
+	field, relationID, target, cardinality, _, _ := input.Relation()
 	operator, _ := input.Operator()
 	ownRequirements, _ := input.RelationOwnRequirements()
-	if child == nil {
+	child, present := input.RelationChild()
+	if !present {
 		return ir.NewRelation(input.ModelID(), field, relationID, target, cardinality, operator, nil, ownRequirements)
 	}
-	normalized, err := condition(*child)
+	normalized, err := condition(child)
 	if err != nil {
 		return ir.Condition{}, err
 	}

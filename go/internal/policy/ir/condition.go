@@ -3,6 +3,7 @@ package ir
 import (
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -35,9 +36,6 @@ func (path JSONPath) Segments() []JSONPathSegment {
 }
 func (segment JSONPathSegment) Key() (string, bool)   { return segment.key, !segment.isIndex }
 func (segment JSONPathSegment) Index() (uint64, bool) { return segment.arrayIndex, segment.isIndex }
-func (path JSONPath) clone() JSONPath {
-	return JSONPath{segments: append([]JSONPathSegment(nil), path.segments...)}
-}
 func (path JSONPath) validate() error {
 	for _, segment := range path.segments {
 		if !segment.isIndex && !utf8.ValidString(segment.key) {
@@ -91,12 +89,6 @@ func (operand Operand) JSONNull() (JSONNullKind, bool) {
 	return operand.jsonNull, operand.kind == OperandJSONNull
 }
 func (operand Operand) Validate() error { return operand.validate() }
-func (operand Operand) clone() Operand {
-	copy := operand
-	copy.one = operand.one.clone()
-	copy.many = cloneValues(operand.many)
-	return copy
-}
 func (operand Operand) validate() error {
 	switch operand.kind {
 	case OperandNone:
@@ -157,12 +149,7 @@ func normalizeRequirements(input []Requirement) ([]Requirement, error) {
 			return nil, err
 		}
 	}
-	sort.Slice(output, func(i, j int) bool {
-		if output[i].providers != output[j].providers {
-			return output[i].providers < output[j].providers
-		}
-		return output[i].capability < output[j].capability
-	})
+	sort.Slice(output, func(i, j int) bool { return requirementLess(output[i], output[j]) })
 	unique := output[:0]
 	for _, item := range output {
 		if len(unique) == 0 || unique[len(unique)-1] != item {
@@ -171,25 +158,86 @@ func normalizeRequirements(input []Requirement) ([]Requirement, error) {
 	}
 	return unique, nil
 }
+func requirementLess(left, right Requirement) bool {
+	if left.providers != right.providers {
+		return left.providers < right.providers
+	}
+	return left.capability < right.capability
+}
+func unionRequirements(left, right []Requirement) []Requirement {
+	if len(right) == 0 {
+		return left
+	}
+	if len(left) == 0 {
+		return right
+	}
+	if requirementsCover(left, right) {
+		return left
+	}
+	if requirementsCover(right, left) {
+		return right
+	}
+	merged := make([]Requirement, 0, len(left)+len(right))
+	i, j := 0, 0
+	for i < len(left) && j < len(right) {
+		switch {
+		case left[i] == right[j]:
+			merged = append(merged, left[i])
+			i++
+			j++
+		case requirementLess(left[i], right[j]):
+			merged = append(merged, left[i])
+			i++
+		default:
+			merged = append(merged, right[j])
+			j++
+		}
+	}
+	merged = append(merged, left[i:]...)
+	return append(merged, right[j:]...)
+}
+func requirementsCover(set, subset []Requirement) bool {
+	i := 0
+	for _, item := range subset {
+		for i < len(set) && requirementLess(set[i], item) {
+			i++
+		}
+		if i == len(set) || set[i] != item {
+			return false
+		}
+		i++
+	}
+	return true
+}
+
+type nodeState struct {
+	canonical atomic.Pointer[canonicalParts]
+	normal    atomic.Bool
+}
+
+func (state *nodeState) memo() *nodeState { return state }
 
 type conditionNode interface {
-	conditionNode()
 	kind() ConditionKind
 	modelID() ModelID
-	requirementsCopy() []Requirement
+	requirementSet() []Requirement
+	memo() *nodeState
 }
 type Condition struct{ node conditionNode }
 type constantNode struct {
+	nodeState
 	model ModelID
 	truth bool
 }
 type logicalNode struct {
+	nodeState
 	model        ModelID
 	operator     LogicalOperator
 	children     []Condition
 	requirements []Requirement
 }
 type scalarNode struct {
+	nodeState
 	model        ModelID
 	field        FieldID
 	fieldType    TypeRef
@@ -199,6 +247,7 @@ type scalarNode struct {
 	requirements []Requirement
 }
 type listNode struct {
+	nodeState
 	model        ModelID
 	field        FieldID
 	fieldType    TypeRef
@@ -207,6 +256,7 @@ type listNode struct {
 	requirements []Requirement
 }
 type jsonNode struct {
+	nodeState
 	model        ModelID
 	field        FieldID
 	fieldType    TypeRef
@@ -217,57 +267,42 @@ type jsonNode struct {
 	requirements []Requirement
 }
 type relationNode struct {
+	nodeState
 	model           ModelID
 	field           FieldID
 	relation        RelationID
 	target          ModelID
 	cardinality     RelationCardinality
 	operator        OperatorID
-	child           *Condition
+	child           Condition
 	ownRequirements []Requirement
 	requirements    []Requirement
 }
 
-func (constantNode) conditionNode()                  {}
-func (logicalNode) conditionNode()                   {}
-func (scalarNode) conditionNode()                    {}
-func (listNode) conditionNode()                      {}
-func (jsonNode) conditionNode()                      {}
-func (relationNode) conditionNode()                  {}
-func (constantNode) kind() ConditionKind             { return ConditionConstant }
-func (logicalNode) kind() ConditionKind              { return ConditionLogical }
-func (scalarNode) kind() ConditionKind               { return ConditionScalar }
-func (listNode) kind() ConditionKind                 { return ConditionList }
-func (jsonNode) kind() ConditionKind                 { return ConditionJSON }
-func (relationNode) kind() ConditionKind             { return ConditionRelation }
-func (n constantNode) modelID() ModelID              { return n.model }
-func (n logicalNode) modelID() ModelID               { return n.model }
-func (n scalarNode) modelID() ModelID                { return n.model }
-func (n listNode) modelID() ModelID                  { return n.model }
-func (n jsonNode) modelID() ModelID                  { return n.model }
-func (n relationNode) modelID() ModelID              { return n.model }
-func (constantNode) requirementsCopy() []Requirement { return nil }
-func (n logicalNode) requirementsCopy() []Requirement {
-	return append([]Requirement(nil), n.requirements...)
-}
-func (n scalarNode) requirementsCopy() []Requirement {
-	return append([]Requirement(nil), n.requirements...)
-}
-func (n listNode) requirementsCopy() []Requirement {
-	return append([]Requirement(nil), n.requirements...)
-}
-func (n jsonNode) requirementsCopy() []Requirement {
-	return append([]Requirement(nil), n.requirements...)
-}
-func (n relationNode) requirementsCopy() []Requirement {
-	return append([]Requirement(nil), n.requirements...)
-}
+func (*constantNode) kind() ConditionKind             { return ConditionConstant }
+func (*logicalNode) kind() ConditionKind              { return ConditionLogical }
+func (*scalarNode) kind() ConditionKind               { return ConditionScalar }
+func (*listNode) kind() ConditionKind                 { return ConditionList }
+func (*jsonNode) kind() ConditionKind                 { return ConditionJSON }
+func (*relationNode) kind() ConditionKind             { return ConditionRelation }
+func (n *constantNode) modelID() ModelID              { return n.model }
+func (n *logicalNode) modelID() ModelID               { return n.model }
+func (n *scalarNode) modelID() ModelID                { return n.model }
+func (n *listNode) modelID() ModelID                  { return n.model }
+func (n *jsonNode) modelID() ModelID                  { return n.model }
+func (n *relationNode) modelID() ModelID              { return n.model }
+func (*constantNode) requirementSet() []Requirement   { return nil }
+func (n *logicalNode) requirementSet() []Requirement  { return n.requirements }
+func (n *scalarNode) requirementSet() []Requirement   { return n.requirements }
+func (n *listNode) requirementSet() []Requirement     { return n.requirements }
+func (n *jsonNode) requirementSet() []Requirement     { return n.requirements }
+func (n *relationNode) requirementSet() []Requirement { return n.requirements }
 
 func NewConstant(model ModelID, truth bool) (Condition, error) {
 	if model == (ModelID{}) {
 		return Condition{}, fmt.Errorf("policy IR: condition model ID is zero")
 	}
-	return Condition{node: constantNode{model: model, truth: truth}}, nil
+	return Condition{node: &constantNode{model: model, truth: truth}}, nil
 }
 func NewLogical(model ModelID, operator LogicalOperator, children []Condition) (Condition, error) {
 	if model == (ModelID{}) {
@@ -282,19 +317,18 @@ func NewLogical(model ModelID, operator LogicalOperator, children []Condition) (
 	if operator < LogicalAnd || operator > LogicalNot {
 		return Condition{}, fmt.Errorf("policy IR: invalid logical operator")
 	}
-	copy := cloneConditions(children)
-	requirements := make([]Requirement, 0)
-	for i, child := range copy {
+	var requirements []Requirement
+	for i, child := range children {
 		if err := child.Validate(); err != nil {
 			return Condition{}, fmt.Errorf("policy IR: invalid logical child %d: %w", i, err)
 		}
-		if child.ModelID() != model {
+		if child.node.modelID() != model {
 			return Condition{}, fmt.Errorf("policy IR: logical child model mismatch")
 		}
-		requirements = append(requirements, child.Requirements()...)
+		requirements = unionRequirements(requirements, child.node.requirementSet())
 	}
-	requirements, _ = normalizeRequirements(requirements)
-	return Condition{node: logicalNode{model: model, operator: operator, children: copy, requirements: requirements}}, nil
+	copy := append([]Condition(nil), children...)
+	return Condition{node: &logicalNode{model: model, operator: operator, children: copy, requirements: requirements}}, nil
 }
 func NewScalar(model ModelID, field FieldID, typ TypeRef, operator OperatorID, mode ComparisonMode, operand Operand, requirements []Requirement) (Condition, error) {
 	if err := validateLeaf(model, field, typ, operator, operand); err != nil {
@@ -310,7 +344,7 @@ func NewScalar(model ModelID, field FieldID, typ TypeRef, operator OperatorID, m
 	if err != nil {
 		return Condition{}, err
 	}
-	return Condition{node: scalarNode{model: model, field: field, fieldType: typ.clone(), operator: operator, mode: mode, operand: operand.clone(), requirements: req}}, nil
+	return Condition{node: &scalarNode{model: model, field: field, fieldType: typ, operator: operator, mode: mode, operand: operand, requirements: req}}, nil
 }
 func NewList(model ModelID, field FieldID, typ TypeRef, operator OperatorID, operand Operand, requirements []Requirement) (Condition, error) {
 	if err := validateLeaf(model, field, typ, operator, operand); err != nil {
@@ -323,7 +357,7 @@ func NewList(model ModelID, field FieldID, typ TypeRef, operator OperatorID, ope
 	if err != nil {
 		return Condition{}, err
 	}
-	return Condition{node: listNode{model: model, field: field, fieldType: typ.clone(), operator: operator, operand: operand.clone(), requirements: req}}, nil
+	return Condition{node: &listNode{model: model, field: field, fieldType: typ, operator: operator, operand: operand, requirements: req}}, nil
 }
 func NewJSON(model ModelID, field FieldID, typ TypeRef, operator OperatorID, mode ComparisonMode, path JSONPath, operand Operand, requirements []Requirement) (Condition, error) {
 	if err := validateLeaf(model, field, typ, operator, operand); err != nil {
@@ -342,7 +376,7 @@ func NewJSON(model ModelID, field FieldID, typ TypeRef, operator OperatorID, mod
 	if err != nil {
 		return Condition{}, err
 	}
-	return Condition{node: jsonNode{model: model, field: field, fieldType: typ.clone(), operator: operator, mode: mode, path: path.clone(), operand: operand.clone(), requirements: req}}, nil
+	return Condition{node: &jsonNode{model: model, field: field, fieldType: typ, operator: operator, mode: mode, path: path, operand: operand, requirements: req}}, nil
 }
 func NewRelation(model ModelID, field FieldID, relation RelationID, target ModelID, cardinality RelationCardinality, operator OperatorID, child *Condition, ownRequirements []Requirement) (Condition, error) {
 	if model == (ModelID{}) || field == (FieldID{}) || relation == (RelationID{}) || target == (ModelID{}) || !validOperator(operator) {
@@ -351,28 +385,23 @@ func NewRelation(model ModelID, field FieldID, relation RelationID, target Model
 	if cardinality != RelationToOne && cardinality != RelationToMany {
 		return Condition{}, fmt.Errorf("policy IR: invalid relation cardinality")
 	}
-	var childCopy *Condition
 	owned, err := normalizeRequirements(ownRequirements)
 	if err != nil {
 		return Condition{}, err
 	}
-	requirements := append([]Requirement(nil), owned...)
+	requirements := owned
+	var shared Condition
 	if child != nil {
 		if err := child.Validate(); err != nil {
 			return Condition{}, err
 		}
-		if child.ModelID() != target {
+		if child.node.modelID() != target {
 			return Condition{}, fmt.Errorf("policy IR: relation child model mismatch")
 		}
-		copy := child.clone()
-		childCopy = &copy
-		requirements = append(requirements, child.Requirements()...)
+		shared = *child
+		requirements = unionRequirements(owned, shared.node.requirementSet())
 	}
-	requirements, err = normalizeRequirements(requirements)
-	if err != nil {
-		return Condition{}, err
-	}
-	return Condition{node: relationNode{model: model, field: field, relation: relation, target: target, cardinality: cardinality, operator: operator, child: childCopy, ownRequirements: owned, requirements: requirements}}, nil
+	return Condition{node: &relationNode{model: model, field: field, relation: relation, target: target, cardinality: cardinality, operator: operator, child: shared, ownRequirements: owned, requirements: requirements}}, nil
 }
 func validateLeaf(model ModelID, field FieldID, typ TypeRef, operator OperatorID, operand Operand) error {
 	if model == (ModelID{}) || field == (FieldID{}) || !validOperator(operator) {
@@ -382,6 +411,16 @@ func validateLeaf(model ModelID, field FieldID, typ TypeRef, operator OperatorID
 		return err
 	}
 	return operand.validate()
+}
+
+func SealNormal(condition Condition) Condition {
+	if condition.node != nil {
+		condition.node.memo().normal.Store(true)
+	}
+	return condition
+}
+func IsSealedNormal(condition Condition) bool {
+	return condition.node != nil && condition.node.memo().normal.Load()
 }
 
 func (condition Condition) Kind() ConditionKind {
@@ -400,82 +439,112 @@ func (condition Condition) Requirements() []Requirement {
 	if condition.node == nil {
 		return nil
 	}
-	return condition.node.requirementsCopy()
+	return append([]Requirement(nil), condition.node.requirementSet()...)
 }
 func (condition Condition) Constant() (bool, bool) {
-	node, ok := condition.node.(constantNode)
-	return node.truth, ok
+	node, ok := condition.node.(*constantNode)
+	if !ok {
+		return false, false
+	}
+	return node.truth, true
 }
 func (condition Condition) Logical() (LogicalOperator, []Condition, bool) {
-	node, ok := condition.node.(logicalNode)
+	node, ok := condition.node.(*logicalNode)
 	if !ok {
 		return 0, nil, false
 	}
-	return node.operator, cloneConditions(node.children), true
+	return node.operator, append([]Condition(nil), node.children...), true
+}
+func (condition Condition) LogicalOperator() (LogicalOperator, bool) {
+	node, ok := condition.node.(*logicalNode)
+	if !ok {
+		return 0, false
+	}
+	return node.operator, true
+}
+func (condition Condition) ChildCount() int {
+	node, ok := condition.node.(*logicalNode)
+	if !ok {
+		return 0
+	}
+	return len(node.children)
+}
+func (condition Condition) Child(index int) Condition {
+	return condition.node.(*logicalNode).children[index]
+}
+func (condition Condition) RelationChild() (Condition, bool) {
+	node, ok := condition.node.(*relationNode)
+	if !ok || node.child.node == nil {
+		return Condition{}, false
+	}
+	return node.child, true
 }
 func (condition Condition) Field() (FieldID, bool) {
 	switch node := condition.node.(type) {
-	case scalarNode:
+	case *scalarNode:
 		return node.field, true
-	case listNode:
+	case *listNode:
 		return node.field, true
-	case jsonNode:
+	case *jsonNode:
 		return node.field, true
-	case relationNode:
+	case *relationNode:
 		return node.field, true
 	}
 	return FieldID{}, false
 }
 func (condition Condition) FieldType() (TypeRef, bool) {
 	switch node := condition.node.(type) {
-	case scalarNode:
-		return node.fieldType.clone(), true
-	case listNode:
-		return node.fieldType.clone(), true
-	case jsonNode:
-		return node.fieldType.clone(), true
+	case *scalarNode:
+		return node.fieldType, true
+	case *listNode:
+		return node.fieldType, true
+	case *jsonNode:
+		return node.fieldType, true
 	}
 	return TypeRef{}, false
 }
 func (condition Condition) Operator() (OperatorID, bool) {
 	switch node := condition.node.(type) {
-	case scalarNode:
+	case *scalarNode:
 		return node.operator, true
-	case listNode:
+	case *listNode:
 		return node.operator, true
-	case jsonNode:
+	case *jsonNode:
 		return node.operator, true
-	case relationNode:
+	case *relationNode:
 		return node.operator, true
 	}
 	return 0, false
 }
 func (condition Condition) Mode() (ComparisonMode, bool) {
 	switch node := condition.node.(type) {
-	case scalarNode:
+	case *scalarNode:
 		return node.mode, true
-	case jsonNode:
+	case *jsonNode:
 		return node.mode, true
 	}
 	return 0, false
 }
 func (condition Condition) Operand() (Operand, bool) {
 	switch node := condition.node.(type) {
-	case scalarNode:
-		return node.operand.clone(), true
-	case listNode:
-		return node.operand.clone(), true
-	case jsonNode:
-		return node.operand.clone(), true
+	case *scalarNode:
+		return node.operand, true
+	case *listNode:
+		return node.operand, true
+	case *jsonNode:
+		return node.operand, true
 	}
 	return Operand{}, false
 }
 func (condition Condition) Path() (JSONPath, bool) {
-	node, ok := condition.node.(jsonNode)
-	return node.path.clone(), ok
+	node, ok := condition.node.(*jsonNode)
+	if !ok {
+		return JSONPath{}, false
+	}
+	return node.path, true
 }
 func (condition Condition) Relation() (field FieldID, relation RelationID, target ModelID, cardinality RelationCardinality, child *Condition, ok bool) {
-	node, ok := condition.node.(relationNode)
+	node, ok := condition.node.(*relationNode)
 	if !ok {
 		return
 	}
@@ -483,9 +552,9 @@ func (condition Condition) Relation() (field FieldID, relation RelationID, targe
 	relation = node.relation
 	target = node.target
 	cardinality = node.cardinality
-	if node.child != nil {
-		copy := node.child.clone()
-		child = &copy
+	if node.child.node != nil {
+		shared := node.child
+		child = &shared
 	}
 	return
 }
@@ -495,109 +564,19 @@ func (condition Condition) Relation() (field FieldID, relation RelationID, targe
 // after changing a child without preserving capabilities that belonged only to
 // the previous child.
 func (condition Condition) RelationOwnRequirements() ([]Requirement, bool) {
-	node, ok := condition.node.(relationNode)
+	node, ok := condition.node.(*relationNode)
 	if !ok {
 		return nil, false
 	}
 	return append([]Requirement(nil), node.ownRequirements...), true
-}
-func (condition Condition) clone() Condition {
-	switch node := condition.node.(type) {
-	case constantNode:
-		return Condition{node: node}
-	case logicalNode:
-		node.children = cloneConditions(node.children)
-		node.requirements = append([]Requirement(nil), node.requirements...)
-		return Condition{node: node}
-	case scalarNode:
-		node.fieldType = node.fieldType.clone()
-		node.operand = node.operand.clone()
-		node.requirements = append([]Requirement(nil), node.requirements...)
-		return Condition{node: node}
-	case listNode:
-		node.fieldType = node.fieldType.clone()
-		node.operand = node.operand.clone()
-		node.requirements = append([]Requirement(nil), node.requirements...)
-		return Condition{node: node}
-	case jsonNode:
-		node.fieldType = node.fieldType.clone()
-		node.path = node.path.clone()
-		node.operand = node.operand.clone()
-		node.requirements = append([]Requirement(nil), node.requirements...)
-		return Condition{node: node}
-	case relationNode:
-		if node.child != nil {
-			copy := node.child.clone()
-			node.child = &copy
-		}
-		node.requirements = append([]Requirement(nil), node.requirements...)
-		node.ownRequirements = append([]Requirement(nil), node.ownRequirements...)
-		return Condition{node: node}
-	default:
-		return Condition{}
-	}
-}
-func cloneConditions(input []Condition) []Condition {
-	output := make([]Condition, len(input))
-	for i := range input {
-		output[i] = input[i].clone()
-	}
-	return output
 }
 
 func (condition Condition) Validate() error {
 	if condition.node == nil {
 		return fmt.Errorf("policy IR: zero condition")
 	}
-	switch node := condition.node.(type) {
-	case constantNode:
-		if node.model == (ModelID{}) {
-			return fmt.Errorf("policy IR: zero constant model")
-		}
-	case logicalNode:
-		rebuilt, err := NewLogical(node.model, node.operator, node.children)
-		if err != nil {
-			return err
-		}
-		return requireSameRequirements(node.requirements, rebuilt.Requirements())
-	case scalarNode:
-		rebuilt, err := NewScalar(node.model, node.field, node.fieldType, node.operator, node.mode, node.operand, node.requirements)
-		if err != nil {
-			return err
-		}
-		return requireSameRequirements(node.requirements, rebuilt.Requirements())
-	case listNode:
-		rebuilt, err := NewList(node.model, node.field, node.fieldType, node.operator, node.operand, node.requirements)
-		if err != nil {
-			return err
-		}
-		return requireSameRequirements(node.requirements, rebuilt.Requirements())
-	case jsonNode:
-		rebuilt, err := NewJSON(node.model, node.field, node.fieldType, node.operator, node.mode, node.path, node.operand, node.requirements)
-		if err != nil {
-			return err
-		}
-		return requireSameRequirements(node.requirements, rebuilt.Requirements())
-	case relationNode:
-		rebuilt, err := NewRelation(node.model, node.field, node.relation, node.target, node.cardinality, node.operator, node.child, node.ownRequirements)
-		if err != nil {
-			return err
-		}
-		return requireSameRequirements(node.requirements, rebuilt.Requirements())
-	default:
-		return fmt.Errorf("policy IR: unrecognized condition node")
-	}
-	return nil
-}
-
-func requireSameRequirements(left, right []Requirement) error {
-	if len(left) != len(right) {
-		return fmt.Errorf("policy IR: requirements are not canonical")
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return fmt.Errorf("policy IR: requirements are not sorted and deduplicated")
-		}
+	if condition.node.modelID() == (ModelID{}) {
+		return fmt.Errorf("policy IR: zero constant model")
 	}
 	return nil
 }
@@ -606,7 +585,7 @@ type Rule struct {
 	action    Action
 	effect    Effect
 	model     ModelID
-	condition *Condition
+	condition Condition
 	fields    []FieldID
 	position  uint32
 }
@@ -619,7 +598,9 @@ func NewModelRule(action Action, effect Effect, model ModelID, condition *Condit
 	return newRule(action, effect, model, condition, nil, true, position)
 }
 func NewFieldRule(action Action, effect Effect, model ModelID, condition *Condition, first FieldID, rest []FieldID, position uint32) (Rule, error) {
-	fields := append([]FieldID{first}, rest...)
+	fields := make([]FieldID, 0, len(rest)+1)
+	fields = append(fields, first)
+	fields = append(fields, rest...)
 	return newRule(action, effect, model, condition, fields, false, position)
 }
 func newRule(action Action, effect Effect, model ModelID, condition *Condition, fields []FieldID, modelWide bool, position uint32) (Rule, error) {
@@ -630,8 +611,7 @@ func newRule(action Action, effect Effect, model ModelID, condition *Condition, 
 		return Rule{}, fmt.Errorf("policy IR: invalid field-scoped rule")
 	}
 	seen := map[FieldID]struct{}{}
-	copyFields := append([]FieldID(nil), fields...)
-	for _, field := range copyFields {
+	for _, field := range fields {
 		if field == (FieldID{}) {
 			return Rule{}, fmt.Errorf("policy IR: zero field ID")
 		}
@@ -640,40 +620,30 @@ func newRule(action Action, effect Effect, model ModelID, condition *Condition, 
 		}
 		seen[field] = struct{}{}
 	}
-	var copyCondition *Condition
+	var shared Condition
 	if condition != nil {
 		if err := condition.Validate(); err != nil {
 			return Rule{}, err
 		}
-		if condition.ModelID() != model {
+		if condition.node.modelID() != model {
 			return Rule{}, fmt.Errorf("policy IR: rule condition model mismatch")
 		}
-		copy := condition.clone()
-		copyCondition = &copy
+		shared = *condition
 	}
-	return Rule{action: action, effect: effect, model: model, condition: copyCondition, fields: copyFields, position: position}, nil
+	return Rule{action: action, effect: effect, model: model, condition: shared, fields: fields, position: position}, nil
 }
 func (rule Rule) Action() Action   { return rule.action }
 func (rule Rule) Effect() Effect   { return rule.effect }
 func (rule Rule) ModelID() ModelID { return rule.model }
 func (rule Rule) Position() uint32 { return rule.position }
 func (rule Rule) Condition() (Condition, bool) {
-	if rule.condition == nil {
+	if rule.condition.node == nil {
 		return Condition{}, false
 	}
-	return rule.condition.clone(), true
+	return rule.condition, true
 }
 func (rule Rule) Fields() (fields []FieldID, modelWide bool) {
 	return append([]FieldID(nil), rule.fields...), rule.fields == nil
-}
-func (rule Rule) clone() Rule {
-	copy := rule
-	copy.fields = append([]FieldID(nil), rule.fields...)
-	if rule.condition != nil {
-		condition := rule.condition.clone()
-		copy.condition = &condition
-	}
-	return copy
 }
 func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
 	if model == (ModelID{}) {
@@ -681,33 +651,19 @@ func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
 	}
 	copy := make([]Rule, len(rules))
 	for i, rule := range rules {
-		if err := rule.validate(); err != nil {
-			return Policy{}, fmt.Errorf("policy IR: invalid rule %d: %w", i, err)
-		}
 		if rule.model != model || rule.position != uint32(i) {
 			return Policy{}, fmt.Errorf("policy IR: rule %d model or position mismatch", i)
 		}
-		copy[i] = rule.clone()
+		copy[i] = rule
 	}
 	return Policy{model: model, rules: copy}, nil
 }
 
-func (rule Rule) validate() error {
-	if rule.fields == nil {
-		_, err := NewModelRule(rule.action, rule.effect, rule.model, rule.condition, rule.position)
-		return err
-	}
-	if len(rule.fields) == 0 {
-		return fmt.Errorf("field-scoped rule has no fields")
-	}
-	_, err := NewFieldRule(rule.action, rule.effect, rule.model, rule.condition, rule.fields[0], rule.fields[1:], rule.position)
-	return err
-}
 func (policy Policy) ModelID() ModelID { return policy.model }
 func (policy Policy) Rules() []Rule {
 	output := make([]Rule, len(policy.rules))
-	for i := range policy.rules {
-		output[i] = policy.rules[i].clone()
-	}
+	copy(output, policy.rules)
 	return output
 }
+func (policy Policy) RuleCount() int        { return len(policy.rules) }
+func (policy Policy) RuleAt(index int) Rule { return policy.rules[index] }
