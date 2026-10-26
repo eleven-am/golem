@@ -107,17 +107,30 @@ func mergeOperationPolicy(base FrozenPolicy, operation frozenOperationRules) (Fr
 type GeneratedOperation struct {
 	reference   operationReference
 	extensionID string
+	kind        generatedOperationKind
 }
+
+type generatedOperationKind uint8
+
+const (
+	generatedCustomMutation generatedOperationKind = iota + 1
+	generatedTxOperation
+)
 
 // GeneratedCustomMutationOperation registers resolver as the custom mutation
 // with the given contract extension identity.
 func GeneratedCustomMutationOperation[R any](extensionID string, resolver R) GeneratedOperation {
-	return GeneratedOperation{reference: operationReferenceOf(resolver), extensionID: extensionID}
+	return GeneratedOperation{reference: operationReferenceOf(resolver), extensionID: extensionID, kind: generatedCustomMutation}
+}
+
+func GeneratedTxOperation[O any](extensionID string, operation O) GeneratedOperation {
+	return GeneratedOperation{reference: operationReferenceOf(operation), extensionID: extensionID, kind: generatedTxOperation}
 }
 
 type generatedOperation struct {
 	name        string
 	extensionID string
+	kind        generatedOperationKind
 }
 
 // GeneratedApplicationOperations attaches the generated custom mutation table
@@ -133,6 +146,9 @@ func GeneratedApplicationOperations[A any](bindings ApplicationBindings[A], oper
 		if operation.reference.entry == 0 || operation.extensionID == "" {
 			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: operation %d has no resolver function or extension identity", index)
 		}
+		if operation.kind != generatedCustomMutation && operation.kind != generatedTxOperation {
+			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: operation %d has no operation kind", index)
+		}
 		if _, duplicate := table[operation.reference.entry]; duplicate {
 			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: resolver %s is registered twice", operation.reference.name)
 		}
@@ -140,7 +156,7 @@ func GeneratedApplicationOperations[A any](bindings ApplicationBindings[A], oper
 			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: extension %s is registered twice", operation.extensionID)
 		}
 		identities[operation.extensionID] = struct{}{}
-		table[operation.reference.entry] = generatedOperation{name: operation.reference.name, extensionID: operation.extensionID}
+		table[operation.reference.entry] = generatedOperation{name: operation.reference.name, extensionID: operation.extensionID, kind: operation.kind}
 	}
 	result := bindings
 	result.packages = append([]PackageBindings[A](nil), bindings.packages...)
@@ -151,11 +167,19 @@ func GeneratedApplicationOperations[A any](bindings ApplicationBindings[A], oper
 // Operation reports the identity of resolver when it is a generated custom
 // mutation of these bindings.
 func (bindings ApplicationBindings[A]) Operation(resolver any) (OperationID, bool) {
+	return bindings.operationOfKind(resolver, generatedCustomMutation)
+}
+
+func (bindings ApplicationBindings[A]) TxOperation(operation any) (OperationID, bool) {
+	return bindings.operationOfKind(operation, generatedTxOperation)
+}
+
+func (bindings ApplicationBindings[A]) operationOfKind(resolver any, kind generatedOperationKind) (OperationID, bool) {
 	reference := operationReferenceOf(resolver)
 	if reference.entry == 0 {
 		return OperationID{}, false
 	}
-	if _, ok := bindings.operations[reference.entry]; !ok {
+	if registered, ok := bindings.operations[reference.entry]; !ok || registered.kind != kind {
 		return OperationID{}, false
 	}
 	return OperationID{entry: reference.entry}, true
@@ -200,7 +224,7 @@ func buildOperationPolicies[A any](bindings ApplicationBindings[A], policies []F
 	for _, policy := range policies {
 		for _, operation := range policy.operations {
 			if _, registered := bindings.operations[operation.reference.entry]; operation.reference.entry == 0 || !registered {
-				return nil, fmt.Errorf("generated policy set: model %x grants Within(%s), which is not a generated custom mutation resolver", policy.model, operation.reference.name)
+				return nil, fmt.Errorf("generated policy set: model %x grants Within(%s), which is not a generated custom mutation or transaction operation", policy.model, operation.reference.name)
 			}
 			merged, err := mergeOperationPolicy(policy, operation)
 			if err != nil {

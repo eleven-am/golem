@@ -41,6 +41,24 @@ type executionBinding struct {
 	serving         atomic.Bool
 	calls           usageGate
 	locks           *rowlock.Ledger
+	releaseMu       sync.Mutex
+	releases        []func()
+}
+
+func (binding *executionBinding) releaseAfterTransaction(release func()) {
+	binding.releaseMu.Lock()
+	defer binding.releaseMu.Unlock()
+	binding.releases = append(binding.releases, release)
+}
+
+func (binding *executionBinding) releaseOperations() {
+	binding.releaseMu.Lock()
+	releases := binding.releases
+	binding.releases = nil
+	binding.releaseMu.Unlock()
+	for _, release := range releases {
+		release()
+	}
 }
 
 func (binding *executionBinding) queueEnqueued(wake func()) {
@@ -261,6 +279,7 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 // the App database nor the underlying sqlx transaction.
 type CallerTx[P, A any] struct {
 	caller *Caller[P, A]
+	scope  *usageGate
 }
 
 // SystemTx is the opaque unrestricted transaction capability used by
@@ -392,6 +411,7 @@ func observeSystemEscape[P, A any](app *App[P, A], execution *executionBinding) 
 
 func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, callback func() error) (err error) {
 	defer binding.close()
+	defer binding.releaseOperations()
 	defer undoOnPanic(func() {
 		binding.discardMutation()
 		_ = transaction.Rollback()

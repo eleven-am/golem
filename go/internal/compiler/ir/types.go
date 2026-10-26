@@ -656,6 +656,7 @@ type ContractIR struct {
 	Enums             []EnumContractIR            `json:"enums"`
 	Methods           []AttachedMethodIR          `json:"methods"`
 	CustomOperations  []CustomOperationContractIR `json:"customOperations"`
+	TxOperations      []TxOperationContractIR     `json:"txOperations,omitempty"`
 }
 
 type ModelContractIR struct {
@@ -897,6 +898,12 @@ type CustomOperationContractIR struct {
 	Result      GraphQLTypeIR               `json:"result"`
 	Resolver    AttachedMethodIR            `json:"resolver"`
 	Capability  CustomOperationCapability   `json:"capability"`
+}
+
+type TxOperationContractIR struct {
+	ExtensionID ExtensionID      `json:"extensionId"`
+	Name        string           `json:"name"`
+	Operation   AttachedMethodIR `json:"operation"`
 }
 
 type AttachedMethodIR struct {

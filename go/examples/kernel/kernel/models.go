@@ -48,6 +48,7 @@ func (Note) DefinePolicy(rules *golem.Rules[Note], actor Actor) {
 	rules.CanCreate(owned)
 	rules.CanDelete(owned)
 	golem.Within(rules, ArchiveNotes).CanUpdateFields(owned, Notes.Archived)
+	golem.Within(rules, RetitleNote).CanUpdateFields(owned, Notes.Title)
 }
 
 type ArchiveNotesArgs struct {
@@ -60,4 +61,22 @@ func DefineGraphQL(graphql *golem.GraphQLSchema) {
 
 func ArchiveNotes(ctx context.Context, caller *Caller[Principal], arguments ArchiveNotesArgs) (int64, error) {
 	return caller.Notes.UpdateMany(ctx, Notes.Title.Eq(arguments.Title), Notes.UpdateMany(Notes.Archived.Set(true)))
+}
+
+type RetitleNoteArgs struct {
+	ID    golem.UUID
+	Title string
+}
+
+func DefineOperations(operations *golem.Operations) {
+	golem.TxOperation(operations, "retitleNote", RetitleNote)
+}
+
+func RetitleNote(ctx context.Context, tx *CallerTx[Principal], arguments RetitleNoteArgs) (string, error) {
+	updated, err := tx.Notes.Update(ctx, Notes.ByID.Value(arguments.ID), Notes.Update(Notes.Title.Set(arguments.Title)), Notes.Select(Notes.Title))
+	if err != nil {
+		return "", err
+	}
+	title, _ := golem.Value(updated, Notes.Title).Get()
+	return title, nil
 }

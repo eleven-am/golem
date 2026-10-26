@@ -111,6 +111,7 @@ const (
 	OperationMutationDisconnect        Operation = "mutation.disconnect"
 	OperationMutationSetRelation       Operation = "mutation.set_relation"
 	OperationMutationCustom            Operation = "mutation.custom"
+	OperationMutationOperation         Operation = "mutation.operation"
 	OperationGraphQLRequest            Operation = "graphql.request"
 	OperationGraphQLQuery              Operation = "graphql.query"
 	OperationGraphQLMutation           Operation = "graphql.mutation"
@@ -285,7 +286,7 @@ func validOperation(value Operation) bool {
 		OperationReadCount, OperationMutationCreate, OperationMutationUpdate, OperationMutationUpsert,
 		OperationMutationDelete, OperationMutationUpdateMany, OperationMutationDeleteMany,
 		OperationMutationConnect, OperationMutationDisconnect, OperationMutationSetRelation, OperationMutationCustom,
-		OperationGraphQLRequest, OperationGraphQLQuery, OperationGraphQLMutation, OperationGraphQLSubscription,
+		OperationMutationOperation, OperationGraphQLRequest, OperationGraphQLQuery, OperationGraphQLMutation, OperationGraphQLSubscription,
 		OperationGraphQLCustomQuery, OperationGraphQLCustomMutation, OperationGraphQLComputed,
 		OperationGraphQLBatchedComputed, OperationAnalyticsAggregate, OperationAnalyticsGroupBy,
 		OperationAnalyticsRelationGroupBy, OperationScopedRead, OperationCallerTransaction,
