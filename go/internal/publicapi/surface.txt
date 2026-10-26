@@ -1885,6 +1885,7 @@ golem.BatchResult comparable
 golem.BatchResult type struct
 golem.BatchedComputedField func[M any, K comparable, Loader any](*GraphQLModel[M], string, GraphQLResultType, ScalarColumn[M, K], Loader, uint32, ...ComputedOption[M])
 golem.BatchedComputedFieldWithCacheKey func[M any, K comparable, Loader any](*GraphQLModel[M], string, GraphQLResultType, ScalarColumn[M, K], Loader, func(K) (string, error), uint32, ...ComputedOption[M])
+golem.BuildGeneratedModelPolicy func[A any](ApplicationBindings[A], ModelID, A) (FrozenPolicy, map[OperationID]FrozenPolicy, error)
 golem.BuildGeneratedPolicySet func[A any](ApplicationBindings[A], A) (GeneratedPolicySet, error)
 golem.BytesField[M any] type struct
 golem.CanonicalJSON func(JSONValue) ([]uint8, error)
@@ -3217,6 +3218,7 @@ golem.UpdateManyInput[M any] type struct
 golem.UpdateManyValue[M any] type interface {} sealed
 golem.UpdateValue[M any] type interface {} sealed
 golem.Upper func[M any, V ~string](SchemaValue[M, V]) SchemaExpr[M, V]
+golem.ValidateGeneratedPolicyBindings func[A any](ApplicationBindings[A]) ([]ModelID, error)
 golem.Value func[M any, V any](Row[M], ScalarColumn[M, V]) ReadValue[V]
 golem.Via func[M any, R any, V any](ToOneRelation[M, R], RelationDimensionPath[R, V]) RelationDimensionPath[M, V]
 golem.Virtual const GeneratedStorage = "virtual"
@@ -4174,6 +4176,7 @@ runtime.(*App).EventCapabilities func() events.Capabilities
 runtime.(*App).EventLimits func() events.Limits
 runtime.(*App).EventOperator func() events.Operator
 runtime.(*App).ForPrincipal func(context.Context, P) (*Caller[P, A], error)
+runtime.(*App).InvalidatePolicies func()
 runtime.(*App).QueueOperator func() queue.Operator
 runtime.(*App).RefreshSemanticIndex func(context.Context, golem.ModelID, string) error
 runtime.(*App).RefreshSemanticIndexes func(context.Context) error
@@ -4273,7 +4276,7 @@ runtime.CallerUpdateVersioned func[P any, A any, M any](context.Context, *Caller
 runtime.CallerUpsert func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerUpsertVersioned func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.ConcurrencyExpectation, golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.Caller[P any, A any] type struct
-runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue}
+runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue, PolicyCache, PolicyCacheKey}
 runtime.Config.AfterCommitError field func(context.Context, golem.AfterCommitFailure)
 runtime.Config.AnalyticsLimits field AnalyticsLimits
 runtime.Config.AuditPrincipal field func(P) string
@@ -4290,6 +4293,8 @@ runtime.Config.EventTransport field events.EventTransport
 runtime.Config.HistoricalEventBundles field []golem.SchemaBundle
 runtime.Config.MutationLimits field MutationLimits
 runtime.Config.Observer field observe.Observer
+runtime.Config.PolicyCache field PolicyCacheConfig
+runtime.Config.PolicyCacheKey field func(A) (string, bool)
 runtime.Config.Queue field *QueueConfig
 runtime.Config.ReadLimits field ReadLimits
 runtime.Config.ReportEventOperator field events.OperatorAudit
@@ -4325,6 +4330,12 @@ runtime.MutationLimits.MaxUpsertAttempts field int
 runtime.NewCallerMutationExecution func[P any, A any](*Caller[P, A], ...CallerMutationModelAdapter[P, A]) (*CallerMutationExecution[P, A], error)
 runtime.Open func[P any, A any](context.Context, Config[P, A]) (*App[P, A], error)
 runtime.PackageEventFactories type struct
+runtime.PolicyCacheConfig comparable
+runtime.PolicyCacheConfig type struct
+runtime.PolicyCacheConfig unkeyed literal {Disabled, MaxActors, TTL}
+runtime.PolicyCacheConfig.Disabled field bool
+runtime.PolicyCacheConfig.MaxActors field int
+runtime.PolicyCacheConfig.TTL field time.Duration
 runtime.PreparedRead type struct
 runtime.QueueConfig type struct
 runtime.QueueConfig unkeyed literal {Registry, Limits, Resources, SemanticReconcileInterval}

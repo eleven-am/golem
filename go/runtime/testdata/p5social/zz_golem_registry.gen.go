@@ -65,6 +65,8 @@ type Config[P any] struct {
 	ResolvePrincipal       func(context.Context, P) (Actor, error)
 	SnapshotPrincipal      func(P) (P, error)
 	SnapshotActor          func(Actor) (Actor, error)
+	PolicyCache            golemruntime.PolicyCacheConfig
+	PolicyCacheKey         func(Actor) (string, bool)
 }
 
 type App[P any] struct {
@@ -1255,6 +1257,8 @@ func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemr
 	engineConfig.ResolvePrincipal = config.ResolvePrincipal
 	engineConfig.SnapshotPrincipal = config.SnapshotPrincipal
 	engineConfig.SnapshotActor = config.SnapshotActor
+	engineConfig.PolicyCache = config.PolicyCache
+	engineConfig.PolicyCacheKey = config.PolicyCacheKey
 	engine, err := golemruntime.Open(ctx, engineConfig)
 	if err != nil {
 		return nil, err
@@ -1309,6 +1313,12 @@ func (app *App[P]) EventLimits() events.Limits {
 		return events.Limits{}
 	}
 	return app.runtime.EventLimits()
+}
+func (app *App[P]) InvalidatePolicies() {
+	if app == nil {
+		return
+	}
+	app.runtime.InvalidatePolicies()
 }
 
 func (app *App[P]) ForPrincipal(ctx context.Context, principal P) (*Caller[P], error) {

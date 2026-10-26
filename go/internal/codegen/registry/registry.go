@@ -349,7 +349,8 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	fmt.Fprintf(source, "\tReportScopedQuery func(%s.Context, %s.ScopedAuditRecord)\n", contextAlias, golemAlias)
 	fmt.Fprintf(source, "\tResolvePrincipal func(%s.Context, P) (%s, error)\n", contextAlias, actorType)
 	source.WriteString("\tSnapshotPrincipal func(P) (P, error)\n")
-	fmt.Fprintf(source, "\tSnapshotActor func(%s) (%s, error)\n}\n", actorType, actorType)
+	fmt.Fprintf(source, "\tSnapshotActor func(%s) (%s, error)\n", actorType, actorType)
+	fmt.Fprintf(source, "\tPolicyCache %s.PolicyCacheConfig\n\tPolicyCacheKey func(%s) (string, bool)\n}\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s]; observer %s.Observer; provider %s.Provider }\n", runtimeAlias, actorType, observeAlias, golemAlias)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
@@ -485,6 +486,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	source.WriteString("\tengineConfig.CDCAdapters = config.CDCAdapters\n\tengineConfig.ReportEventOperator = config.ReportEventOperator\n\tengineConfig.HistoricalEventBundles = config.HistoricalEventBundles\n")
 	source.WriteString("\tengineConfig.AfterCommitError = config.AfterCommitError\n\tengineConfig.AuditPrincipal = config.AuditPrincipal\n\tengineConfig.ReportScopedQuery = config.ReportScopedQuery\n")
 	source.WriteString("\tengineConfig.ResolvePrincipal = config.ResolvePrincipal\n\tengineConfig.SnapshotPrincipal = config.SnapshotPrincipal\n\tengineConfig.SnapshotActor = config.SnapshotActor\n")
+	source.WriteString("\tengineConfig.PolicyCache = config.PolicyCache\n\tengineConfig.PolicyCacheKey = config.PolicyCacheKey\n")
 	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, engineConfig)\n", runtimeAlias)
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine, observer: config.Observer, provider: config.Database.Provider()}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)
@@ -495,6 +497,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	fmt.Fprintf(source, "func (app *App[P]) EventCapabilities() %s.Capabilities { if app == nil { return %s.Capabilities{} }; return app.runtime.EventCapabilities() }\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventOperator() %s.Operator { if app == nil { return nil }; return app.runtime.EventOperator() }\n", eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventLimits() %s.Limits { if app == nil { return %s.Limits{} }; return app.runtime.EventLimits() }\n", eventsAlias, eventsAlias)
+	source.WriteString("func (app *App[P]) InvalidatePolicies() { if app == nil { return }; app.runtime.InvalidatePolicies() }\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) ForPrincipal(ctx %s.Context, principal P) (*Caller[P], error) {\n\tinner, err := app.runtime.ForPrincipal(ctx, principal)\n\tif err != nil { return nil, err }\n\tresult := &Caller[P]{runtime: inner}\n", contextAlias)
 	for _, model := range models {
 		fmt.Fprintf(source, "\tresult.%s = Caller%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)

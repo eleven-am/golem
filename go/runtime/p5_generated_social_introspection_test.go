@@ -67,7 +67,7 @@ func TestGeneratedSocialMetaOnlyOperationsResolveThePrincipalWithoutPolicyOrSQL(
 			}
 			probe := p5social.PolicyProbe()
 			sort.Strings(probe)
-			if !reflect.DeepEqual(probe, []string{"Comment", "Friendship", "Post", "PostTag", "Tag", "User"}) {
+			if !reflect.DeepEqual(probe, []string{"User"}) {
 				t.Fatalf("mixed policy trace=%v", probe)
 			}
 			if h.resolutions.Load() != 1 || len(h.trace.snapshot()) == 0 {

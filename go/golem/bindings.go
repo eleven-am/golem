@@ -765,30 +765,11 @@ func (set GeneratedPolicySet) Policies() []FrozenPolicy {
 // BuildGeneratedPolicySet invokes every generated policy factory exactly once
 // for this call. No result is cached in package, application, or engine state.
 func BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (GeneratedPolicySet, error) {
-	if bindings.generation == (SchemaDigest{}) {
-		return GeneratedPolicySet{}, fmt.Errorf("generated policy set: application bindings are unstamped")
+	models, err := validateGeneratedPolicyGraph(bindings)
+	if err != nil {
+		return GeneratedPolicySet{}, err
 	}
-	// Validate the complete static graph before executing any application code.
-	// This keeps malformed generated artifacts from producing a partially
-	// observed execution where an earlier factory ran before a later duplicate,
-	// missing factory, or generation mismatch was discovered.
-	seen := make(map[ModelID]struct{})
-	for packageIndex, pkg := range bindings.packages {
-		if pkg.generation != bindings.generation {
-			return GeneratedPolicySet{}, fmt.Errorf("generated policy set: package %d generation mismatch", packageIndex)
-		}
-		for bindingIndex, binding := range pkg.policies {
-			if binding.model == (ModelID{}) || binding.build == nil {
-				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: package %d binding %d is incomplete", packageIndex, bindingIndex)
-			}
-			if _, duplicate := seen[binding.model]; duplicate {
-				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: duplicate policy binding for model %x", binding.model)
-			}
-			seen[binding.model] = struct{}{}
-		}
-	}
-
-	policies := make([]FrozenPolicy, 0, len(seen))
+	policies := make([]FrozenPolicy, 0, len(models))
 	for _, pkg := range bindings.packages {
 		for _, binding := range pkg.policies {
 			policy, err := binding.build(actor)
@@ -806,6 +787,64 @@ func BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (G
 		return GeneratedPolicySet{}, err
 	}
 	return GeneratedPolicySet{generation: bindings.generation, policies: policies, operations: operations}, nil
+}
+
+func ValidateGeneratedPolicyBindings[A any](bindings ApplicationBindings[A]) ([]ModelID, error) {
+	return validateGeneratedPolicyGraph(bindings)
+}
+
+func BuildGeneratedModelPolicy[A any](bindings ApplicationBindings[A], model ModelID, actor A) (FrozenPolicy, map[OperationID]FrozenPolicy, error) {
+	if _, err := validateGeneratedPolicyGraph(bindings); err != nil {
+		return FrozenPolicy{}, nil, err
+	}
+	for _, pkg := range bindings.packages {
+		for _, binding := range pkg.policies {
+			if binding.model != model {
+				continue
+			}
+			policy, err := binding.build(actor)
+			if err != nil {
+				return FrozenPolicy{}, nil, fmt.Errorf("generated policy set: model %x factory: %w", binding.model, err)
+			}
+			if policy.View().ModelID() != binding.model {
+				return FrozenPolicy{}, nil, fmt.Errorf("generated policy set: model %x factory returned policy for %x", binding.model, policy.View().ModelID())
+			}
+			grouped, err := buildOperationPolicies(bindings, []FrozenPolicy{policy})
+			if err != nil {
+				return FrozenPolicy{}, nil, err
+			}
+			operations := make(map[OperationID]FrozenPolicy, len(grouped))
+			for operation, merged := range grouped {
+				operations[operation] = merged[0]
+			}
+			return policy, operations, nil
+		}
+	}
+	return FrozenPolicy{}, nil, fmt.Errorf("generated policy set: model %x has no policy binding", model)
+}
+
+func validateGeneratedPolicyGraph[A any](bindings ApplicationBindings[A]) ([]ModelID, error) {
+	if bindings.generation == (SchemaDigest{}) {
+		return nil, fmt.Errorf("generated policy set: application bindings are unstamped")
+	}
+	seen := make(map[ModelID]struct{})
+	models := make([]ModelID, 0)
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return nil, fmt.Errorf("generated policy set: package %d generation mismatch", packageIndex)
+		}
+		for bindingIndex, binding := range pkg.policies {
+			if binding.model == (ModelID{}) || binding.build == nil {
+				return nil, fmt.Errorf("generated policy set: package %d binding %d is incomplete", packageIndex, bindingIndex)
+			}
+			if _, duplicate := seen[binding.model]; duplicate {
+				return nil, fmt.Errorf("generated policy set: duplicate policy binding for model %x", binding.model)
+			}
+			seen[binding.model] = struct{}{}
+			models = append(models, binding.model)
+		}
+	}
+	return models, nil
 }
 
 type generatedBindingError string

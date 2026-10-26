@@ -225,3 +225,52 @@ func TestOperationRulesOfferOnlyWriteGrants(t *testing.T) {
 	var _ func(Predicate[bindingModel], Field[bindingModel], ...Field[bindingModel]) = rules.CanCreateFields
 	var _ func(Predicate[bindingModel], Field[bindingModel], ...Field[bindingModel]) = rules.CanUpdateFields
 }
+
+func TestBuildGeneratedModelPolicyMatchesTheFullSetForOneModel(t *testing.T) {
+	field := GeneratedEqualField[bindingModel, bool](operationFieldID)
+	calls := 0
+	factory := func(bindingActor) (FrozenPolicy, error) {
+		calls++
+		rules := NewRules[bindingModel]()
+		rules.CanRead(All[bindingModel]())
+		Within(rules, operationCreateResolver).CanCreate(field.Eq(true))
+		Within(rules, operationOtherResolver).CanDelete(All[bindingModel]())
+		return rules.Freeze(operationModelID)
+	}
+	application := operationBindings(t, factory, operationRegistrations()...)
+	models, err := ValidateGeneratedPolicyBindings(application)
+	if err != nil || len(models) != 1 || models[0] != operationModelID || calls != 0 {
+		t.Fatalf("validation models=%v calls=%d error=%v", models, calls, err)
+	}
+	full, err := BuildGeneratedPolicySet(application, bindingActor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, operations, err := BuildGeneratedModelPolicy(application, operationModelID, bindingActor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(policy.CanonicalBytes(), full.Policies()[0].CanonicalBytes()) || len(operations) != len(full.Operations()) {
+		t.Fatalf("per-model build differs from the full set: operations=%d", len(operations))
+	}
+	for _, operation := range full.Operations() {
+		scoped, ok := operations[operation]
+		if !ok || !bytes.Equal(scoped.CanonicalBytes(), full.OperationPolicies(operation)[0].CanonicalBytes()) {
+			t.Fatalf("operation %v policy differs from the full set", operation)
+		}
+	}
+	if _, _, err := BuildGeneratedModelPolicy(application, ModelID{0xee}, bindingActor{}); err == nil || !strings.Contains(err.Error(), "no policy binding") {
+		t.Fatalf("unknown model error=%v", err)
+	}
+	unregistered := func(bindingActor) (FrozenPolicy, error) {
+		rules := NewRules[bindingModel]()
+		Within(rules, operationUnregisteredResolver).CanCreate(All[bindingModel]())
+		return rules.Freeze(operationModelID)
+	}
+	if _, _, err := BuildGeneratedModelPolicy(operationBindings(t, unregistered, operationRegistrations()...), operationModelID, bindingActor{}); err == nil || !strings.Contains(err.Error(), "operationUnregisteredResolver") {
+		t.Fatalf("unregistered Within error=%v", err)
+	}
+	if _, err := ValidateGeneratedPolicyBindings(ApplicationBindings[bindingActor]{}); err == nil {
+		t.Fatal("unstamped bindings validated")
+	}
+}

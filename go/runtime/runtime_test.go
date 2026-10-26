@@ -114,8 +114,8 @@ func TestOpenCreatesIsolatedCallerAndExplicitSystemExecutions(t *testing.T) {
 		}(index)
 	}
 	wait.Wait()
-	if policyBuilds.Load() != executions*2 {
-		t.Fatalf("policy builds=%d want=%d", policyBuilds.Load(), executions*2)
+	if policyBuilds.Load() != 2 {
+		t.Fatalf("policy builds=%d want one user policy per distinct actor", policyBuilds.Load())
 	}
 
 	systemPrepared, err := app.System().Prepare(request)
