@@ -41,6 +41,7 @@ type Result struct {
 	Packages            []modelcodegen.PackageSpec `json:"-"`
 	ModulePath          string                     `json:"-"`
 	ModuleDir           string                     `json:"-"`
+	GraphQL             bool                       `json:"-"`
 	Diagnostics         []ir.Diagnostic            `json:"diagnostics"`
 }
 
@@ -91,7 +92,7 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		if hasErrors(retried.Diagnostics) || retried.Compilation == nil {
 			return retried
 		}
-		stable, err := sameSurface(*candidate, *retried.Compilation, retried.Packages)
+		stable, err := sameSurface(*candidate, *retried.Compilation, retried.Packages, raw.Root.WithoutGraphQL)
 		if err != nil {
 			return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span)}}
 		}
@@ -175,6 +176,9 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, analyticscontract.Normalize(&resolved.Compilation, interpreted.AnalyticsModels)...)
 	}
+	if !hasErrors(diagnostics) && raw.Root.WithoutGraphQL {
+		diagnostics = append(diagnostics, disabledGraphQLExtensions(interpreted)...)
+	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, interpreted.GraphQLModels)...)
 	}
@@ -206,7 +210,7 @@ func methodBootstrap(raw ir.RawDeclIR, compilation ir.CompilationIR, specs []mod
 		if !appFound {
 			return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", compilation.Model.Schema.PackagePath), raw.Root.Span)}
 		}
-		bootstrap, err := surface.Emit(surface.Request{Compilation: *surfaceFrom, Packages: specs, AppPackage: appPackage})
+		bootstrap, err := surface.Emit(surface.Request{Compilation: *surfaceFrom, Packages: specs, AppPackage: appPackage, WithoutGraphQL: raw.Root.WithoutGraphQL})
 		if err != nil {
 			return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span)}
 		}
@@ -245,13 +249,13 @@ func methodBootstrap(raw ir.RawDeclIR, compilation ir.CompilationIR, specs []mod
 	return bootstrap, diagnostics
 }
 
-func sameSurface(left, right ir.CompilationIR, specs []modelcodegen.PackageSpec) (bool, error) {
+func sameSurface(left, right ir.CompilationIR, specs []modelcodegen.PackageSpec, withoutGraphQL bool) (bool, error) {
 	emit := func(compilation ir.CompilationIR) (modelcodegen.Result, error) {
 		appPackage, found := packageSpec(specs, compilation.Model.Schema.PackagePath)
 		if !found {
 			return modelcodegen.Result{}, fmt.Errorf("schema-root application package %q is unavailable", compilation.Model.Schema.PackagePath)
 		}
-		return surface.Emit(surface.Request{Compilation: compilation, Packages: specs, AppPackage: appPackage})
+		return surface.Emit(surface.Request{Compilation: compilation, Packages: specs, AppPackage: appPackage, WithoutGraphQL: withoutGraphQL})
 	}
 	first, err := emit(left)
 	if err != nil {
@@ -359,7 +363,7 @@ func CompileRawWithPrevious(raw ir.RawDeclIR, previous *ir.ModelIR) Result {
 	if err != nil {
 		return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_CONTRACT_FINGERPRINT_FAILED", err.Error(), raw.Root.Span)}}
 	}
-	return Result{Compilation: &compilation, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, Diagnostics: []ir.Diagnostic{}}
+	return Result{Compilation: &compilation, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, GraphQL: !raw.Root.WithoutGraphQL, Diagnostics: []ir.Diagnostic{}}
 }
 
 func finish(raw ir.RawDeclIR, compilation ir.CompilationIR, diagnostics []ir.Diagnostic) Result {
@@ -382,7 +386,20 @@ func finish(raw ir.RawDeclIR, compilation ir.CompilationIR, diagnostics []ir.Dia
 	if err != nil {
 		return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_CONTRACT_FINGERPRINT_FAILED", err.Error(), raw.Root.Span)}}
 	}
-	return Result{Compilation: &canonical, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, Diagnostics: []ir.Diagnostic{}}
+	return Result{Compilation: &canonical, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, GraphQL: !raw.Root.WithoutGraphQL, Diagnostics: []ir.Diagnostic{}}
+}
+
+func disabledGraphQLExtensions(interpreted methods.Result) []ir.Diagnostic {
+	var diagnostics []ir.Diagnostic
+	for _, declaration := range interpreted.GraphQLComputed {
+		diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_DISABLED_EXTENSION", fmt.Sprintf("computed field %q exists only to extend GraphQL, which WithoutGraphQL disables", declaration.Field.Name), declaration.Span))
+	}
+	for _, declaration := range interpreted.GraphQLCustom {
+		if declaration.Operation.Operation == ir.CustomOperationQuery {
+			diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_DISABLED_EXTENSION", fmt.Sprintf("custom query %q exists only to extend GraphQL, which WithoutGraphQL disables; call the resolver directly", declaration.Operation.Name), declaration.Span))
+		}
+	}
+	return diagnostics
 }
 
 func applyRelationOptions(model *ir.ModelIR, options []methods.RelationOptionDeclaration) []ir.Diagnostic {

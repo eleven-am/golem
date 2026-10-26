@@ -1,0 +1,379 @@
+{
+  "Version": 3,
+  "CanonicalVersion": 3,
+  "Provider": {
+    "Provider": "postgresql",
+    "Driver": {
+      "Module": "github.com/jackc/pgx/v5/stdlib",
+      "Adapter": "sqlx"
+    },
+    "MinimumVersion": {
+      "Major": 15,
+      "Minor": 0,
+      "Patch": 0
+    },
+    "Capabilities": [
+      {
+        "ID": "analytics.exact-arithmetic.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.ascii-insensitive-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.binary-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.exact-json.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.relation-correlation.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.advanced_indexes",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.advisory_xact_lock",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.generated_columns",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.jsonb",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "scalar-list.json-array.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      }
+    ]
+  },
+  "Namespace": {
+    "Name": "public"
+  },
+  "Tables": [
+    {
+      "ID": "c9781b5c8d81c16f653fcd74ae1a9a32",
+      "Name": "accounts",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "944e8156e5f699b0a741216340f849f7",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "11fe87f589ca008f430b3e9e8f247c56",
+          "Name": "handle",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 40,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "3587a9b6d7b217ce0c72a68985287ba1",
+        "Name": "pk_accounts",
+        "Columns": [
+          "944e8156e5f699b0a741216340f849f7"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [
+        {
+          "ID": "e87d64db77a27dacac2b0f6cf3990ad3",
+          "Name": "uq_accounts_handle",
+          "Columns": [
+            "11fe87f589ca008f430b3e9e8f247c56"
+          ],
+          "RequiredCapabilities": null
+        }
+      ],
+      "ForeignKeys": [],
+      "Checks": [],
+      "Indexes": [],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+      "Name": "notes",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "29ca7a935e081bc0ffb37cb55f461790",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "d1b9dd5c5237112d3aa957ea6959c717",
+          "Name": "owner_id",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "6601b6edc07e62e50e4d54d24a755789",
+          "Name": "title",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 160,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "e44637b1c1a39c8e4cf2bbacbe18cb8c",
+          "Name": "archived",
+          "Ordinal": 3,
+          "Storage": {
+            "Kind": "postgresql.boolean",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "bool",
+              "canonical": "false"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "1ad97cdbc0a22433c437cc20c1f241ea",
+        "Name": "pk_notes",
+        "Columns": [
+          "29ca7a935e081bc0ffb37cb55f461790"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [],
+      "ForeignKeys": [
+        {
+          "ID": "f40cbb776c44d01e06fc228fe2e73975",
+          "Name": "fk_notes_owner_id",
+          "Columns": [
+            "d1b9dd5c5237112d3aa957ea6959c717"
+          ],
+          "ReferencedTable": "c9781b5c8d81c16f653fcd74ae1a9a32",
+          "ReferencedColumns": [
+            "944e8156e5f699b0a741216340f849f7"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        }
+      ],
+      "Checks": [],
+      "Indexes": [
+        {
+          "ID": "5eeb5a88df78256d261709969bfab51c",
+          "Name": "idx_notes_owner",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "d1b9dd5c5237112d3aa957ea6959c717",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "29ca7a935e081bc0ffb37cb55f461790",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    }
+  ],
+  "Extensions": [],
+  "System": {
+    "Version": 1,
+    "Namespace": {
+      "Name": "_golem"
+    },
+    "Objects": [
+      {
+        "ID": "076704f0bfb30b5fed47137811a6dd18",
+        "Kind": "upsert_guard",
+        "Version": 1,
+        "Name": "_golem_upsert_guard",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "14b2d0b9de583fe675fa72de1d1c78c8",
+        "Kind": "outbox",
+        "Version": 1,
+        "Name": "_golem_outbox",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "51aa5c96fd5d24e27e182ed85f7bcbf2",
+        "Kind": "outbox_delivery",
+        "Version": 1,
+        "Name": "_golem_outbox_delivery",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "cb3020cd708be72c384f431749769c98",
+        "Kind": "migration_ledger",
+        "Version": 1,
+        "Name": "_golem_migrations",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "e28aeab0927ce864e8d65a1e1dc62fc9",
+        "Kind": "migration_lock",
+        "Version": 1,
+        "Name": "_golem_migration_lock",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      }
+    ]
+  },
+  "Unmanaged": [
+    {
+      "Kind": "index",
+      "Name": "golem_outbox_delivery_claim"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_claim"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_dedupe"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_enqueued"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_exclusive"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_history"
+    },
+    {
+      "Kind": "index",
+      "Name": "golem_queue_terminal"
+    },
+    {
+      "Kind": "table",
+      "Name": "golem_queue"
+    }
+  ]
+}

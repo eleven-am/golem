@@ -24,6 +24,7 @@ type Request struct {
 	Packages        []modelcodegen.PackageSpec
 	AppPackage      modelcodegen.PackageSpec
 	GolemImportPath string
+	WithoutGraphQL  bool
 }
 
 // Emit returns the model descriptors, event values, application registry, and
@@ -55,6 +56,9 @@ func Emit(request Request) (modelcodegen.Result, error) {
 		return modelcodegen.Result{}, err
 	}
 	result.Files = append(result.Files, modelcodegen.File{ImportPath: application.ImportPath, PackageName: application.PackageName, Path: application.Path, Source: application.Source})
+	if request.WithoutGraphQL {
+		return result, nil
+	}
 	adapter, err := adaptersurface.Emit(request.AppPackage.PackageName, "", request.GolemImportPath)
 	if err != nil {
 		return modelcodegen.Result{}, fmt.Errorf("GraphQL surface: %w", err)

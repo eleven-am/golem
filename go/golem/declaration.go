@@ -19,6 +19,7 @@ func SchemaName(_ *Schema, _ string)     {}
 func Actor[A any](_ *Schema)             {}
 func Model[M any](_ *Schema)             {}
 func Providers(_ *Schema, _ ...Provider) {}
+func WithoutGraphQL(_ *Schema)           {}
 
 // EmbeddingSpace declares one schema-wide embedding space. Dimensions are
 // frozen into reviewed provider migrations; runtime configuration must supply

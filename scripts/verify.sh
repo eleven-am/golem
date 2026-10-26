@@ -94,7 +94,7 @@ format() {
 }
 
 gate() {
-	local work="$GO_DIR/bin/gate.work" social="$GO_DIR/examples/social"
+	local work="$GO_DIR/bin/gate.work" social="$GO_DIR/examples/social" kernel="$GO_DIR/examples/kernel"
 	make -C "$ROOT" --no-print-directory GO="$GO" go-build || return 1
 	printf 'go 1.25.0\n\nuse (\n\t%s\n\t%s\n)\n\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n' \
 		"$GO_DIR" "$social" "$GO_DIR" >"$work" || return 1
@@ -102,6 +102,10 @@ gate() {
 		--schema ./social --app-out ./social --migrations migrations) || return 1
 	(cd "$social" && GOWORK="$work" "$GO" vet ./...) || return 1
 	(cd "$social" && GOWORK="$work" "$GO" test -p=1 -count=1 -timeout=30m ./...) || return 1
+	(cd "$kernel" && "$GO_DIR/bin/golem" check \
+		--schema ./kernel --app-out ./kernel --migrations migrations) || return 1
+	(cd "$kernel" && "$GO" vet ./...) || return 1
+	(cd "$kernel" && "$GO" test -p=1 -count=1 -timeout=30m ./...) || return 1
 	go_test_matching 1 "$GATE_GOLDEN_TEST" ./cmd/golem || return 1
 	go_test_matching 4 "$GATE_IDENTITY_TESTS" ./runtime || return 1
 	go_test -count=1 "${GATE_PACKAGES[@]}"

@@ -3217,6 +3217,7 @@ golem.Via func[M any, R any, V any](ToOneRelation[M, R], RelationDimensionPath[R
 golem.Virtual const GeneratedStorage = "virtual"
 golem.Where func[M any](Predicate[M]) ReadOption[M]
 golem.Within func[M any, R any](*Rules[M], R) *OperationRules[M]
+golem.WithoutGraphQL func(*Schema)
 golem.anyNullSentinel comparable
 golem.anyNullSentinel type uint8
 golem.dbNullSentinel comparable

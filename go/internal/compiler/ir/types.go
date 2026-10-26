@@ -77,6 +77,7 @@ type RawSchemaDecl struct {
 	Providers       []RawProviderRef    `json:"providers"`
 	EmbeddingSpaces []RawEmbeddingSpace `json:"embeddingSpaces"`
 	Models          []RawModelRef       `json:"models"`
+	WithoutGraphQL  bool                `json:"withoutGraphQL,omitempty"`
 	Span            SourceSpan          `json:"span"`
 }
 

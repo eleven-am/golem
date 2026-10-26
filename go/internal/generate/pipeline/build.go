@@ -43,6 +43,7 @@ type Analysis struct {
 	contractFingerprint ir.Fingerprint
 	generatorVersion    string
 	templateABI         string
+	graphql             bool
 }
 
 func build(ctx context.Context, request Request) (Result, error) {
@@ -111,7 +112,7 @@ func analyze(ctx context.Context, request Request) (*Analysis, error) {
 	if templateABI == "" {
 		templateABI = manifest.TemplateABIVersion
 	}
-	if request.GraphQLExecutables == nil {
+	if compiled.GraphQL && request.GraphQLExecutables == nil {
 		request.GraphQLExecutables = &graphqlcodegen.ExecutableCache{}
 	}
 	request.ReviewedMigrations = nil
@@ -119,7 +120,7 @@ func analyze(ctx context.Context, request Request) (*Analysis, error) {
 		request: request, compiled: compiled, compilation: compilation,
 		entries: append([]bindings.Entry(nil), discovered.Entries...), providers: providers,
 		modelFingerprint: modelFingerprint, contractFingerprint: contractFingerprint,
-		generatorVersion: generatorVersion, templateABI: templateABI,
+		generatorVersion: generatorVersion, templateABI: templateABI, graphql: compiled.GraphQL,
 	}, nil
 }
 
@@ -132,7 +133,7 @@ func (analysis *Analysis) build(ctx context.Context, reviewed []ReviewedMigratio
 		return Result{}, err
 	}
 	emit := func(digest string) ([]manifest.Artifact, error) {
-		return emitArtifacts(compiled, request, compilation, analysis.entries, providers, migrationDocuments, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI)
+		return emitArtifacts(compiled, request, compilation, analysis.entries, providers, migrationDocuments, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI, analysis.graphql)
 	}
 	provisionalArtifacts, err := emit(strings.Repeat("0", 64))
 	if err != nil {
@@ -186,7 +187,7 @@ func discoverBindings(ctx context.Context, request Request, compiled compile.Res
 	if !onlyBindingTypeErrors(discovered.Diagnostics) {
 		return discovered, nil
 	}
-	discovery.ModelBootstrap, err = surface.Emit(surface.Request{Compilation: compilation, Packages: compiled.Packages, AppPackage: request.AppPackage, GolemImportPath: request.GolemImportPath})
+	discovery.ModelBootstrap, err = surface.Emit(surface.Request{Compilation: compilation, Packages: compiled.Packages, AppPackage: request.AppPackage, GolemImportPath: request.GolemImportPath, WithoutGraphQL: !compiled.GraphQL})
 	if err != nil {
 		return bindings.Result{}, fmt.Errorf("emit generated surface: %w", err)
 	}
@@ -368,7 +369,7 @@ func normalizedProviderManifest(provider physical.ProviderManifest, namespace ph
 	return schema.Provider, nil
 }
 
-func emitArtifacts(compiled compile.Result, request Request, compilation ir.CompilationIR, entries []bindings.Entry, providers []ProviderResult, migrationDocuments map[ir.Provider][]byte, modelFingerprint, contractFingerprint ir.Fingerprint, digest, generatorVersion, templateABI string) ([]manifest.Artifact, error) {
+func emitArtifacts(compiled compile.Result, request Request, compilation ir.CompilationIR, entries []bindings.Entry, providers []ProviderResult, migrationDocuments map[ir.Provider][]byte, modelFingerprint, contractFingerprint ir.Fingerprint, digest, generatorVersion, templateABI string, graphql bool) ([]manifest.Artifact, error) {
 	stamp := &modelcodegen.FinalStamp{GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI}
 	models, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: compiled.Packages, GolemImportPath: request.GolemImportPath, FinalStamp: stamp})
 	if err != nil {
@@ -395,22 +396,7 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 	if err != nil {
 		return nil, fmt.Errorf("emit application registry: %w", err)
 	}
-	graphqlDocument, err := graphqlschema.Build(compilation)
-	if err != nil {
-		return nil, fmt.Errorf("emit GraphQL schema: %w", err)
-	}
-	graphqlAdapter, err := graphqlcodegen.Emit(graphqlcodegen.Request{
-		PackageName: request.AppPackage.PackageName, AppImportPath: request.AppPackage.ImportPath,
-		ModuleDir: compiled.ModuleDir, Env: request.Env,
-		SDL: graphqlDocument.SDL, ContractFingerprint: contractFingerprint, Actor: compilation.Model.Schema.Actor,
-		MutationModels: graphqlMutationModels(compilation), Compilation: &compilation, GolemImportPath: request.GolemImportPath,
-		GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI,
-		Executables: request.GraphQLExecutables,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("emit GraphQL Go adapter: %w", err)
-	}
-	artifacts := make([]manifest.Artifact, 0, len(models.Files)+len(eventFiles)+len(bound)+len(providers)+4+len(graphqlAdapter.Files))
+	artifacts := make([]manifest.Artifact, 0, len(models.Files)+len(eventFiles)+len(bound)+len(providers)+3)
 	for _, file := range models.Files {
 		artifact, err := goArtifact(compiled.ModuleDir, file.Path, manifest.ArtifactModelGo, file.Source)
 		if err != nil {
@@ -437,28 +423,13 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 		return nil, err
 	}
 	artifacts = append(artifacts, artifact)
-	graphqlGoPath := filepath.Join(request.AppPackage.Directory, graphqlAdapter.Filename)
-	graphqlGoArtifact, err := goArtifact(compiled.ModuleDir, graphqlGoPath, manifest.ArtifactGraphQLGo, graphqlAdapter.Source)
-	if err != nil {
-		return nil, err
-	}
-	artifacts = append(artifacts, graphqlGoArtifact)
-	for _, file := range graphqlAdapter.Files {
-		path := filepath.Join(request.AppPackage.Directory, graphqlcodegen.ExecutablePackageDirectory, file.Filename)
-		artifact, err := goArtifact(compiled.ModuleDir, path, manifest.ArtifactGraphQLGo, file.Source)
+	if graphql {
+		graphqlArtifacts, err := emitGraphQLArtifacts(compiled, request, compilation, contractFingerprint, digest, generatorVersion, templateABI)
 		if err != nil {
 			return nil, err
 		}
-		artifacts = append(artifacts, artifact)
+		artifacts = append(artifacts, graphqlArtifacts...)
 	}
-	graphqlSDLPath, err := moduleRelative(compiled.ModuleDir, filepath.Join(request.AppPackage.Directory, graphqlcodegen.SDLFilename))
-	if err != nil {
-		return nil, err
-	}
-	artifacts = append(artifacts, manifest.Artifact{
-		Path: graphqlSDLPath, Kind: manifest.ArtifactGraphQLSDL,
-		Content: append([]byte(graphqlGeneratedHeader+"\n"), []byte(graphqlDocument.SDL)...), GeneratedHeader: graphqlGeneratedHeader,
-	})
 	modelBytes, _ := ir.CanonicalModel(compilation.Model)
 	contractBytes, _ := ir.CanonicalContract(compilation.Contract)
 	modelEnvelope, err := metadataEnvelope("model_snapshot", modelFingerprint, contractFingerprint, "", "", "", digest, generatorVersion, templateABI, modelBytes)
@@ -484,6 +455,48 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 		}
 		artifacts = append(artifacts, manifest.Artifact{Path: ".golem/generated/" + string(provider.Provider.Provider) + ".physical.snapshot.json", Kind: manifest.ArtifactProvider, Content: encoded, GeneratedHeader: metadataHeader})
 	}
+	return artifacts, nil
+}
+
+func emitGraphQLArtifacts(compiled compile.Result, request Request, compilation ir.CompilationIR, contractFingerprint ir.Fingerprint, digest, generatorVersion, templateABI string) ([]manifest.Artifact, error) {
+	graphqlDocument, err := graphqlschema.Build(compilation)
+	if err != nil {
+		return nil, fmt.Errorf("emit GraphQL schema: %w", err)
+	}
+	graphqlAdapter, err := graphqlcodegen.Emit(graphqlcodegen.Request{
+		PackageName: request.AppPackage.PackageName, AppImportPath: request.AppPackage.ImportPath,
+		ModuleDir: compiled.ModuleDir, Env: request.Env,
+		SDL: graphqlDocument.SDL, ContractFingerprint: contractFingerprint, Actor: compilation.Model.Schema.Actor,
+		MutationModels: graphqlMutationModels(compilation), Compilation: &compilation, GolemImportPath: request.GolemImportPath,
+		GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI,
+		Executables: request.GraphQLExecutables,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("emit GraphQL Go adapter: %w", err)
+	}
+	artifacts := make([]manifest.Artifact, 0, 2+len(graphqlAdapter.Files))
+	graphqlGoPath := filepath.Join(request.AppPackage.Directory, graphqlAdapter.Filename)
+	graphqlGoArtifact, err := goArtifact(compiled.ModuleDir, graphqlGoPath, manifest.ArtifactGraphQLGo, graphqlAdapter.Source)
+	if err != nil {
+		return nil, err
+	}
+	artifacts = append(artifacts, graphqlGoArtifact)
+	for _, file := range graphqlAdapter.Files {
+		path := filepath.Join(request.AppPackage.Directory, graphqlcodegen.ExecutablePackageDirectory, file.Filename)
+		artifact, err := goArtifact(compiled.ModuleDir, path, manifest.ArtifactGraphQLGo, file.Source)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	graphqlSDLPath, err := moduleRelative(compiled.ModuleDir, filepath.Join(request.AppPackage.Directory, graphqlcodegen.SDLFilename))
+	if err != nil {
+		return nil, err
+	}
+	artifacts = append(artifacts, manifest.Artifact{
+		Path: graphqlSDLPath, Kind: manifest.ArtifactGraphQLSDL,
+		Content: append([]byte(graphqlGeneratedHeader+"\n"), []byte(graphqlDocument.SDL)...), GeneratedHeader: graphqlGeneratedHeader,
+	})
 	return artifacts, nil
 }
 
