@@ -232,6 +232,24 @@ func TestRefusedMutationDoesNotBeginTransactionOrIssueSQL(t *testing.T) {
 		if !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Reason != golem.ReasonNotGranted {
 			t.Fatalf("refusal=%#v err=%v", failure, err)
 		}
+
+		unreadable := reopenMutationResultWithPolicies(t, fixture, func(rules *golem.Rules[mutationResultUser]) {
+			rules.CanRead(golem.All[mutationResultUser]())
+		}, func(rules *golem.Rules[mutationResultPost]) {
+			rules.CanUpdate(golem.All[mutationResultPost]())
+		})
+		unprovenCaller, err := unreadable.app.ForPrincipal(context.Background(), mutationResultPrincipal{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts.reset()
+		_, err = CallerUpdate(context.Background(), unprovenCaller, unreadable.postDescriptor, selector, unreadable.updateTitle("must-not-run"))
+		if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
+			t.Fatalf("unproven mutation crossed SQL boundary: begins=%d queries=%d execs=%d", begins, queries, execs)
+		}
+		if !errors.As(err, &failure) || failure.Code != golem.CodeForbidden || failure.Reason != golem.ReasonAuthorizationUnproven {
+			t.Fatalf("unproven refusal=%#v err=%v", failure, err)
+		}
 	}
 
 	runMutationBoundaryProfiles(t, "PostgreSQL refusal-boundary evidence", assertRefused)
@@ -750,7 +768,66 @@ func TestMissingOptionalCurrentToOneReturnsNotFoundAndDisconnectIsNoOpAcrossProv
 				}
 			})
 		}
+		hidden := reopenMutationResultWithPolicies(t, fixture, func(rules *golem.Rules[mutationResultUser]) {
+			rules.CanRead(fixture.userName.Eq("nobody"))
+			rules.CanUpdate(golem.All[mutationResultUser]())
+			rules.CanDelete(golem.All[mutationResultUser]())
+		}, func(rules *golem.Rules[mutationResultPost]) {
+			rules.CanRead(golem.All[mutationResultPost]())
+			rules.CanUpdate(golem.All[mutationResultPost]())
+		})
+		hiddenCaller, err := hidden.app.ForPrincipal(ctx, mutationResultPrincipal{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, operation := range operations {
+			operation := operation
+			t.Run("invisible-"+operation.name, func(t *testing.T) {
+				input := golem.GeneratedUpdateInput[mutationResultPost](hidden.schema.Post, operation.value)
+				_, err := CallerUpdate(ctx, hiddenCaller, hidden.postDescriptor, hidden.target(205), input)
+				var failure *golem.Error
+				if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound {
+					t.Fatalf("invisible granted current to-one failure=%#v err=%v", failure, err)
+				}
+				var name string
+				query := `SELECT "name" FROM ` + nestedAcceptanceTable(hidden.app, hidden.schema.User) + ` WHERE "id"=` + profile.placeholder(1)
+				if err := hidden.app.database.GetContext(ctx, &name, query, mutationResultUUIDText(1)); err != nil || name == "must-not-update" {
+					t.Fatalf("invisible current to-one was written: name=%q err=%v", name, err)
+				}
+			})
+		}
 	})
+}
+
+func reopenMutationResultWithPolicies(t testing.TB, fixture mutationResultFixture, user func(*golem.Rules[mutationResultUser]), post func(*golem.Rules[mutationResultPost])) mutationResultFixture {
+	t.Helper()
+	userPolicy := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultUser](fixture.schema.User, func(mutationResultActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[mutationResultUser]()
+		user(rules)
+		return rules.Freeze(fixture.schema.User)
+	})
+	postPolicy := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultPost](fixture.schema.Post, func(mutationResultActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[mutationResultPost]()
+		post(rules)
+		return rules.Freeze(fixture.schema.Post)
+	})
+	bindings, err := golem.GeneratedApplicationBindings(fixture.schema.Bundle.GenerationDigest(), golem.GeneratedStampedPackageBindings(fixture.schema.Bundle.GenerationDigest(), []golem.PolicyBinding[mutationResultActor]{userPolicy, postPolicy}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := golem.SQLite
+	if fixture.app.provider == policyir.ProviderPostgreSQL {
+		provider = golem.PostgreSQL
+	}
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.app = app
+	return fixture
 }
 
 func reopenMutationResultWithUserWriteDenials(t testing.TB, fixture mutationResultFixture) mutationResultFixture {

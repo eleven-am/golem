@@ -30,13 +30,20 @@ func ExistingConstraint(policies PolicySet, model policyir.ModelID, row policyir
 	if err != nil {
 		return policyir.Condition{}, err
 	}
+	return Readable(policies, model, base, fields, readDepth)
+}
+
+func Readable(policies PolicySet, model policyir.ModelID, base policyir.Condition, fields []policyir.FieldID, readDepth int) (policyir.Condition, error) {
+	if len(fields) == 0 {
+		return ReadableConstraint(policies, model, base, readDepth)
+	}
 	conditions := []policyir.Condition{base}
 	for _, field := range fields {
 		reach, reachErr := readplan.ReadFieldReach(policies, model, field, readDepth)
 		if reachErr != nil {
 			return policyir.Condition{}, reachErr
 		}
-		if _, constant := reach.Constant(); constant {
+		if truth, constant := reach.Constant(); constant && truth {
 			continue
 		}
 		proved, implyErr := imply.Condition(base, reach)

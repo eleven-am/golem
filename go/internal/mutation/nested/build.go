@@ -149,6 +149,7 @@ type builder struct {
 	audits     []PositionAudit
 	sources    map[uint32]HookSource
 	nextSource uint32
+	branches   int
 }
 
 func (builder *builder) retainSource(node mutationir.NodeInput, endpoint schema.RelationEndpoint, action golem.MutationRelationAction, branch golem.FrozenNestedMutationBranch) mutationir.NodeInput {
@@ -300,7 +301,7 @@ func (builder *builder) buildRelation(parent policyir.ModelID, parentOperation m
 		var desired []mutationir.Target
 		for _, branch := range branches {
 			if target, ok := branch.Target(); ok {
-				bound, bindErr := mutationbind.Target(target, frozen.TargetModelID(), builder.request.Registry)
+				bound, bindErr := builder.target(target, frozen.TargetModelID())
 				if bindErr != nil {
 					return nil, fail(CodeBinding, frozen.TargetModelID(), frozen.FieldID(), "set target did not bind", bindErr)
 				}
@@ -382,7 +383,7 @@ func (builder *builder) sourceDependencyProbe(endpoint schema.RelationEndpoint, 
 	if !ok {
 		return mutationir.NodeInput{}, fail(CodeShape, endpoint.ModelID(), endpoint.FieldID(), "source dependency connect target is absent", nil)
 	}
-	bound, err := mutationbind.Target(public, endpoint.TargetModelID(), builder.request.Registry)
+	bound, err := builder.target(public, endpoint.TargetModelID())
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "source dependency target did not bind", err)
 	}
@@ -492,7 +493,7 @@ func (builder *builder) targetMembershipNode(endpoint schema.RelationEndpoint, a
 		}
 		return builder.retainSource(node, endpoint, action, branch), nil
 	}
-	bound, err := mutationbind.Target(target, endpoint.TargetModelID(), builder.request.Registry)
+	bound, err := builder.target(target, endpoint.TargetModelID())
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "nested membership target did not bind", err)
 	}

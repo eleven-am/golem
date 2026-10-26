@@ -22,6 +22,18 @@ type BoundTarget struct {
 func (target BoundTarget) Target() mutationir.Target             { return target.target }
 func (target BoundTarget) SelectorPredicate() policyir.Condition { return target.selectorPredicate }
 
+func (target BoundTarget) WithGuard(guard policyir.Condition) (BoundTarget, error) {
+	current := target.target
+	if guard.ModelID() != current.ModelID() {
+		return BoundTarget{}, fail(CodeGuard, golem.ModelID(current.ModelID()), golem.FieldID{}, "replacement target guard belongs to another model", nil)
+	}
+	replaced, err := mutationir.NewTarget(current.ModelID(), current.KeyID(), current.Values(), &guard)
+	if err != nil {
+		return BoundTarget{}, fail(CodeInternal, golem.ModelID(current.ModelID()), golem.FieldID{}, "target IR rejected the replacement guard", err)
+	}
+	return BoundTarget{target: replaced, selectorPredicate: target.selectorPredicate}, nil
+}
+
 // Target binds one frozen unique target for the model owned by the operation.
 // Selector values are emitted in the active identity's declared order even
 // when predicate canonicalization has reordered equality leaves.

@@ -143,7 +143,7 @@ func writeReachCases() []writeReachCase {
 			if readablePostTitle(post.title) {
 				return writeReachOutcome{changed: true}
 			}
-			return writeReachOutcome{code: golem.CodeConflict}
+			return writeReachOutcome{code: golem.CodeForbidden, reason: golem.ReasonNotGranted}
 		}},
 		{name: "NestedDisjointDelete", policies: disjointDelete, write: nestedDeleteWrite, expect: readableAndMatching("mask")},
 		{name: "NestedUnconditionalUpdate", policies: unconditionalUpdate, write: nestedUpdateWrite, expect: readable},

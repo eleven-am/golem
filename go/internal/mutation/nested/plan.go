@@ -54,7 +54,7 @@ func (builder *builder) updateManyNode(endpoint schema.RelationEndpoint, branch 
 	if !predicateOK || !inputOK {
 		return mutationir.NodeInput{}, fail(CodeShape, branch.ModelID(), endpoint.FieldID(), "update-many predicate or input is absent", nil)
 	}
-	predicate, err := mutationbind.BatchPredicate(publicPredicate, branch.ModelID(), builder.request.Registry)
+	predicate, err := builder.predicate(publicPredicate, branch.ModelID())
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested update-many predicate did not bind", err)
 	}
@@ -110,7 +110,7 @@ func (builder *builder) deleteManyNode(endpoint schema.RelationEndpoint, branch 
 	if !ok {
 		return mutationir.NodeInput{}, fail(CodeShape, branch.ModelID(), endpoint.FieldID(), "delete-many predicate is absent", nil)
 	}
-	predicate, err := mutationbind.BatchPredicate(public, branch.ModelID(), builder.request.Registry)
+	predicate, err := builder.predicate(public, branch.ModelID())
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested delete-many predicate did not bind", err)
 	}
@@ -142,7 +142,7 @@ func (builder *builder) connectOrCreateNode(endpoint schema.RelationEndpoint, br
 	if !ok {
 		return nil, fail(CodeShape, endpoint.ModelID(), endpoint.FieldID(), "connect-or-create target is absent", nil)
 	}
-	bound, err := mutationbind.Target(public, endpoint.TargetModelID(), builder.request.Registry)
+	bound, err := builder.target(public, endpoint.TargetModelID())
 	if err != nil {
 		return nil, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "connect-or-create target did not bind", err)
 	}
@@ -164,7 +164,9 @@ func (builder *builder) connectOrCreateNode(endpoint schema.RelationEndpoint, br
 		return nil, err
 	}
 	connectNode = builder.retainSource(connectNode, endpoint, connect.Action(), connect)
+	builder.branches++
 	createNode, err := builder.createNode(endpoint, create, mutationir.ConnectOrCreateCreateBranch, depth, sourceDependency)
+	builder.branches--
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +228,9 @@ func (builder *builder) upsertNode(endpoint schema.RelationEndpoint, branches []
 	if err != nil {
 		return nil, err
 	}
+	builder.branches++
 	createNode, err := builder.createNode(endpoint, create, mutationir.UpsertCreateBranch, depth, false)
+	builder.branches--
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +247,7 @@ func (builder *builder) upsertNode(endpoint schema.RelationEndpoint, branches []
 func (builder *builder) singlePosition(endpoint schema.RelationEndpoint, branch golem.FrozenNestedMutationBranch) (mutationir.RelationPosition, *policyir.Condition, error) {
 	input := mutationir.RelationPositionInput{ParentModel: policyir.ModelID(endpoint.ModelID()), Field: policyir.FieldID(endpoint.FieldID()), Relation: policyir.RelationID(endpoint.RelationID()), TargetModel: policyir.ModelID(endpoint.TargetModelID())}
 	if public, ok := branch.Target(); ok {
-		bound, err := mutationbind.Target(public, endpoint.TargetModelID(), builder.request.Registry)
+		bound, err := builder.target(public, endpoint.TargetModelID())
 		if err != nil {
 			return mutationir.RelationPosition{}, nil, fail(CodeBinding, endpoint.TargetModelID(), endpoint.FieldID(), "nested target did not bind", err)
 		}
@@ -344,7 +348,7 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 	if !readReach {
 		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, nil)
 	}
-	if existingWrite(node.Operation) && !readReach {
+	if existingWrite(node.Operation) && !readReach || node.Operation == mutationir.Create && builder.branches == 0 {
 		if err := grantGate(granted, action, node.Model); err != nil {
 			return mutationir.NodeInput{}, err
 		}
@@ -365,7 +369,7 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 		node.ReferenceCondition = reference
 	}
 	if existing(node.Operation) {
-		complete, completeErr := builder.existingConstraint(node.Model, node.Operation, granted, position)
+		complete, completeErr := builder.existingConstraint(node.Model, granted, position)
 		if completeErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested selecting condition could not combine", completeErr)
 		}
@@ -651,6 +655,17 @@ func existingWrite(operation mutationir.Operation) bool {
 	}
 }
 
+func CreateGranted(node mutationir.Node) error {
+	if node.Operation() != mutationir.Create {
+		return nil
+	}
+	row, present := node.RowPostcondition()
+	if !present {
+		return nil
+	}
+	return grantGate(row, policyir.ActionCreate, node.ModelID())
+}
+
 func grantGate(row policyir.Condition, action policyir.Action, model policyir.ModelID) error {
 	allowed, err := resolve.ActionAllowed(row)
 	if err != nil || !allowed {
@@ -663,15 +678,43 @@ func (builder *builder) reach(model policyir.ModelID, condition policyir.Conditi
 	return mutationplan.WriteReach(builder.request.Policies, model, condition, builder.request.ReadRelationDepth)
 }
 
-func (builder *builder) existingConstraint(model policyir.ModelID, operation mutationir.Operation, row policyir.Condition, position *policyir.Condition) (policyir.Condition, error) {
-	if position != nil {
-		return mutationplan.ExistingConstraint(builder.request.Policies, model, row, directFields(*position), builder.request.ReadRelationDepth, *position)
+func (builder *builder) existingConstraint(model policyir.ModelID, row policyir.Condition, position *policyir.Condition) (policyir.Condition, error) {
+	if position == nil {
+		return mutationplan.ExistingConstraint(builder.request.Policies, model, row, nil, builder.request.ReadRelationDepth)
 	}
-	complete, err := mutationplan.ExistingConstraint(builder.request.Policies, model, row, nil, builder.request.ReadRelationDepth)
-	if err != nil || operation != mutationir.Update && operation != mutationir.Delete {
-		return complete, err
+	return mutationplan.ExistingConstraint(builder.request.Policies, model, row, directFields(*position), builder.request.ReadRelationDepth, *position)
+}
+
+func (builder *builder) target(public golem.FrozenMutationTarget, model golem.ModelID) (mutationbind.BoundTarget, error) {
+	bound, err := mutationbind.Target(public, model, builder.request.Registry)
+	if err != nil || builder.request.Stance != mutationir.Caller {
+		return bound, err
 	}
-	return mutationplan.ReadableConstraint(builder.request.Policies, model, complete, builder.request.ReadRelationDepth)
+	guard, guarded := bound.Target().Guard()
+	if !guarded {
+		return bound, nil
+	}
+	expanded, err := builder.reach(policyir.ModelID(model), guard)
+	if err != nil {
+		return mutationbind.BoundTarget{}, fail(CodePolicy, model, golem.FieldID{}, "nested target guard read reach could not resolve", err)
+	}
+	return bound.WithGuard(expanded)
+}
+
+func (builder *builder) predicate(public golem.FrozenPredicate, model golem.ModelID) (policyir.Condition, error) {
+	predicate, err := mutationbind.BatchPredicate(public, model, builder.request.Registry)
+	if err != nil || builder.request.Stance != mutationir.Caller {
+		return predicate, err
+	}
+	expanded, err := builder.reach(policyir.ModelID(model), predicate)
+	if err != nil {
+		return policyir.Condition{}, fail(CodePolicy, model, golem.FieldID{}, "nested batch predicate read reach could not resolve", err)
+	}
+	readable, err := mutationplan.Readable(builder.request.Policies, policyir.ModelID(model), expanded, directFields(predicate), builder.request.ReadRelationDepth)
+	if err != nil {
+		return policyir.Condition{}, fail(CodePolicy, model, golem.FieldID{}, "nested batch predicate readable reach could not resolve", err)
+	}
+	return readable, nil
 }
 
 func existing(operation mutationir.Operation) bool {
