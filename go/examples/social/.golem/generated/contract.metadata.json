@@ -2,8 +2,8 @@
   "kind": "contract_metadata",
   "formatVersion": 1,
   "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "42fbcf3c995f03bba212fe8a01fd2c7f6e0263537b9b8624d4dbe74f976925ca",
-  "generationDigest": "57cf067d42094574595b011da439e9199afe6490624dc0624f48628f18786434",
+  "contractFingerprint": "708d9e3b81cfc320a2d97308bddfed783c30188c596abb557dda810e677cd8ad",
+  "generationDigest": "0d122e4fb2bb4582c8563eb0e9a4b43b9ac04f59f97aa871a2ec394b0d28b55a",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -358,7 +358,68 @@
           }
         ],
         "operations": [],
-        "subscriptions": false,
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "SessionEvent",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt"
+          ],
+          "deleteSnapshotFull": false,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "9f0a32ff74e8340344dbde26a58ba9b2",
+            "primaryKeyId": "f261c97c2c9901331ca61b195b58dbe7",
+            "identityFields": [
+              {
+                "fieldId": "230e5e19e0a2649a5fc5a304a7dbd158",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "230e5e19e0a2649a5fc5a304a7dbd158",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "e5c12c57b16ed638dbb0d9df456d3965",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "42e3e2bd1988a04db96d90478750a7fb",
+                "type": {
+                  "kind": "dateTime",
+                  "precision": 6
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "fb3dcb5c417c3754b24dec493e09ed5b",
+                "type": {
+                  "kind": "dateTime",
+                  "precision": 6
+                },
+                "nullable": false
+              }
+            ],
+            "enums": []
+          },
+          "schemaFingerprint": "cd6de2a5c84d29d3e0c52a67b159d770cf29f0853933d001e5ee20dabde1b035"
+        },
         "scopedReads": false,
         "limits": {
           "defaultPageSize": 50,

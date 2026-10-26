@@ -17,6 +17,8 @@ var errTransactionConcurrentUse = errors.New("P4_RUNTIME_TRANSACTION: transactio
 
 var errTransactionOperationNotAdmitted = errors.New("P4_RUNTIME_TRANSACTION: statement ran outside an admitted transaction operation")
 
+var errTxOperationEnded = errors.New("P5_CUSTOM_OPERATION: operation has ended")
+
 type usageGate struct {
 	mu       sync.Mutex
 	idle     sync.Cond
@@ -122,28 +124,39 @@ func (binding *executionBinding) beginCall(ctx context.Context) (context.Context
 	return binding.acquire(ctx, heldWriteFor(ctx, binding), nil)
 }
 
-func transactionOperation[R any](ctx context.Context, binding *executionBinding, run func(context.Context) (R, error)) (R, error) {
-	ctx, endCall, err := binding.beginCall(ctx)
+type transactionCall struct {
+	binding *executionBinding
+	scope   *usageGate
+}
+
+func transactionOperation[R any](ctx context.Context, call transactionCall, run func(context.Context) (R, error)) (R, error) {
+	var zero R
+	if call.scope != nil {
+		if !call.scope.enter() {
+			return zero, errTxOperationEnded
+		}
+		defer call.scope.leave()
+	}
+	ctx, endCall, err := call.binding.beginCall(ctx)
 	if err != nil {
-		var zero R
 		return zero, err
 	}
 	defer endCall()
 	return run(ctx)
 }
 
-func (transaction *CallerTx[P, A]) binding() *executionBinding {
+func (transaction *CallerTx[P, A]) binding() transactionCall {
 	if transaction == nil || transaction.caller == nil {
-		return nil
+		return transactionCall{}
 	}
-	return transaction.caller.executor
+	return transactionCall{binding: transaction.caller.executor, scope: transaction.scope}
 }
 
-func (transaction *SystemTx[P, A]) binding() *executionBinding {
+func (transaction *SystemTx[P, A]) binding() transactionCall {
 	if transaction == nil {
-		return nil
+		return transactionCall{}
 	}
-	return transaction.system.executor
+	return transactionCall{binding: transaction.system.executor}
 }
 
 type foundRowResult[M any] struct {

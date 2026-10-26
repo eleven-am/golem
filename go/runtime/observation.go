@@ -173,7 +173,7 @@ func (adapter unifiedEventObserver) ObserveEvent(_ context.Context, event events
 		reason = observe.ReasonFiltered
 	case events.SuppressionUnauthorized:
 		reason = observe.ReasonAuthorization
-	case events.SuppressionDeletionUnverifiable:
+	case events.SuppressionDeletionUnverifiable, events.SuppressionDeleteOverDelivered:
 		reason = observe.ReasonDeletionUnverifiable
 	case events.SuppressionEntityAbsent:
 		reason = observe.ReasonEntityAbsent

@@ -656,6 +656,9 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 	if branch != mutationir.UpsertCreateBranch && branch != mutationir.UpsertUpdateBranch {
 		return nil, fmt.Errorf("upsert selected an unknown branch")
 	}
+	if err := mutationnested.CreateGranted(node); err != nil {
+		return nil, err
+	}
 	prepared := executor.prepared
 	if executor.hooks != nil {
 		request := golem.RuntimeCreateMutationHookRequest(executor.descriptor.Metadata().ModelID(), prepared.request.create)

@@ -12,6 +12,8 @@ import (
 // negative duration Limits accepts.
 const RetentionDisabled = time.Duration(-1)
 
+const MinimumRecheckInterval = time.Second
+
 type Limits struct {
 	ClaimRows                             int
 	PublisherConcurrency                  int
@@ -35,6 +37,8 @@ type Limits struct {
 	RetentionAge                          time.Duration
 	RetentionEvery                        time.Duration
 	RequireExclusiveProcessLocalPublisher bool
+	RevalidateEvery                       time.Duration
+	MaxSubscriptionsPerPrincipal          int
 }
 
 var defaultLimits = Limits{
@@ -55,6 +59,7 @@ var maximumLimits = Limits{
 	MaxSubscriptionsPerConnection: 256, ConnectionInitBytes: 1 << 20,
 	ConnectionInitTimeout: time.Minute, KeepAlive: 5 * time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
 	RetentionDeleteRows: 4096, RetentionAge: 10 * 365 * 24 * time.Hour, RetentionEvery: 24 * time.Hour,
+	RevalidateEvery: 24 * time.Hour, MaxSubscriptionsPerPrincipal: 1 << 16,
 }
 
 // RetentionEnabled reports whether the publisher deletes delivered outbox rows
@@ -90,6 +95,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"MaxSubscriptionsPerConnection", &output.MaxSubscriptionsPerConnection, defaultLimits.MaxSubscriptionsPerConnection, maximumLimits.MaxSubscriptionsPerConnection},
 		{"ConnectionInitBytes", &output.ConnectionInitBytes, defaultLimits.ConnectionInitBytes, maximumLimits.ConnectionInitBytes},
 		{"RetentionDeleteRows", &output.RetentionDeleteRows, defaultLimits.RetentionDeleteRows, maximumLimits.RetentionDeleteRows},
+		{"MaxSubscriptionsPerPrincipal", &output.MaxSubscriptionsPerPrincipal, defaultLimits.MaxSubscriptionsPerPrincipal, maximumLimits.MaxSubscriptionsPerPrincipal},
 	}
 	for _, item := range integers {
 		if *item.value == 0 {
@@ -116,6 +122,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"WebSocketPongTimeout", &output.WebSocketPongTimeout, defaultLimits.WebSocketPongTimeout, maximumLimits.WebSocketPongTimeout},
 		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
 		{"RetentionAge", &output.RetentionAge, defaultLimits.RetentionAge, maximumLimits.RetentionAge},
+		{"RevalidateEvery", &output.RevalidateEvery, defaultLimits.RevalidateEvery, maximumLimits.RevalidateEvery},
 	}
 	if output.RetentionEnabled() {
 		durations = append(durations, struct {
@@ -141,6 +148,9 @@ func NormalizeLimits(input Limits) (Limits, error) {
 	}
 	if output.MaxEncodedBatchBytes < output.MaxEncodedEventBytes {
 		return Limits{}, Failf(CodeEventConfig, "MaxEncodedBatchBytes (%d) must not be below MaxEncodedEventBytes (%d)", output.MaxEncodedBatchBytes, output.MaxEncodedEventBytes)
+	}
+	if output.RevalidateEvery != 0 && output.RevalidateEvery < MinimumRecheckInterval {
+		return Limits{}, Failf(CodeEventConfig, "RevalidateEvery must be at least %s or 0, got %s", MinimumRecheckInterval, output.RevalidateEvery)
 	}
 	if output.RetentionAge < time.Hour {
 		return Limits{}, Failf(CodeEventConfig, "RetentionAge must be at least 1h, got %s", output.RetentionAge)

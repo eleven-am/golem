@@ -53,6 +53,7 @@ const (
 	SuppressionDeleteFiltered       SuppressionReason = "delete_filtered"
 	SuppressionCorrelatedGolemWrite SuppressionReason = "correlated_golem_write"
 	SuppressionPolicyUnavailable    SuppressionReason = "policy_unavailable"
+	SuppressionDeleteOverDelivered  SuppressionReason = "delete_over_delivered"
 )
 
 type Observation struct{ value internalvalue.Observation }
@@ -122,7 +123,8 @@ func validOutcome(outcome Outcome) bool {
 func validSuppressionReason(reason SuppressionReason) bool {
 	switch reason {
 	case "", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable,
-		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite, SuppressionPolicyUnavailable:
+		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite, SuppressionPolicyUnavailable,
+		SuppressionDeleteOverDelivered:
 		return true
 	default:
 		return false

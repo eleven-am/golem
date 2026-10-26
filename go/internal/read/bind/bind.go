@@ -80,7 +80,7 @@ func request(frozen golem.FrozenReadRequest, registry *schema.Registry, provider
 		if err != nil {
 			return readir.Request{}, err
 		}
-		predicate, err := policybind.Predicate(publicCursor.Predicate(), registry, providers)
+		predicate, err := policybind.ExactPredicate(publicCursor.Predicate(), registry, providers)
 		if err != nil {
 			return readir.Request{}, fail(CodePolicy, model, golem.FieldID{}, "cursor predicate did not bind", err)
 		}
@@ -94,7 +94,11 @@ func request(frozen golem.FrozenReadRequest, registry *schema.Registry, provider
 		input.Cursor = &cursor
 	}
 	if publicWhere, present := frozen.Where(); present {
-		where, err := policybind.Predicate(publicWhere, registry, providers)
+		bindPredicate := policybind.Predicate
+		if input.Selector != nil {
+			bindPredicate = policybind.ExactPredicate
+		}
+		where, err := bindPredicate(publicWhere, registry, providers)
 		if err != nil {
 			return readir.Request{}, fail(CodePolicy, model, golem.FieldID{}, "where predicate did not bind", err)
 		}

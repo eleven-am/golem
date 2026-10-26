@@ -58,6 +58,7 @@ type Result struct {
 	GraphQLModels         []graphqlcontract.ModelPatch
 	GraphQLComputed       []graphqlextension.ComputedDeclaration
 	GraphQLCustom         []graphqlextension.CustomOperationDeclaration
+	TxOperations          []TxOperationDeclaration
 	AnalyticsModels       []analyticscontract.ModelPatch
 	Extensions            []ir.ProviderExtensionIR
 	Diagnostics           []ir.Diagnostic

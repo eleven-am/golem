@@ -83,6 +83,7 @@ func newBenchPolicyFixture(b *testing.B, branches int) *benchPolicyFixture {
 		rules.CanRead(golem.Or(reads...))
 		rules.CanCreate(golem.Or(creates...))
 		rules.CanUpdate(golem.Or(reads...))
+		rules.CanDelete(golem.Or(reads...))
 		return rules.Freeze(schema.Post)
 	})
 	bindings, err := golem.GeneratedApplicationBindings(schema.Bundle.GenerationDigest(), golem.GeneratedStampedPackageBindings(schema.Bundle.GenerationDigest(), []golem.PolicyBinding[benchPolicyActor]{userPolicy, postPolicy}, nil))
@@ -169,6 +170,62 @@ func benchmarkPolicyFindFirst(b *testing.B, fixture *benchPolicyFixture, system 
 			b.Fatalf("found=%t err=%v", found, err)
 		}
 	}
+}
+
+func (fixture *benchPolicyFixture) seedPost(b *testing.B) golem.MutationTarget[benchPolicyPost] {
+	b.Helper()
+	id, input := fixture.nextPost()
+	if _, err := SystemCreate(context.Background(), fixture.app.System(), fixture.postDescriptor, input); err != nil {
+		b.Fatal(err)
+	}
+	return golem.GeneratedUniqueSelectorValue[benchPolicyPost](fixture.schema.Post, fixture.schema.PostKey, golem.GeneratedSelectorComponent(fixture.schema.PostID, id))
+}
+
+func benchmarkPolicyUpdate(b *testing.B, fixture *benchPolicyFixture, system bool) {
+	ctx := context.Background()
+	target := fixture.seedPost(b)
+	input := golem.GeneratedUpdateInput[benchPolicyPost](fixture.schema.Post, golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.postTitle, "title-0"))
+	b.ReportAllocs()
+	for b.Loop() {
+		var err error
+		if system {
+			_, err = SystemUpdate(ctx, fixture.app.System(), fixture.postDescriptor, target, input)
+		} else {
+			_, err = CallerUpdate(ctx, fixture.caller(b), fixture.postDescriptor, target, input)
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkPolicyDelete(b *testing.B, fixture *benchPolicyFixture, system bool) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		target := fixture.seedPost(b)
+		b.StartTimer()
+		var err error
+		if system {
+			_, err = SystemDelete(ctx, fixture.app.System(), fixture.postDescriptor, target)
+		} else {
+			_, err = CallerDelete(ctx, fixture.caller(b), fixture.postDescriptor, target)
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUpdate(b *testing.B) {
+	b.Run("system", func(b *testing.B) { benchmarkPolicyUpdate(b, newBenchPolicyFixture(b, 4), true) })
+	b.Run("caller", func(b *testing.B) { benchmarkPolicyUpdate(b, newBenchPolicyFixture(b, 4), false) })
+}
+
+func BenchmarkDelete(b *testing.B) {
+	b.Run("system", func(b *testing.B) { benchmarkPolicyDelete(b, newBenchPolicyFixture(b, 4), true) })
+	b.Run("caller", func(b *testing.B) { benchmarkPolicyDelete(b, newBenchPolicyFixture(b, 4), false) })
 }
 
 func BenchmarkCreate(b *testing.B) {

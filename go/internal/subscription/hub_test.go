@@ -798,3 +798,16 @@ func TestModelHubConfigErrorsNameTheViolatedField(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluationFailureCodesThatEndOneMemberSurviveNormalization(t *testing.T) {
+	for _, code := range []events.ErrorCode{events.CodeSubscriptionRevalidation, events.CodeSubscriptionCancelled, events.CodeSubscriptionSourceClosed, events.CodeSubscriptionResync} {
+		if got := normalizedEvaluationCode(events.Failure(code)); got != code {
+			t.Fatalf("evaluation code %s normalized to %s", code, got)
+		}
+	}
+	for _, err := range []error{events.Failure(events.CodeEventTransport), events.Failure(events.CodeSubscriptionOverflow), context.Canceled} {
+		if got := normalizedEvaluationCode(err); got != events.CodeSubscriptionSourceClosed {
+			t.Fatalf("evaluation error %v normalized to %s", err, got)
+		}
+	}
+}

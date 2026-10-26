@@ -242,7 +242,7 @@ func TestContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *tes
 	}
 }
 
-func TestContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing.T) {
+func TestContractRejectsKeylessCollidingAndUncapturableModels(t *testing.T) {
 	makeModel := func(modelID ir.ModelID, key bool, mode ir.FieldMode) (ir.ModelDeclIR, ir.ModelContractIR) {
 		fieldID := ir.FieldID(string(modelID)[:31] + "f")
 		logical := ir.ModelDeclIR{ID: modelID, Fields: []ir.FieldIR{{ID: fieldID, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}}}}
@@ -254,8 +254,7 @@ func TestContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing.T
 	}
 	enabled := true
 	for name, setup := range map[string]func(*ir.CompilationIR){
-		"hidden-model": func(value *ir.CompilationIR) { value.Contract.Models[0].Exposed = false },
-		"keyless":      func(value *ir.CompilationIR) { value.Model.Models[0].PrimaryKey = nil },
+		"keyless": func(value *ir.CompilationIR) { value.Model.Models[0].PrimaryKey = nil },
 		"hidden-key": func(value *ir.CompilationIR) {
 			value.Contract.Models[0].Fields[0].Modes = []ir.FieldMode{ir.ModeHidden}
 		},
@@ -271,6 +270,15 @@ func TestContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing.T
 				t.Fatal("invalid subscription contract was accepted")
 			}
 		})
+	}
+	hiddenLogical, hiddenContract := makeModel("10000000000000000000000000000000", true, ir.ModeVisible)
+	hiddenContract.Exposed = false
+	hidden := ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{hiddenLogical}}, Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{hiddenContract}}}
+	if diagnostics := Normalize(&hidden, []ModelPatch{{ModelID: hiddenContract.ModelID, Subscriptions: &enabled}}); len(diagnostics) != 0 {
+		t.Fatalf("GraphQL-hidden subscribed model was rejected: %#v", diagnostics)
+	}
+	if model := hidden.Contract.Models[0]; model.Exposed || !model.Subscriptions || model.Event == nil {
+		t.Fatalf("GraphQL-hidden subscribed model contract=%#v", model)
 	}
 	leftLogical, leftContract := makeModel("10000000000000000000000000000000", true, ir.ModeVisible)
 	rightLogical, rightContract := makeModel("20000000000000000000000000000000", true, ir.ModeVisible)

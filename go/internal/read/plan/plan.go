@@ -327,7 +327,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		if !ok {
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", policyAbsence(policies, model))
 		}
-		rawRow, err = resolve.RowConstraint(policy, policyir.ActionRead, model)
+		rawRow, err = RowConstraint(policies, policy, policyir.ActionRead, model)
 	}
 	if err != nil {
 		return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "read row constraint could not be resolved", err)
@@ -341,7 +341,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			return Plan{}, failReason(CodePolicy, golem.ReasonNotGranted, model, policyir.FieldID{}, "read action is not granted")
 		}
 		expander = newPolicyExpander(policies, limits.MaxRelationDepth)
-		row, err = expander.model(model, depth)
+		row, err = expander.entry(model, depth)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -369,7 +369,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	}
 
 	orders := request.OrderBy()
-	if request.Operation() != readir.Count {
+	if request.Operation() != readir.Count && !request.Unordered() {
 		if modelFact, ok := registry.Model(golem.ModelID(model)); ok {
 			seenOrder := make(map[policyir.FieldID]bool, len(orders))
 			for _, order := range orders {
@@ -673,7 +673,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		if !ok {
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target policy is absent", policyAbsence(policies, model))
 		}
-		row, err = newPolicyExpander(policies, limits.MaxRelationDepth).model(model, depth)
+		row, err = newPolicyExpander(policies, limits.MaxRelationDepth).entry(model, depth)
 	}
 	if err != nil {
 		return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target policy could not be resolved", err)
@@ -740,7 +740,7 @@ func classifyCondition(condition policyir.Condition, registry *schema.Registry, 
 		if !ok {
 			return fail(CodePolicy, target, field, "relation target policy is absent", policyAbsence(policies, target))
 		}
-		targetRow, err := expander.model(target, depth+1)
+		targetRow, err := expander.entry(target, depth+1)
 		if err != nil {
 			return err
 		}

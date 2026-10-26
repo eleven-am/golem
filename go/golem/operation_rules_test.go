@@ -217,8 +217,10 @@ func TestApplicationBindingsResolveOnlyRegisteredOperationResolvers(t *testing.T
 	}
 }
 
-func TestOperationRulesOfferOnlyWriteGrants(t *testing.T) {
+func TestOperationRulesOfferWriteAndAggregateGrants(t *testing.T) {
 	var rules *OperationRules[bindingModel]
+	var _ func(Predicate[bindingModel]) = rules.CanCount
+	var _ func(Predicate[bindingModel], Field[bindingModel], ...Field[bindingModel]) = rules.CanAggregate
 	var _ func(Predicate[bindingModel]) = rules.CanCreate
 	var _ func(Predicate[bindingModel]) = rules.CanUpdate
 	var _ func(Predicate[bindingModel]) = rules.CanDelete
@@ -272,5 +274,42 @@ func TestBuildGeneratedModelPolicyMatchesTheFullSetForOneModel(t *testing.T) {
 	}
 	if _, err := ValidateGeneratedPolicyBindings(ApplicationBindings[bindingActor]{}); err == nil {
 		t.Fatal("unstamped bindings validated")
+	}
+}
+
+func TestApplicationBindingsResolveEachOperationOnlyAsItsOwnKind(t *testing.T) {
+	application := operationBindings(t, func(bindingActor) (FrozenPolicy, error) { return NewRules[bindingModel]().Freeze(operationModelID) },
+		GeneratedCustomMutationOperation("operation-create", operationCreateResolver),
+		GeneratedTxOperation("operation-other", operationOtherResolver),
+	)
+	if _, ok := application.Operation(operationCreateResolver); !ok {
+		t.Fatal("registered custom mutation did not resolve as a custom mutation")
+	}
+	if _, ok := application.TxOperation(operationCreateResolver); ok {
+		t.Fatal("a custom mutation resolved as a transaction operation")
+	}
+	if _, ok := application.TxOperation(operationOtherResolver); !ok {
+		t.Fatal("registered transaction operation did not resolve as a transaction operation")
+	}
+	if _, ok := application.Operation(operationOtherResolver); ok {
+		t.Fatal("a transaction operation resolved as a custom mutation")
+	}
+	if _, ok := application.TxOperation(operationUnregisteredResolver); ok {
+		t.Fatal("an unregistered function resolved as a transaction operation")
+	}
+	factory := func(bindingActor) (FrozenPolicy, error) {
+		rules := NewRules[bindingModel]()
+		Within(rules, operationOtherResolver).CanCreate(All[bindingModel]())
+		return rules.Freeze(operationModelID)
+	}
+	set, err := BuildGeneratedPolicySet(operationBindings(t, factory, GeneratedTxOperation("operation-other", operationOtherResolver)), bindingActor{})
+	if err != nil {
+		t.Fatalf("Within naming a transaction operation: %v", err)
+	}
+	if len(set.Operations()) != 1 {
+		t.Fatalf("transaction operation grants = %v", set.Operations())
+	}
+	if _, err := GeneratedApplicationOperations(application, GeneratedOperation{reference: operationReferenceOf(operationUnregisteredResolver), extensionID: "kindless"}); err == nil {
+		t.Fatal("an operation without a kind was registered")
 	}
 }

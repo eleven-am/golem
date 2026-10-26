@@ -36,13 +36,13 @@ func TestGraphQLMutationAndNestedOraclePostgreSQLProfiles(t *testing.T) {
 				log := &socialHookLog{}
 				fixture := newPostgresSocialMutationFixture(t, profile, golem.ModelID{}, log)
 				fixture = p5ReopenPostgresSocialMutation(t, fixture, fixture.schema.Post, log, MutationLimits{})
-				assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeForbidden)
+				assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeForbidden, nil)
 			})
 			t.Run("nested-limit-rollback", func(t *testing.T) {
 				log := &socialHookLog{}
 				fixture := newPostgresSocialMutationFixture(t, profile, golem.ModelID{}, log)
 				fixture = p5ReopenPostgresSocialMutation(t, fixture, golem.ModelID{}, log, MutationLimits{MaxTouchedRows: 1})
-				assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeBadUserInput)
+				assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeBadUserInput, []string{"post"})
 			})
 		})
 	}

@@ -54,6 +54,10 @@ see [MIGRATION.md](./MIGRATION.md#policies).
 immutable and built in linear time; a 1,024-leaf condition took about 900
 million allocations to build. A caller `Create` on SQLite went from 3.04 ms to
 0.94 ms and `FindFirst` from 10.99 ms to 2.17 ms in the policy benchmark.
+The policy set also remembers the conditions it resolves for each model, so
+repeated calls by one actor skip that work: a caller `Update` fell from 26,100
+allocations to 2,240 and a caller `Delete` from 22,100 to 1,210 against
+go/v0.6.8.
 `ForPrincipal` caches the built policy set per actor, in a bounded LRU
 (`Config.PolicyCache`), and builds each model's policy only when a call first
 needs it: a warm `ForPrincipal` went from 25.4 µs and 321 allocations to

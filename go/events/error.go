@@ -19,6 +19,8 @@ const (
 	CodeSubscriptionRevalidation ErrorCode = "GOLEM_SUBSCRIPTION_REVALIDATION"
 	CodeSubscriptionSourceClosed ErrorCode = "GOLEM_SUBSCRIPTION_SOURCE_CLOSED"
 	CodeSubscriptionCancelled    ErrorCode = "GOLEM_SUBSCRIPTION_CANCELLED"
+	CodeSubscriptionForbidden    ErrorCode = "GOLEM_SUBSCRIPTION_FORBIDDEN"
+	CodeSubscriptionLimit        ErrorCode = "GOLEM_SUBSCRIPTION_LIMIT"
 	CodeCDCInvalid               ErrorCode = "GOLEM_CDC_INVALID"
 	CodeCDCUnavailable           ErrorCode = "GOLEM_CDC_UNAVAILABLE"
 

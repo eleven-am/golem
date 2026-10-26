@@ -2,11 +2,11 @@
   "kind": "physical_snapshot",
   "formatVersion": 1,
   "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-  "contractFingerprint": "8c18a2d10fae9ce7397c55dbffb9ed47ed634aa1a5ea71c0bced4ac9118642fb",
+  "contractFingerprint": "e15cee98589237a082bfa5e5a3353354d806dc99814ebb3a0573a24cbd441158",
   "provider": "sqlite",
   "physicalFingerprint": "4ba5ee3d35d82ec282a0fbde0edd30b140cc53c54cd977970f8b843d06f81cdf",
   "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
-  "generationDigest": "8d41644cd789e4f22e351a07ac4d0fef8c3d5bb68bfd58630b51e1e901e82c6b",
+  "generationDigest": "90b9eacb433afa4ec615ee03afa82ae5b79231984a1830ac901f9a5dc99800a7",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {

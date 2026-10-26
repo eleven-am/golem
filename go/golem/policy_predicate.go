@@ -782,8 +782,8 @@ func validateFrozenOperand(operand frozenOperand) error {
 				return freezeFailure(FreezeInvalidValue, "time operand is outside [00:00:00, 24:00:00)")
 			}
 		case FrozenValueDateTime:
-			if value.nanosecond >= 1_000_000_000 || value.nanosecond%1_000 != 0 {
-				return freezeFailure(FreezeInvalidValue, "datetime must have exact microsecond precision")
+			if value.nanosecond >= 1_000_000_000 {
+				return freezeFailure(FreezeInvalidValue, "datetime nanosecond is outside one second")
 			}
 		case FrozenValueJSON:
 			if _, ok := copyJSONValue(publicJSONValue(value.json)); !ok {
@@ -1016,6 +1016,7 @@ type ruleBuilder struct {
 	condition *predicateNode
 	fields    []FieldID
 	operation *operationReference
+	aggregate bool
 }
 
 type rulesState struct {
@@ -1061,6 +1062,7 @@ type frozenRule struct {
 	fields        []FieldID
 	position      uint32
 	unconditional bool
+	rowOnly       bool
 }
 
 type FrozenPolicy struct {
@@ -1068,6 +1070,7 @@ type FrozenPolicy struct {
 	rules      []frozenRule
 	canonical  []byte
 	operations []frozenOperationRules
+	aggregates []frozenOperationRules
 }
 
 func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
@@ -1086,18 +1089,22 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 	rules.state.mu.RUnlock()
 
 	var base []ruleBuilder
-	var operations []frozenOperationRules
+	var operations, aggregates []frozenOperationRules
 	for _, rule := range snapshot {
 		if rule.operation == nil {
 			base = append(base, rule)
 			continue
 		}
-		index := slices.IndexFunc(operations, func(group frozenOperationRules) bool { return group.reference == *rule.operation })
-		if index < 0 {
-			operations = append(operations, frozenOperationRules{reference: *rule.operation})
-			index = len(operations) - 1
+		groups := &operations
+		if rule.aggregate {
+			groups = &aggregates
 		}
-		operations[index].builders = append(operations[index].builders, rule)
+		index := slices.IndexFunc(*groups, func(group frozenOperationRules) bool { return group.reference == *rule.operation })
+		if index < 0 {
+			*groups = append(*groups, frozenOperationRules{reference: *rule.operation})
+			index = len(*groups) - 1
+		}
+		(*groups)[index].builders = append((*groups)[index].builders, rule)
 	}
 	frozen, err := freezeRuleBuilders(model, base, 0)
 	if err != nil {
@@ -1108,15 +1115,17 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 		return FrozenPolicy{}, freezeFailure(FreezeInvalidRule, err.Error())
 	}
 	offset := uint32(len(base))
-	for index := range operations {
-		operations[index].rules, err = freezeRuleBuilders(model, operations[index].builders, offset)
-		if err != nil {
-			return FrozenPolicy{}, err
+	for _, groups := range [][]frozenOperationRules{operations, aggregates} {
+		for index := range groups {
+			groups[index].rules, err = freezeRuleBuilders(model, groups[index].builders, offset)
+			if err != nil {
+				return FrozenPolicy{}, err
+			}
+			offset += uint32(len(groups[index].builders))
+			groups[index].builders = nil
 		}
-		offset += uint32(len(operations[index].builders))
-		operations[index].builders = nil
 	}
-	return FrozenPolicy{model: model, rules: frozen, canonical: canonical, operations: operations}, nil
+	return FrozenPolicy{model: model, rules: frozen, canonical: canonical, operations: operations, aggregates: aggregates}, nil
 }
 
 func freezeRuleBuilders(model ModelID, builders []ruleBuilder, reported uint32) ([]frozenRule, error) {
@@ -1141,14 +1150,17 @@ func freezeRuleBuilders(model ModelID, builders []ruleBuilder, reported uint32) 
 			failure.HasRule = true
 			return nil, failure
 		}
-		if !validAction(rule.action) || !validEffect(rule.effect) || (rule.action == FrozenActionDelete && fields != nil) || (rule.operation != nil && (rule.effect != FrozenEffectGrant || rule.action == FrozenActionRead)) {
+		if !validAction(rule.action) || !validEffect(rule.effect) || (rule.action == FrozenActionDelete && fields != nil) || (rule.operation != nil && (rule.effect != FrozenEffectGrant || (rule.action == FrozenActionRead) != rule.aggregate)) {
 			return nil, &FreezeError{Code: FreezeInvalidRule, RulePosition: position, HasRule: true, Detail: "invalid action, effect, or delete field rule"}
+		}
+		if rule.aggregate && (rule.operation == nil || rule.action != FrozenActionRead || rule.effect != FrozenEffectGrant) {
+			return nil, &FreezeError{Code: FreezeInvalidRule, RulePosition: position, HasRule: true, Detail: "an aggregate grant is valid only inside Within"}
 		}
 		unconditional := condition.kind == FrozenConditionConstant && condition.truth
 		if unconditional {
 			condition = nil
 		}
-		frozen[index] = frozenRule{action: rule.action, effect: rule.effect, model: model, condition: condition, fields: fields, position: uint32(index), unconditional: unconditional}
+		frozen[index] = frozenRule{action: rule.action, effect: rule.effect, model: model, condition: condition, fields: fields, position: uint32(index), unconditional: unconditional, rowOnly: rule.aggregate && fields == nil}
 	}
 	return frozen, nil
 }
@@ -1219,6 +1231,9 @@ func (view frozenRuleView) Condition() (FrozenPredicateView, bool) {
 	return frozenPredicateView{predicate: FrozenPredicate{rootModel: view.rule.model, root: view.rule.condition, canonical: canonical}}, true
 }
 func (view frozenRuleView) Fields() ([]FieldID, bool) {
+	if view.rule.rowOnly {
+		return nil, false
+	}
 	if view.rule.fields == nil {
 		return nil, true
 	}
@@ -1278,7 +1293,9 @@ func encodeFrozenPolicy(model ModelID, rules []frozenRule) ([]byte, error) {
 				return nil, err
 			}
 		}
-		if rule.fields == nil {
+		if rule.rowOnly {
+			output.WriteByte(2)
+		} else if rule.fields == nil {
 			output.WriteByte(0)
 		} else {
 			output.WriteByte(1)

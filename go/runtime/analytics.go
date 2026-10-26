@@ -22,7 +22,7 @@ func CallerAggregate[P, A, M any](ctx context.Context, caller *Caller[P, A], des
 	if err != nil {
 		return golem.AggregateResult[M]{}, analyticsError("aggregate", descriptor, err)
 	}
-	rows, err := executeAnalytics(ctx, caller.app, caller.executor, caller.policies, false, descriptor.Metadata().ModelID(), frozen)
+	rows, err := executeAnalytics(ctx, caller.app, caller.executor, caller.policies.AggregateView(), false, descriptor.Metadata().ModelID(), frozen)
 	if err != nil {
 		return golem.AggregateResult[M]{}, err
 	}
@@ -180,6 +180,9 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 		planned, err = analytics.System(request, app.registry, app.providers, app.readLimits.plan)
 	} else {
 		planned, err = analytics.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
+	}
+	if refused, ok := publicBindReasonError(app.registry, "analytics", descriptor, err); ok {
+		return preparedAnalyticsStatement{}, refused
 	}
 	if err != nil {
 		if refused, ok := policyUnavailableReadError("analytics", descriptor, err); ok {

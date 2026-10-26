@@ -205,6 +205,38 @@ func runScenario(ctx context.Context, database *provider.Database) error {
 	if err := expectEvents(ctx, stream, []string{"created " + keptID.String()}); err != nil {
 		return err
 	}
+	if _, err := alice.Notes.Update(ctx, kernel.Notes.ByID.Value(keptID), kernel.Notes.Update(kernel.Notes.Title.Set("outside"))); err == nil {
+		return errors.New("retitle outside the operation was accepted")
+	}
+	var retitled string
+	err = alice.Transaction(ctx, func(transaction *kernel.CallerTx[kernel.Principal]) error {
+		var runErr error
+		retitled, runErr = kernel.Run(ctx, transaction, kernel.RetitleNote, kernel.RetitleNoteArgs{ID: keptID, Title: "retitled"})
+		return runErr
+	})
+	if err != nil || retitled != "retitled" {
+		return fmt.Errorf("Run retitled the note to %q: %v", retitled, err)
+	}
+	err = bob.Transaction(ctx, func(transaction *kernel.CallerTx[kernel.Principal]) error {
+		_, runErr := kernel.Run(ctx, transaction, kernel.RetitleNote, kernel.RetitleNoteArgs{ID: keptID, Title: "bob"})
+		return runErr
+	})
+	if err == nil {
+		return errors.New("bob retitled alice's note")
+	}
+	kept, err := alice.Notes.FindUnique(ctx, kernel.Notes.ByID.Value(keptID))
+	if err != nil {
+		return fmt.Errorf("reread retitled note: %w", err)
+	}
+	if title, _ := golem.Value(kept, kernel.Notes.Title).Get(); title != "retitled" {
+		return fmt.Errorf("retitled note title = %q", title)
+	}
+	if err := expectEvents(ctx, stream, []string{"updated " + keptID.String()}); err != nil {
+		return err
+	}
+	if err := countActiveNotes(ctx, alice, bob); err != nil {
+		return err
+	}
 	if _, err := alice.Notes.Delete(ctx, kernel.Notes.ByID.Value(keptID)); err != nil {
 		return fmt.Errorf("alice deletes a note: %w", err)
 	}
@@ -233,6 +265,32 @@ func runScenario(ctx context.Context, database *provider.Database) error {
 	}
 	if title != "kept" || len(handled) != 0 {
 		return fmt.Errorf("queue worker handled %q with %d more pending", title, len(handled))
+	}
+	return nil
+}
+
+func countActiveNotes(ctx context.Context, alice, bob *kernel.Caller[kernel.Principal]) error {
+	bobNoteID := identity(14)
+	if _, err := bob.Notes.Create(ctx, kernel.Notes.Create(kernel.Notes.ID.Create(bobNoteID), kernel.Notes.Title.Create("bob's"))); err != nil {
+		return fmt.Errorf("bob creates a note: %w", err)
+	}
+	if count, err := alice.Notes.Count(ctx); err != nil || count != 2 {
+		return fmt.Errorf("alice counts %d notes outside the operation: %v", count, err)
+	}
+	var active int64
+	err := alice.Transaction(ctx, func(transaction *kernel.CallerTx[kernel.Principal]) error {
+		var runErr error
+		active, runErr = kernel.Run(ctx, transaction, kernel.CountActiveNotes, struct{}{})
+		return runErr
+	})
+	if err != nil || active != 3 {
+		return fmt.Errorf("CanCount inside Run counted %d notes, want alice's two and bob's active one: %v", active, err)
+	}
+	if rows, err := alice.Notes.FindMany(ctx); err != nil || len(rows) != 2 {
+		return fmt.Errorf("alice reads %d notes after the operation: %v", len(rows), err)
+	}
+	if _, err := bob.Notes.Delete(ctx, kernel.Notes.ByID.Value(bobNoteID)); err != nil {
+		return fmt.Errorf("bob deletes his note: %w", err)
 	}
 	return nil
 }

@@ -48,7 +48,11 @@ func Policy(input ir.Policy) (ir.Policy, error) {
 		}
 
 		fields, modelWide := rule.Fields()
-		if modelWide {
+		if rule.RowOnly() {
+			normalized[index], err = ir.NewRowRule(
+				rule.Action(), rule.Effect(), model, conditionPointer, rule.Position(),
+			)
+		} else if modelWide {
 			normalized[index], err = ir.NewModelRule(
 				rule.Action(), rule.Effect(), model, conditionPointer, rule.Position(),
 			)

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/examples/social/social"
@@ -159,6 +160,8 @@ func TestP8ExternalOracleScenario(t *testing.T) {
 		f.customTransaction()
 	case "denial-provider-failure":
 		f.denialAndProviderFailure()
+	case "datetime-precision":
+		f.subMicrosecondDatetime()
 	default:
 		t.Fatalf("unknown mutation oracle scenario %q", os.Getenv("P8_ORACLE_SCENARIO"))
 	}
@@ -246,6 +249,60 @@ func newFixture(t *testing.T) *fixture {
 		graph.Handler().ServeHTTP(writer, request.WithContext(requestContext))
 	})
 	return &fixture{t: t, ctx: social.WithPostHookObserver(ctx, trace), db: database, app: application, caller: caller, graph: graph, handler: handler, trace: trace, reports: reports, observed: observed, samples: map[string][]observedOperation{}, owner: owner, other: other}
+}
+
+func (f *fixture) subMicrosecondDatetime() {
+	at := time.Date(2026, 10, 25, 12, 0, 0, 123456001, time.UTC)
+	stored := at.Truncate(time.Microsecond)
+	if _, err := f.caller.Sessions.Create(f.ctx, social.Sessions.Create(
+		social.Sessions.UserID.Create(f.owner),
+		social.Sessions.TokenHash.Create([]byte("sub-microsecond")),
+		social.Sessions.ExpiresAt.Create(at),
+	)); err != nil {
+		f.t.Fatalf("sub-microsecond write refused: %v", err)
+	}
+	created, err := f.caller.Sessions.FindMany(f.ctx, social.Sessions.Where(social.Sessions.UserID.Eq(f.owner)))
+	if err != nil || len(created) != 1 {
+		f.t.Fatalf("created sessions=%d err=%v", len(created), err)
+	}
+	if got, ok := golem.Value(created[0], social.Sessions.ExpiresAt).Get(); !ok || !got.Equal(stored) {
+		f.t.Fatalf("stored=%v ok=%t want=%v", got, ok, stored)
+	}
+	later := at.Add(time.Hour)
+	for _, check := range []struct {
+		name      string
+		predicate golem.Predicate[social.Session]
+		want      int
+	}{
+		{"lt", social.Sessions.ExpiresAt.LT(at), 1},
+		{"lte", social.Sessions.ExpiresAt.LTE(at), 1},
+		{"gt", social.Sessions.ExpiresAt.GT(at), 0},
+		{"gte", social.Sessions.ExpiresAt.GTE(at), 0},
+		{"eq", social.Sessions.ExpiresAt.Eq(at), 0},
+		{"eq-stored", social.Sessions.ExpiresAt.Eq(stored), 1},
+		{"ne", social.Sessions.ExpiresAt.Ne(at), 1},
+		{"in", social.Sessions.ExpiresAt.In(at, later), 0},
+		{"in-mixed", social.Sessions.ExpiresAt.In(at, stored), 1},
+		{"not-in", social.Sessions.ExpiresAt.NotIn(at, later), 1},
+		{"not-lt", golem.Not(social.Sessions.ExpiresAt.LT(at)), 0},
+		{"not-gte", golem.Not(social.Sessions.ExpiresAt.GTE(at)), 1},
+		{"not-eq", golem.Not(social.Sessions.ExpiresAt.Eq(at)), 1},
+		{"not-ne", golem.Not(social.Sessions.ExpiresAt.Ne(at)), 0},
+	} {
+		rows, err := f.caller.Sessions.FindMany(f.ctx, social.Sessions.Where(check.predicate))
+		if err != nil {
+			f.t.Fatalf("%s filter refused: %v", check.name, err)
+		}
+		if len(rows) != check.want {
+			f.t.Fatalf("%s rows=%d want=%d", check.name, len(rows), check.want)
+		}
+	}
+	posts := social.Posts.Scope()
+	_, err = f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(social.Posts.CreatedAt.At(posts).LT(at)).Select(social.Posts.ID.At(posts)))
+	var failure *golem.Error
+	if !errors.As(err, &failure) || !errors.Is(err, golem.CodeBadUserInput) || !errors.Is(err, golem.ReasonValuePrecision) || fmt.Sprintf("%x", failure.Field) != "62c5faa04f85a2985a6da0e2d755bed1" {
+		f.t.Fatalf("scoped sub-microsecond err=%#v", err)
+	}
 }
 
 func (f *fixture) close() {

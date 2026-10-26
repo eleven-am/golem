@@ -190,10 +190,6 @@ func TestPredicateFreezeRejectsMalformedAndNonFiniteValues(t *testing.T) {
 			_, err := GeneratedOrderedField[freezeModel, float64](freezeFieldID).LT(math.Inf(1)).Freeze(freezeDescriptor)
 			return err
 		}, FreezeInvalidValue},
-		{"sub-microsecond datetime", func() error {
-			_, err := GeneratedOrderedField[freezeModel, time.Time](freezeFieldID).Eq(time.Unix(1, 1)).Freeze(freezeDescriptor)
-			return err
-		}, FreezeInvalidValue},
 		{"nil text comparison mode", func() error {
 			_, err := GeneratedModeTextField[freezeModel, string](freezeFieldID).Compare(nil).Eq("value").Freeze(freezeDescriptor)
 			return err
@@ -223,6 +219,20 @@ func TestPredicateFreezeRejectsMalformedAndNonFiniteValues(t *testing.T) {
 				t.Fatalf("freeze error=%#v; want code %s", err, test.code)
 			}
 		})
+	}
+}
+
+func TestPredicateFreezeKeepsSubMicrosecondDateTimeForTheBinder(t *testing.T) {
+	frozen, err := GeneratedOrderedField[freezeModel, time.Time](freezeFieldID).Eq(time.Unix(1, 1)).Freeze(freezeDescriptor)
+	if err != nil {
+		t.Fatalf("sub-microsecond datetime freeze err=%v", err)
+	}
+	operand, ok := frozen.View().Root().Operand().One()
+	if !ok {
+		t.Fatal("frozen comparison has no operand")
+	}
+	if seconds, nanoseconds, ok := operand.DateTime(); !ok || seconds != 1 || nanoseconds != 1 {
+		t.Fatalf("frozen datetime=(%d,%d,%t)", seconds, nanoseconds, ok)
 	}
 }
 

@@ -1,6 +1,7 @@
 package bind
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -21,6 +22,18 @@ type BoundTarget struct {
 
 func (target BoundTarget) Target() mutationir.Target             { return target.target }
 func (target BoundTarget) SelectorPredicate() policyir.Condition { return target.selectorPredicate }
+
+func (target BoundTarget) WithGuard(guard policyir.Condition) (BoundTarget, error) {
+	current := target.target
+	if guard.ModelID() != current.ModelID() {
+		return BoundTarget{}, fail(CodeGuard, golem.ModelID(current.ModelID()), golem.FieldID{}, "replacement target guard belongs to another model", nil)
+	}
+	replaced, err := mutationir.NewTarget(current.ModelID(), current.KeyID(), current.Values(), &guard)
+	if err != nil {
+		return BoundTarget{}, fail(CodeInternal, golem.ModelID(current.ModelID()), golem.FieldID{}, "target IR rejected the replacement guard", err)
+	}
+	return BoundTarget{target: replaced, selectorPredicate: target.selectorPredicate}, nil
+}
 
 // Target binds one frozen unique target for the model owned by the operation.
 // Selector values are emitted in the active identity's declared order even
@@ -55,9 +68,9 @@ func Target(frozen golem.FrozenMutationTarget, expectedModel golem.ModelID, regi
 	if err != nil {
 		return BoundTarget{}, fail(CodeInternal, expectedModel, golem.FieldID{}, "active schema provider set is invalid", err)
 	}
-	selectorPredicate, err := policybind.Predicate(frozen.SelectorPredicate(), registry, providers)
+	selectorPredicate, err := policybind.ExactPredicate(frozen.SelectorPredicate(), registry, providers)
 	if err != nil {
-		return BoundTarget{}, fail(CodeTarget, expectedModel, golem.FieldID{}, "selector predicate did not bind", err)
+		return BoundTarget{}, predicateFailure(registry, CodeTarget, expectedModel, "selector predicate did not bind", err)
 	}
 	if selectorPredicate.ModelID() != policyir.ModelID(expectedModel) {
 		return BoundTarget{}, fail(CodeTarget, expectedModel, golem.FieldID{}, "selector predicate belongs to another model", nil)
@@ -86,7 +99,7 @@ func Target(frozen golem.FrozenMutationTarget, expectedModel golem.ModelID, regi
 	if publicGuard, present := frozen.Guard(); present {
 		bound, bindErr := policybind.Predicate(publicGuard, registry, providers)
 		if bindErr != nil {
-			return BoundTarget{}, fail(CodeGuard, expectedModel, golem.FieldID{}, "target guard did not bind", bindErr)
+			return BoundTarget{}, predicateFailure(registry, CodeGuard, expectedModel, "target guard did not bind", bindErr)
 		}
 		if bound.ModelID() != policyir.ModelID(expectedModel) {
 			return BoundTarget{}, fail(CodeGuard, expectedModel, golem.FieldID{}, "target guard belongs to another model", nil)
@@ -121,7 +134,7 @@ func BatchPredicate(frozen golem.FrozenPredicate, expectedModel golem.ModelID, r
 	}
 	bound, err := policybind.Predicate(frozen, registry, providers)
 	if err != nil {
-		return policyir.Condition{}, fail(CodeGuard, expectedModel, golem.FieldID{}, "batch predicate did not bind", err)
+		return policyir.Condition{}, predicateFailure(registry, CodeGuard, expectedModel, "batch predicate did not bind", err)
 	}
 	if bound.ModelID() != policyir.ModelID(expectedModel) {
 		return policyir.Condition{}, fail(CodeGuard, expectedModel, golem.FieldID{}, "batch predicate belongs to another model", nil)
@@ -130,6 +143,16 @@ func BatchPredicate(frozen golem.FrozenPredicate, expectedModel golem.ModelID, r
 		return policyir.Condition{}, err
 	}
 	return bound, nil
+}
+
+func predicateFailure(registry *schema.Registry, code ErrorCode, model golem.ModelID, detail string, cause error) error {
+	var bound *policybind.Error
+	if errors.As(cause, &bound) && bound.Reason != "" {
+		if field, ok := registry.Field(golem.ModelID(bound.ModelID), golem.FieldID(bound.FieldID)); ok {
+			return failValue(registry, field, golem.FieldID(bound.FieldID), detail, valueFailure(bound.Reason, 0, cause))
+		}
+	}
+	return fail(code, model, golem.FieldID{}, detail, cause)
 }
 
 func collectSelectorValues(condition policyir.Condition, values map[policyir.FieldID]policyir.Value) error {
