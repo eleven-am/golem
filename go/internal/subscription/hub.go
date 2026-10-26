@@ -601,7 +601,7 @@ func normalizedEvaluationCode(err error) events.ErrorCode {
 		return events.CodeSubscriptionSourceClosed
 	}
 	switch code {
-	case events.CodeSubscriptionRevalidation, events.CodeSubscriptionCancelled, events.CodeSubscriptionSourceClosed:
+	case events.CodeSubscriptionRevalidation, events.CodeSubscriptionCancelled, events.CodeSubscriptionSourceClosed, events.CodeSubscriptionResync:
 		return code
 	default:
 		return events.CodeSubscriptionSourceClosed

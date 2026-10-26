@@ -9,7 +9,6 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
-	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
@@ -176,7 +175,7 @@ func TestDeclaredDeleteSnapshotOversizeIsUnverifiableAndObserved(t *testing.T) {
 	}
 }
 
-func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *testing.T) {
+func TestDeleteAuthorizationOutsideSnapshotResyncsAndReportsCoverage(t *testing.T) {
 	title := func(schemaFixture schematest.Fixture) golem.TextField[p7EventPost, string] {
 		return golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle)
 	}
@@ -230,10 +229,12 @@ func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *t
 		if suppressed.SuppressionReason() != events.SuppressionDeletionUnverifiable {
 			t.Fatalf("delete outside the snapshot suppression=%q", suppressed.SuppressionReason())
 		}
-		fixture.publish(t, fixture.notice(t, golem.EventCreated, id+1, "visible", false))
-		event := receiveP7Event(t, stream)
-		if event.validated.Metadata().EventID() != p7OracleID(id+1) {
-			t.Fatalf("stream delivered %x after the unverifiable delete", event.validated.Metadata().EventID())
+		receive, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		if value, err := stream.Recv(receive); err == nil {
+			t.Fatalf("stream delivered %x instead of ending after the unverifiable delete", value.validated.Metadata().EventID())
+		} else if code, ok := events.CodeOf(err); !ok || code != events.CodeSubscriptionResync {
+			t.Fatalf("unverifiable delete ended the stream with %v", err)
 		}
 		for _, suppression := range capture.kind(events.ObservationSuppression) {
 			if suppression.SuppressionReason() != events.SuppressionDeletionUnverifiable || suppression.Action() != golem.EventDeleted {
@@ -273,7 +274,7 @@ func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *t
 	})
 }
 
-func TestDeleteCoverageReportsRelationDependenciesThatCannotBeHydrated(t *testing.T) {
+func TestDeleteCoverageCoversForwardHopsAtAnyDepth(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	capture := &deleteSnapshotObservations{}
 	fixture.app.eventObserver = capture
@@ -299,42 +300,8 @@ func TestDeleteCoverageReportsRelationDependenciesThatCannotBeHydrated(t *testin
 		t.Fatal(err)
 	}
 	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, direct)
+	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, nested)
 	if coverage := capture.kind(events.ObservationDeleteCoverage); len(coverage) != 0 {
-		t.Fatalf("hydratable forward hop reported coverage=%#v", coverage)
-	}
-	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, nested)
-	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, nested)
-	coverage := capture.kind(events.ObservationDeleteCoverage)
-	if len(coverage) != 1 || coverage[0].ModelID() != fixture.schema.Post || coverage[0].AggregateCount() != 1 || coverage[0].Outcome() != events.OutcomeSuccess {
-		t.Fatalf("nested relation coverage=%#v", coverage)
-	}
-	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "alice"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	titleValue, err := policyir.StringValue("visible")
-	if err != nil {
-		t.Fatal(err)
-	}
-	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, post, []mutationdecode.Cell{
-		mutationdecode.Value(policyir.FieldID(fixture.schema.PostID), policyir.UUIDValue([16]byte{15: 9})),
-		mutationdecode.Value(policyir.FieldID(fixture.schema.AuthorID), policyir.UUIDValue([16]byte{15: 1})),
-		mutationdecode.Value(policyir.FieldID(fixture.schema.PostTitle), titleValue),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, _ := fixture.schema.Registry.Model(fixture.schema.Post)
-	_, declared, _ := model.EventSchema()
-	fields := make([]policyir.FieldID, len(declared))
-	for index, field := range declared {
-		fields[index] = policyir.FieldID(field)
-	}
-	snapshot, err := row.Select(fixture.schema.Registry, fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, verifiable, err := fixture.app.deleteSnapshotRecord(context.Background(), caller, snapshot, nested); err != nil || verifiable {
-		t.Fatalf("nested relation delete verifiable=%t err=%v", verifiable, err)
+		t.Fatalf("forward hops whose foreign key is in the snapshot reported coverage=%#v", coverage)
 	}
 }

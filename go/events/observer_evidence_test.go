@@ -25,7 +25,7 @@ func TestObserverShapeContainsOnlyClosedSafeLabels(t *testing.T) {
 		ObservationTopology,
 	}
 	outcomes := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeSuppressed, OutcomeCancelled}
-	reasons := []SuppressionReason{"", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable, SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite}
+	reasons := []SuppressionReason{"", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable, SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite, SuppressionDeleteOverDelivered}
 	capture := &p7ObservationCapture{}
 	for index, kind := range kinds {
 		outcome := outcomes[index%len(outcomes)]

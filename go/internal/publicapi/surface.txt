@@ -337,6 +337,7 @@ events.Stream.Recv func(context.Context) (internal/event/value.Notice, error)
 events.Subscription = internal/event/value.Subscription
 events.SuppressionCorrelatedGolemWrite const SuppressionReason = "correlated_golem_write"
 events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
+events.SuppressionDeleteOverDelivered const SuppressionReason = "delete_over_delivered"
 events.SuppressionDeletionUnverifiable const SuppressionReason = "deletion-unverifiable"
 events.SuppressionEntityAbsent const SuppressionReason = "entity_absent"
 events.SuppressionFiltered const SuppressionReason = "filtered"
