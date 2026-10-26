@@ -738,6 +738,8 @@ golem.(*NullableTextField).Ne func(V) Predicate[M]
 golem.(*NullableTextField).NotIn func(...V) Predicate[M]
 golem.(*NullableTextField).StartsWith func(V) Predicate[M]
 golem.(*OpaqueField).Expr func() SchemaExpr[M, V]
+golem.(*OperationRules).CanAggregate func(Predicate[M], Field[M], ...Field[M])
+golem.(*OperationRules).CanCount func(Predicate[M])
 golem.(*OperationRules).CanCreate func(Predicate[M])
 golem.(*OperationRules).CanCreateFields func(Predicate[M], Field[M], ...Field[M])
 golem.(*OperationRules).CanDelete func(Predicate[M])
@@ -2236,6 +2238,7 @@ golem.Generated func[M any, V any](ScalarColumn[M, V], SchemaExpr[M, V], Generat
 golem.GeneratedAfterCommitHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAfterHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAggregate func[M any](ModelID, ...AggregateOption[M]) AggregateRequest[M]
+golem.GeneratedAggregatePolicies func[A any](ApplicationBindings[A], FrozenPolicy) (map[OperationID]FrozenPolicy, error)
 golem.GeneratedAggregateSelect func[M any](AggregateMeasure[M], ...AggregateMeasure[M]) AggregateOption[M]
 golem.GeneratedAggregateWhere func[M any](Predicate[M]) AggregateOption[M]
 golem.GeneratedApplicationBindings func[A any](SchemaDigest, ...PackageBindings[A]) (ApplicationBindings[A], error)

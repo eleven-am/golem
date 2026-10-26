@@ -786,6 +786,9 @@ func BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (G
 	if err != nil {
 		return GeneratedPolicySet{}, err
 	}
+	if _, err := buildAggregatePolicies(bindings, policies); err != nil {
+		return GeneratedPolicySet{}, err
+	}
 	return GeneratedPolicySet{generation: bindings.generation, policies: policies, operations: operations}, nil
 }
 

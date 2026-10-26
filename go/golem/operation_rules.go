@@ -36,8 +36,7 @@ func operationReferenceOf(resolver any) operationReference {
 }
 
 // OperationRules records grants that apply only while the named custom
-// mutation resolver is running. It offers write grants alone: an operation
-// never widens reads and never adds a denial.
+// mutation resolver is running. An operation never adds a denial.
 type OperationRules[M any] struct {
 	rules     *Rules[M]
 	operation operationReference
@@ -67,6 +66,15 @@ func (rules *OperationRules[M]) CanCreateFields(value Predicate[M], first Field[
 }
 func (rules *OperationRules[M]) CanUpdateFields(value Predicate[M], first Field[M], rest ...Field[M]) {
 	rules.appendFieldGrant(frozenActionUpdate, value, first, rest)
+}
+
+func (rules *OperationRules[M]) CanCount(value Predicate[M]) {
+	operation := rules.operation
+	rules.rules.appendRule(ruleBuilder{action: frozenActionRead, effect: frozenEffectGrant, condition: value.node, operation: &operation, aggregate: true})
+}
+func (rules *OperationRules[M]) CanAggregate(value Predicate[M], first Field[M], rest ...Field[M]) {
+	operation := rules.operation
+	rules.rules.appendRule(ruleBuilder{action: frozenActionRead, effect: frozenEffectGrant, condition: value.node, fields: ruleFieldIdentities(first, rest), operation: &operation, aggregate: true})
 }
 
 func (rules *OperationRules[M]) appendModelGrant(action FrozenAction, value Predicate[M]) {
@@ -217,6 +225,37 @@ func (set GeneratedPolicySet) OperationPolicies(operation OperationID) []FrozenP
 		}
 	}
 	return result
+}
+
+func GeneratedAggregatePolicies[A any](bindings ApplicationBindings[A], policy FrozenPolicy) (map[OperationID]FrozenPolicy, error) {
+	grouped, err := buildAggregatePolicies(bindings, []FrozenPolicy{policy})
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[OperationID]FrozenPolicy, len(grouped))
+	for operation, merged := range grouped {
+		result[operation] = merged[0]
+	}
+	return result, nil
+}
+
+func buildAggregatePolicies[A any](bindings ApplicationBindings[A], policies []FrozenPolicy) (map[OperationID][]FrozenPolicy, error) {
+	result := make(map[OperationID][]FrozenPolicy)
+	for _, policy := range policies {
+		for _, operation := range policy.aggregates {
+			registered, present := bindings.operations[operation.reference.entry]
+			if operation.reference.entry == 0 || !present || registered.kind != generatedTxOperation {
+				return nil, fmt.Errorf("generated policy set: model %x grants Within(%s).CanCount or CanAggregate, which is not a generated transaction operation", policy.model, operation.reference.name)
+			}
+			merged, err := mergeOperationPolicy(policy, operation)
+			if err != nil {
+				return nil, fmt.Errorf("generated policy set: model %x Within(%s) aggregates: %w", policy.model, operation.reference.name, err)
+			}
+			identity := OperationID{entry: operation.reference.entry}
+			result[identity] = append(result[identity], merged)
+		}
+	}
+	return result, nil
 }
 
 func buildOperationPolicies[A any](bindings ApplicationBindings[A], policies []FrozenPolicy) (map[OperationID][]FrozenPolicy, error) {

@@ -344,7 +344,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	}
 
 	orders := request.OrderBy()
-	if request.Operation() != readir.Count {
+	if request.Operation() != readir.Count && !request.Unordered() {
 		if modelFact, ok := registry.Model(golem.ModelID(model)); ok {
 			seenOrder := make(map[policyir.FieldID]bool, len(orders))
 			for _, order := range orders {

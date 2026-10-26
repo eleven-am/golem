@@ -588,6 +588,7 @@ type Rule struct {
 	condition Condition
 	fields    []FieldID
 	position  uint32
+	rowOnly   bool
 }
 type Policy struct {
 	model ModelID
@@ -602,6 +603,17 @@ func NewFieldRule(action Action, effect Effect, model ModelID, condition *Condit
 	fields = append(fields, first)
 	fields = append(fields, rest...)
 	return newRule(action, effect, model, condition, fields, false, position)
+}
+func NewRowRule(action Action, effect Effect, model ModelID, condition *Condition, position uint32) (Rule, error) {
+	if action != ActionRead || effect != EffectGrant {
+		return Rule{}, fmt.Errorf("policy IR: a row-only rule must be a read grant")
+	}
+	rule, err := newRule(action, effect, model, condition, nil, true, position)
+	if err != nil {
+		return Rule{}, err
+	}
+	rule.rowOnly = true
+	return rule, nil
 }
 func newRule(action Action, effect Effect, model ModelID, condition *Condition, fields []FieldID, modelWide bool, position uint32) (Rule, error) {
 	if !validAction(action) || !validEffect(effect) || model == (ModelID{}) {
@@ -643,8 +655,9 @@ func (rule Rule) Condition() (Condition, bool) {
 	return rule.condition, true
 }
 func (rule Rule) Fields() (fields []FieldID, modelWide bool) {
-	return append([]FieldID(nil), rule.fields...), rule.fields == nil
+	return append([]FieldID(nil), rule.fields...), rule.fields == nil && !rule.rowOnly
 }
+func (rule Rule) RowOnly() bool { return rule.rowOnly }
 func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
 	if model == (ModelID{}) {
 		return Policy{}, fmt.Errorf("policy IR: zero policy model")
