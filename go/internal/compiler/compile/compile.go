@@ -188,6 +188,12 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddSemanticSearchOperations(&resolved.Compilation)...)
 	}
+	if !hasErrors(diagnostics) && len(interpreted.TxOperations) != 0 {
+		resolved.Compilation.Contract.TxOperations = make([]ir.TxOperationContractIR, len(interpreted.TxOperations))
+		for index, declaration := range interpreted.TxOperations {
+			resolved.Compilation.Contract.TxOperations[index] = declaration.Operation
+		}
+	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddFullTextSearchOperations(&resolved.Compilation)...)
 	}

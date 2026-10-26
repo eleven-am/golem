@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -323,6 +324,17 @@ func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnv
 			}); err != nil {
 				t.Fatal(err)
 			}
+		},
+		"RunCallerTxOperation": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.text(t)
+			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
+				unregistered := func(context.Context, *wrapperCallerTx, struct{}) (struct{}, error) { return struct{}{}, nil }
+				_, err := RunCallerTxOperation(ctx, tx, unregistered, func(scoped *wrapperCallerTx) *wrapperCallerTx { return scoped }, struct{}{})
+				if err == nil || !strings.Contains(err.Error(), "P5_CUSTOM_OPERATION") {
+					return fmt.Errorf("unregistered transaction operation = %v", err)
+				}
+				return nil
+			})
 		},
 		"CallerTxLockKeys": func(t *testing.T, environment *transactionWrapperEnvironment) {
 			fixture := environment.text(t)

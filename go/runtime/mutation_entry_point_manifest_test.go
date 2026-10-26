@@ -113,7 +113,7 @@ func runInSystemTransaction[P, A any](t testing.TB, system System[mutationResult
 func runInAdmittedCallerTransaction(t testing.TB, caller *Caller[mutationResultPrincipal, mutationResultActor], body func(context.Context, *CallerTx[mutationResultPrincipal, mutationResultActor]) error) semanticEntryPointOutcome {
 	t.Helper()
 	return runInCallerTransaction(t, caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
-		_, err := transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) (struct{}, error) {
+		_, err := transactionOperation(ctx, transactionCall{binding: transaction.caller.executor}, func(ctx context.Context) (struct{}, error) {
 			return struct{}{}, body(ctx, transaction)
 		})
 		return err
@@ -123,7 +123,7 @@ func runInAdmittedCallerTransaction(t testing.TB, caller *Caller[mutationResultP
 func runInAdmittedSystemTransaction[P, A any](t testing.TB, system System[mutationResultPrincipal, mutationResultActor], body func(context.Context, *SystemTx[mutationResultPrincipal, mutationResultActor]) error) semanticEntryPointOutcome {
 	t.Helper()
 	return runInSystemTransaction[P, A](t, system, func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
-		_, err := transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) (struct{}, error) {
+		_, err := transactionOperation(ctx, transactionCall{binding: transaction.system.executor}, func(ctx context.Context) (struct{}, error) {
 			return struct{}{}, body(ctx, transaction)
 		})
 		return err

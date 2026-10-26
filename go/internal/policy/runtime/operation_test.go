@@ -446,3 +446,45 @@ func TestLeaseAttemptsCountTowardTheirParentUnlessDiscarded(t *testing.T) {
 	}
 	absent.Finish(errors.New("ignored"))
 }
+
+func TestWithinTransactionHidesTheGrantAtReturnAndReleasesItsLeasesSeparately(t *testing.T) {
+	fixture := newRuntimeOperationFixture(t)
+	invite, hide, release := fixture.set.WithinTransaction(fixture.invite)
+	used, usedLease := invite.Lease()
+	if !runtimeCreateAllowed(t, used, fixture.user) {
+		t.Fatal("the transaction operation did not receive its create grant")
+	}
+	used.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	if !usedLease.Used() {
+		t.Fatal("a create only the operation grants did not use the lease")
+	}
+	hide()
+	if runtimeCreateAllowed(t, invite, fixture.user) {
+		t.Fatal("a hidden operation kept its grant")
+	}
+	late, lateLease := invite.Lease()
+	late.Policy(fixture.user)
+	late.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	if lateLease.Used() {
+		t.Fatal("a lookup after the operation returned used its lease")
+	}
+	if usedLease.OperationEnded() {
+		t.Fatal("hiding the grant ended the operation's leases")
+	}
+	commits := 0
+	if err := CommitLeases([]*Lease{usedLease, lateLease}, func() error { commits++; return nil }); err != nil || commits != 1 {
+		t.Fatalf("a write planned while the operation was visible was refused before release: %v", err)
+	}
+	release()
+	if !usedLease.OperationEnded() {
+		t.Fatal("release did not end the operation's leases")
+	}
+	if err := CommitLeases([]*Lease{usedLease}, func() error { commits++; return nil }); !errors.Is(err, ErrOperationEnded) || commits != 1 {
+		t.Fatalf("a lease committed after its operation was released: %v", err)
+	}
+	nested, _, releaseNested := invite.WithinTransaction(fixture.rename)
+	defer releaseNested()
+	if runtimeCreateAllowed(t, nested, fixture.user) {
+		t.Fatal("a nested transaction operation accumulated the outer operation's grant")
+	}
+}

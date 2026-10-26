@@ -219,13 +219,12 @@ events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
 events.Limits comparable
 events.Limits type struct
-events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
+events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
 events.Limits.ClaimRows field int
 events.Limits.ConnectionInitBytes field int
 events.Limits.ConnectionInitTimeout field time.Duration
 events.Limits.EvaluationConcurrency field int
 events.Limits.HubInputQueue field int
-events.Limits.KeepAlive field time.Duration
 events.Limits.LeaseDuration field time.Duration
 events.Limits.MaxEncodedBatchBytes field int
 events.Limits.MaxEncodedEventBytes field int
@@ -264,8 +263,6 @@ events.Observation type struct
 events.ObservationCDCAck const ObservationKind = "cdc_ack"
 events.ObservationCDCReceive const ObservationKind = "cdc_receive"
 events.ObservationCancellation const ObservationKind = "cancellation"
-events.ObservationDeleteCoverage const ObservationKind = "delete_coverage"
-events.ObservationDeleteSnapshotOversize const ObservationKind = "delete_snapshot_oversize"
 events.ObservationDelivery const ObservationKind = "delivery"
 events.ObservationDepthBlocked const ObservationKind = "depth_blocked"
 events.ObservationDepthPending const ObservationKind = "depth_pending"
@@ -340,7 +337,6 @@ events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
 events.SuppressionDeletionUnverifiable const SuppressionReason = "deletion-unverifiable"
 events.SuppressionEntityAbsent const SuppressionReason = "entity_absent"
 events.SuppressionFiltered const SuppressionReason = "filtered"
-events.SuppressionPolicyUnavailable const SuppressionReason = "policy_unavailable"
 events.SuppressionReason comparable
 events.SuppressionReason type string
 events.SuppressionUnauthorized const SuppressionReason = "unauthorized"
@@ -398,6 +394,7 @@ golem.(*ApplicationBindings).GenerationDigest func() SchemaDigest
 golem.(*ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(*ApplicationBindings).PolicyInventory func() []ModelID
 golem.(*ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
+golem.(*ApplicationBindings).TxOperation func(any) (OperationID, bool)
 golem.(*ApplicationDescriptors).GenerationDigest func() SchemaDigest
 golem.(*ApplicationDescriptors).Lookup func(ModelID) (ModelMetadata, bool)
 golem.(*ApplicationDescriptors).Models func() []ModelMetadata
@@ -1151,6 +1148,7 @@ golem.(ApplicationBindings).GenerationDigest func() SchemaDigest
 golem.(ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(ApplicationBindings).PolicyInventory func() []ModelID
 golem.(ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
+golem.(ApplicationBindings).TxOperation func(any) (OperationID, bool)
 golem.(ApplicationDescriptors).GenerationDigest func() SchemaDigest
 golem.(ApplicationDescriptors).Lookup func(ModelID) (ModelMetadata, bool)
 golem.(ApplicationDescriptors).Models func() []ModelMetadata
@@ -1929,7 +1927,6 @@ golem.DeleteHookRequest[M any] type struct
 golem.DeleteHookResult[M any] type struct
 golem.DeleteManyHookRequest[M any] type struct
 golem.DeleteManyHookResult[M any] type struct
-golem.DeleteSnapshot func[M any](...Column[M]) SubscriptionOption[M]
 golem.DimensionField func[M any, V any](ScalarColumn[M, V]) RelationDimensionPath[M, V]
 golem.DimensionGT func[M any, V OrderedAnalyticsValue](OrderedGroupDimension[M, V], V) GroupPredicate[M]
 golem.DimensionGTE func[M any, V OrderedAnalyticsValue](OrderedGroupDimension[M, V], V) GroupPredicate[M]
@@ -2368,6 +2365,7 @@ golem.GeneratedTextField func[M any, V ~string](FieldID) TextField[M, V]
 golem.GeneratedToMany func[M any, R any](FieldID, RelationID, ...ModelID) ToMany[M, R]
 golem.GeneratedToOne func[M any, R any](FieldID, RelationID, ...ModelID) ToOne[M, R]
 golem.GeneratedToOneSchemaField func[M any, R any]() ToOneSchemaField[M, R]
+golem.GeneratedTxOperation func[O any](string, O) GeneratedOperation
 golem.GeneratedUniqueSelectorValue func[M any](ModelID, KeyID, ...selectorComponent) UniqueSelectorValue[M]
 golem.GeneratedUpdateInput func[M any](ModelID, ...UpdateValue[M]) UpdateInput[M]
 golem.GeneratedUpdateManyInput func[M any](ModelID, ...UpdateManyValue[M]) UpdateManyInput[M]
@@ -2482,9 +2480,6 @@ golem.Int16ToInt32 var SchemaCast[int16, int32]
 golem.Int16ToInt64 var SchemaCast[int16, int64]
 golem.Int32ToInt64 var SchemaCast[int32, int64]
 golem.Int64ToString var SchemaCast[int64, string]
-golem.Isolation func(IsolationLevel) TransactionOption
-golem.IsolationLevel comparable
-golem.IsolationLevel type string
 golem.JSONArray func(...JSONValue) JSONArrayValue
 golem.JSONArrayValue type struct
 golem.JSONBool func(bool) JSONBoolValue
@@ -2643,6 +2638,8 @@ golem.OperationID comparable
 golem.OperationID type struct
 golem.OperationRules comparable
 golem.OperationRules[M any] type struct
+golem.Operations comparable
+golem.Operations type struct
 golem.OptimisticConcurrency func[M any](ScalarColumn[M, int64]) ModelOption[M]
 golem.Or func[M any](...Predicate[M]) Predicate[M]
 golem.OrGroup func[M any](GroupPredicate[M], ...GroupPredicate[M]) GroupPredicate[M]
@@ -2685,7 +2682,6 @@ golem.ProviderSchemaDocument type struct
 golem.Providers func(*Schema, ...Provider)
 golem.Query func[Resolver any](*GraphQLSchema, string, Resolver)
 golem.RankBM25 const TextRankingMode = "bm25"
-golem.ReadCommitted const IsolationLevel = "read_committed"
 golem.ReadCount const ReadOperation = 4
 golem.ReadFindFirst const ReadOperation = 2
 golem.ReadFindMany const ReadOperation = 3
@@ -2733,7 +2729,6 @@ golem.RelationToOne const RelationCardinality = "toOne"
 golem.Relation[M any, R any] type interface {} sealed
 golem.Requires func[M any](Field[M], ...Field[M]) ComputedOption[M]
 golem.Restrict const ReferentialAction = "restrict"
-golem.RetryConflicts func(int) TransactionOption
 golem.Row[M any] type struct
 golem.Rules[M any] type struct
 golem.RuntimeAfterCommitFailure func(HookOperation, ModelID, error) AfterCommitFailure
@@ -3030,7 +3025,6 @@ golem.RuntimeToManyOccurrenceCell func(FieldID, RuntimeOccurrenceID, []RuntimeMo
 golem.RuntimeToManyReadCell func(FieldID, []RuntimeModelRow) RuntimeReadCell
 golem.RuntimeToOneOccurrenceCell func(FieldID, RuntimeOccurrenceID, RuntimeModelRow) RuntimeOccurrenceCell
 golem.RuntimeToOneReadCell func(FieldID, RuntimeModelRow) RuntimeReadCell
-golem.RuntimeTransactionOptions func([]TransactionOption) (IsolationLevel, int, error)
 golem.RuntimeTransportField func(RuntimeModelRow, FieldID) RuntimeTransportValue
 golem.RuntimeTransportOccurrence func(RuntimeModelRow, FieldID, RuntimeOccurrenceID) RuntimeTransportValue
 golem.RuntimeTransportRelationCount func(RuntimeModelRow, FieldID, RelationID, RuntimeOccurrenceID) RuntimeTransportValue
@@ -3181,7 +3175,6 @@ golem.Select func[M any](...Selection[M]) Projection[M]
 golem.Selection[M any] type interface {} sealed
 golem.SemanticIndex func[M any](string, string, ...Column[M]) ModelOption[M]
 golem.SemanticResult[M any] type struct
-golem.Serializable const IsolationLevel = "serializable"
 golem.SetCreate func[M any, V any](*CreateHookRequest[M], CreateFieldCapability[M, V], V) error
 golem.SetDefault const ReferentialAction = "setDefault"
 golem.SetNull const ReferentialAction = "setNull"
@@ -3191,8 +3184,7 @@ golem.SortDescending const SortDirection = 2
 golem.SortDirection comparable
 golem.SortDirection type uint8
 golem.Stored const GeneratedStorage = "stored"
-golem.SubscriptionOption[M any] type interface {} sealed
-golem.Subscriptions func[M any](...SubscriptionOption[M]) ModelOption[M]
+golem.Subscriptions func[M any]() ModelOption[M]
 golem.Take func[M any](int) ReadOption[M]
 golem.TextComparison comparable
 golem.TextComparison[M any, V ~string] type struct
@@ -3217,7 +3209,7 @@ golem.ToOneRelationOption[M any, R any] type interface {} sealed
 golem.ToOneRelation[M any, R any] type interface {} sealed
 golem.ToOneSchemaField[M any, R any] type struct
 golem.ToOne[M any, R any] type struct
-golem.TransactionOption type interface {} sealed
+golem.TxOperation func[Operation any](*Operations, string, Operation)
 golem.UUID comparable
 golem.UUID type [16]uint8
 golem.Unique func[M any](string, ...Column[M]) ModelOption[M]
@@ -3634,7 +3626,6 @@ observe.OperationAnalyticsRelationGroupBy const Operation = "analytics.relation_
 observe.OperationCDCAcknowledge const Operation = "cdc.acknowledge"
 observe.OperationCDCReceive const Operation = "cdc.receive"
 observe.OperationCallerTransaction const Operation = "transaction.caller"
-observe.OperationEventDeleteSnapshotOversize const Operation = "event.delete_snapshot_oversize"
 observe.OperationEventDepthBlocked const Operation = "event.depth_blocked"
 observe.OperationEventDepthPending const Operation = "event.depth_pending"
 observe.OperationEventDepthRetired const Operation = "event.depth_retired"
@@ -3670,6 +3661,7 @@ observe.OperationMutationCustom const Operation = "mutation.custom"
 observe.OperationMutationDelete const Operation = "mutation.delete"
 observe.OperationMutationDeleteMany const Operation = "mutation.delete_many"
 observe.OperationMutationDisconnect const Operation = "mutation.disconnect"
+observe.OperationMutationOperation const Operation = "mutation.operation"
 observe.OperationMutationSetRelation const Operation = "mutation.set_relation"
 observe.OperationMutationUpdate const Operation = "mutation.update"
 observe.OperationMutationUpdateMany const Operation = "mutation.update_many"
@@ -3690,7 +3682,6 @@ observe.OperationSemanticRefresh const Operation = "semantic.refresh"
 observe.OperationShutdownHTTP const Operation = "shutdown.http"
 observe.OperationShutdownPublisher const Operation = "shutdown.publisher"
 observe.OperationSubscriptionCancellation const Operation = "subscription.cancellation"
-observe.OperationSubscriptionDeleteCoverage const Operation = "subscription.delete_coverage"
 observe.OperationSubscriptionDelivery const Operation = "subscription.delivery"
 observe.OperationSubscriptionEvaluation const Operation = "subscription.evaluation"
 observe.OperationSubscriptionMembership const Operation = "subscription.membership"
@@ -4259,7 +4250,7 @@ runtime.CallerSearch func[P any, A any, M any](context.Context, *Caller[P, A], g
 runtime.CallerSimilar func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerTextSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.CallerTextSearchSelect func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
-runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error, ...golem.TransactionOption) error
+runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error) error
 runtime.CallerTx comparable
 runtime.CallerTxAggregate func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
 runtime.CallerTxCount func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) (int64, error)
@@ -4319,7 +4310,6 @@ runtime.Config.ResolvePrincipal field func(context.Context, P) (A, error)
 runtime.Config.SnapshotActor field func(A) (A, error)
 runtime.Config.SnapshotPrincipal field func(P) (P, error)
 runtime.Config[P any, A any] type struct
-runtime.DefaultMutationDeleteSnapshotBytes const untyped int = 65536
 runtime.DispatchCallerOperation func[P any, A any](context.Context, *Caller[P, A], any, func(context.Context, *Caller[P, A]) (any, error)) (any, error)
 runtime.EventFactory type interface {Build, EventSchemaDigest, ModelID}
 runtime.EventFactory.Build func(internal/event/typedvalue.ValidatedEvent) (any, error)
@@ -4329,7 +4319,6 @@ runtime.EventFactoryRegistry type struct
 runtime.GeneratedEventFactoryRegistry func(golem.SchemaDigest, ...PackageEventFactories) (EventFactoryRegistry, error)
 runtime.GeneratedPackageEventFactories func(golem.SchemaDigest, ...EventFactory) PackageEventFactories
 runtime.MaxBatchLoaderKeys const untyped int = 90000
-runtime.MaxMutationDeleteSnapshotBytes const untyped int = 1048576
 runtime.MaxMutationFacts const untyped int = 1000
 runtime.MaxMutationNestedDepth const untyped int = 5
 runtime.MaxMutationOutboxBytes const untyped int = 1048576
@@ -4338,8 +4327,7 @@ runtime.MaxMutationTouchedRows const untyped int = 1000
 runtime.MaxMutationUpsertAttempts const untyped int = 3
 runtime.MutationLimits comparable
 runtime.MutationLimits type struct
-runtime.MutationLimits unkeyed literal {MaxNestedDepth, MaxTouchedRows, MaxFacts, MaxOutboxBytes, MaxStatementParameters, MaxUpsertAttempts, MaxDeleteSnapshotBytes}
-runtime.MutationLimits.MaxDeleteSnapshotBytes field int
+runtime.MutationLimits unkeyed literal {MaxNestedDepth, MaxTouchedRows, MaxFacts, MaxOutboxBytes, MaxStatementParameters, MaxUpsertAttempts}
 runtime.MutationLimits.MaxFacts field int
 runtime.MutationLimits.MaxNestedDepth field int
 runtime.MutationLimits.MaxOutboxBytes field int
@@ -4374,6 +4362,7 @@ runtime.ReadLimits.MaxStatementBytes field int
 runtime.ReadLimits.MaxStatementParameters field int
 runtime.ReadLimits.MaxTake field int
 runtime.RunCallerOperation func[P any, A any, C any, Args any, R any](context.Context, *Caller[P, A], func(context.Context, C, Args) (R, error), func(*Caller[P, A]) C, Args) (R, error)
+runtime.RunCallerTxOperation func[P any, A any, T any, Args any, R any](context.Context, *CallerTx[P, A], func(context.Context, T, Args) (R, error), func(*CallerTx[P, A]) T, Args) (R, error)
 runtime.RuntimeBuildValidatedEvent func(EventFactoryRegistry, internal/event/typedvalue.ValidatedEvent) (any, error)
 runtime.System comparable
 runtime.SystemAggregate func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
@@ -4392,7 +4381,7 @@ runtime.SystemSearch func[P any, A any, M any](context.Context, System[P, A], go
 runtime.SystemSimilar func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.SystemTextSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.SystemTextSearchSelect func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
-runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error, ...golem.TransactionOption) error
+runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error) error
 runtime.SystemTx comparable
 runtime.SystemTxAggregate func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
 runtime.SystemTxCount func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) (int64, error)
