@@ -221,8 +221,8 @@ whether the note is untitled or the field was never fetched.
 
 - Declare a second model and a relation between them; `golem inspect` shows
   what golem derived before you generate.
-- `golem check --app-out ./notes` verifies generated code still matches the
+- `golem check --schema ./notes --app-out ./notes` verifies generated code still matches the
   schema. Run it in CI: it fails when someone edits a `zz_golem_*.gen.go`
   file or changes the schema without regenerating.
-- `golem doctor --provider sqlite --dsn "file:notes.db"` reports whether a
+- `golem doctor --schema ./notes --provider sqlite --dsn "file:notes.db"` reports whether a
   live database matches the migrations.

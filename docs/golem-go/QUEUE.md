@@ -72,9 +72,10 @@ database, and claims are exclusive.
 
 A claim leases the job for `LeaseDuration` (30 seconds by default) and the
 worker renews the lease every third of that while the handler runs. A renewal
-that fails cancels the handler's context and discards its outcome; once the
-lease expires another worker may claim the job, and that claim counts a new
-attempt. Renewals also carry `Cancel` requests to a running handler.
+that fails while the lease is still valid is tried again at the next renewal.
+A renewal the store refuses, or one that fails once the lease has expired,
+cancels the handler's context and discards its outcome; once the lease expires
+another worker may claim the job, and that claim counts a new attempt. Renewals also carry `Cancel` requests to a running handler.
 
 ### Enqueue inside your own transaction
 
@@ -170,8 +171,9 @@ defaults:
 | `RetentionRows` | 256 per pass |
 
 `Open` refuses limits outside their ranges with `CodeConfigInvalid`:
-`LeaseDuration` 1s..10m, `AbandonGrace` at most 2m, `RetentionAge` 1h..10y,
-`RetentionEvery` 1m..24h or `RetentionDisabled`.
+`LeaseDuration` 1s..10m, `PollInterval` at most 24h, `AbandonGrace` at most
+2m, `RetentionAge` 1h..10y, `RetentionEvery` 1m..24h or `RetentionDisabled`,
+and `RetentionRows` at most 4096.
 
 ## Retention
 
@@ -237,8 +239,9 @@ becomes claimable while the abandoned goroutine is still executing — it can
 run twice, concurrently.
 
 On shutdown a running handler gets `ShutdownGrace` to finish before its
-context is cancelled. An outcome it returns after that is not recorded; the
-job is reclaimed once its lease expires.
+context is cancelled. An error it returns after that is not recorded, and the
+job is reclaimed once its lease expires; a success it returns within
+`AbandonGrace` of the cancellation is still recorded.
 
 Handlers must honour `ctx.Done()`. This is the one place the queue cannot
 protect you.

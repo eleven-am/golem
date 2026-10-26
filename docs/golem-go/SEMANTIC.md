@@ -127,7 +127,7 @@ error as a source that was never embedded. Ranking on a vector known to be out
 of date would answer confidently with a stale neighbourhood; failing closed
 makes the staleness visible.
 
-**No full reconcile runs by default.** `SemanticReconcileInterval` is zero
+**No full reconcile runs by default.** `QueueConfig.SemanticReconcileInterval` is zero
 unless you set it, so golem repairs drift introduced through its own write
 path and nothing else. Rows changed by raw SQL, a restore, or another writer
 are never noticed. Set an interval, between one minute and 24 hours, if

@@ -78,6 +78,7 @@ On a real field:
 | `readonly` | cannot be written by any caller |
 | `updated` | set to the mutation time on every update of the row, including one whose values equal the stored ones |
 | `immutable` | writable on create, never on update |
+| `system` | written only by hooks and the system client; a caller's input that names it is refused |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |
 | `writeonly` | writable, never readable |
@@ -187,7 +188,8 @@ policy.
   conflicted` for a create or `CONFLICT: batch mutation conflicted` for an
   `UpdateMany`. This covers every write the caller's own policy refuses, and
   every write where golem cannot prove the grant adds nothing. Only the row
-  decides such a case, so golem refuses it.
+  decides such a case, so golem refuses it. Retry to run the write under the
+  caller's own policy.
 - **Commits normally.** A write the caller's own policy clearly allows is one
   where the grant is proved to add nothing to any decision it needs.
 
@@ -221,8 +223,7 @@ own transaction. A nested hook may call an outer hook's executor: that call is
 inside the chain and runs inside the nested write. A caller or system
 transaction accepts reads and writes only until its callback returns, or
 panics: golem waits for every call already in flight, refuses later ones, and
-only then flushes, commits or rolls back. Retry to run the write under the
-caller's own policy.
+only then flushes, commits or rolls back.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
@@ -350,7 +351,7 @@ This is the API's sharpest edge. A mutation returns a `Row` containing
 
 ```go
 author, _ := system.Authors.Create(ctx, notes.Authors.Create(notes.Authors.Handle.Create("ada")))
-id, present := golem.Value(author, notes.Authors.ID).Get()
+_, present := golem.Value(author, notes.Authors.ID).Get()
 // present == false — not even the identity is there
 ```
 
@@ -611,7 +612,7 @@ golem migration apply --provider sqlite --dsn "file:notes.db"
 ```
 
 `golem migration plan` shows what a migration will do before it runs, and
-`golem check --app-out ./notes` fails when generated code no longer matches
+`golem check --schema ./notes --app-out ./notes` fails when generated code no longer matches
 the schema — run it in CI.
 
 ### Approvals
