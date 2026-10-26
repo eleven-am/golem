@@ -49,6 +49,7 @@ func (Note) DefinePolicy(rules *golem.Rules[Note], actor Actor) {
 	rules.CanDelete(owned)
 	golem.Within(rules, ArchiveNotes).CanUpdateFields(owned, Notes.Archived)
 	golem.Within(rules, RetitleNote).CanUpdateFields(owned, Notes.Title)
+	golem.Within(rules, CountActiveNotes).CanCount(Notes.Archived.Eq(false))
 }
 
 type ArchiveNotesArgs struct {
@@ -70,6 +71,7 @@ type RetitleNoteArgs struct {
 
 func DefineOperations(operations *golem.Operations) {
 	golem.TxOperation(operations, "retitleNote", RetitleNote)
+	golem.TxOperation(operations, "countActiveNotes", CountActiveNotes)
 }
 
 func RetitleNote(ctx context.Context, tx *CallerTx[Principal], arguments RetitleNoteArgs) (string, error) {
@@ -79,4 +81,8 @@ func RetitleNote(ctx context.Context, tx *CallerTx[Principal], arguments Retitle
 	}
 	title, _ := golem.Value(updated, Notes.Title).Get()
 	return title, nil
+}
+
+func CountActiveNotes(ctx context.Context, tx *CallerTx[Principal], _ struct{}) (int64, error) {
+	return tx.Notes.Count(ctx)
 }

@@ -28,16 +28,28 @@ type Set struct {
 	operation  golem.OperationID
 	scope      *operationScope
 	lease      *Lease
+	aggregate  bool
+}
+
+type builtPolicy struct {
+	policy     ir.Policy
+	operations map[golem.OperationID]ir.Policy
+	aggregates map[golem.OperationID]golem.FrozenPolicy
 }
 
 type lazyPolicy struct {
-	once       sync.Once
-	build      func() (ir.Policy, map[golem.OperationID]ir.Policy, error)
-	policy     ir.Policy
-	operations map[golem.OperationID]ir.Policy
-	err        error
-	panicked   any
-	raised     atomic.Bool
+	once            sync.Once
+	build           func() (builtPolicy, error)
+	bind            func(golem.FrozenPolicy) (ir.Policy, error)
+	policy          ir.Policy
+	operations      map[golem.OperationID]ir.Policy
+	aggregateFrozen map[golem.OperationID]golem.FrozenPolicy
+	err             error
+	panicked        any
+	raised          atomic.Bool
+	aggregateOnce   sync.Once
+	aggregates      map[golem.OperationID]ir.Policy
+	aggregateErr    error
 }
 
 type recoveredPolicyPanic struct{ value any }
@@ -46,13 +58,14 @@ func (entry *lazyPolicy) resolve() (ir.Policy, map[golem.OperationID]ir.Policy, 
 	entry.once.Do(func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				entry.policy, entry.operations = ir.Policy{}, nil
+				entry.policy, entry.operations, entry.aggregateFrozen = ir.Policy{}, nil, nil
 				entry.panicked = recoveredPolicyPanic{value: recovered}
 				entry.err = fmt.Errorf("P2_RUNTIME_FACTORY: policy factory panicked: %v", recovered)
 			}
 			entry.build = nil
 		}()
-		entry.policy, entry.operations, entry.err = entry.build()
+		built, err := entry.build()
+		entry.policy, entry.operations, entry.aggregateFrozen, entry.err = built.policy, built.operations, built.aggregates, err
 	})
 	if entry.panicked != nil && entry.raised.CompareAndSwap(false, true) {
 		panic(entry.panicked.(recoveredPolicyPanic).value)
@@ -61,6 +74,35 @@ func (entry *lazyPolicy) resolve() (ir.Policy, map[golem.OperationID]ir.Policy, 
 		return ir.Policy{}, nil, false
 	}
 	return entry.policy, entry.operations, true
+}
+
+func (entry *lazyPolicy) resolveAggregates() (map[golem.OperationID]ir.Policy, bool) {
+	if _, _, ok := entry.resolve(); !ok {
+		return nil, false
+	}
+	entry.aggregateOnce.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				entry.aggregates = nil
+				entry.aggregateErr = fmt.Errorf("P2_RUNTIME_FACTORY: aggregate policy build panicked")
+			}
+			entry.bind = nil
+		}()
+		aggregates := make(map[golem.OperationID]ir.Policy, len(entry.aggregateFrozen))
+		for operation, frozen := range entry.aggregateFrozen {
+			bound, err := entry.bind(frozen)
+			if err != nil {
+				entry.aggregateErr = err
+				return
+			}
+			aggregates[operation] = bound
+		}
+		entry.aggregates = aggregates
+	})
+	if entry.aggregateErr != nil {
+		return nil, false
+	}
+	return entry.aggregates, true
 }
 
 // ErrOperationEnded refuses a commit whose write used Within grants after the
@@ -226,6 +268,16 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 		return ir.Policy{}, false
 	}
 	if set.scope != nil && !set.scope.hidden.Load() {
+		if set.aggregate {
+			aggregates, built := entry.resolveAggregates()
+			if !built {
+				return ir.Policy{}, false
+			}
+			if scoped, present := aggregates[set.operation]; present {
+				return scoped, true
+			}
+			return policy, true
+		}
 		if scoped, ok := operations[set.operation]; ok {
 			if set.lease != nil {
 				set.lease.serve(model)
@@ -244,10 +296,25 @@ func (set *Set) PolicyError(model ir.ModelID) error {
 	if !ok {
 		return nil
 	}
-	if _, _, ok := entry.resolve(); ok {
-		return nil
+	if _, _, ok := entry.resolve(); !ok {
+		return fmt.Errorf("%w: %w", ErrPolicyUnavailable, entry.err)
 	}
-	return fmt.Errorf("%w: %w", ErrPolicyUnavailable, entry.err)
+	if set.aggregate && set.scope != nil && !set.scope.hidden.Load() {
+		if _, ok := entry.resolveAggregates(); !ok {
+			return entry.aggregateErr
+		}
+	}
+	return nil
+}
+
+func (set *Set) AggregateView() *Set {
+	if set == nil || set.scope == nil {
+		return set
+	}
+	view := *set
+	view.aggregate = true
+	view.lease = nil
+	return &view
 }
 
 // Within returns the policy set of one running custom mutation: the caller's
@@ -383,31 +450,40 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 	shared := &request
 	policies := make(map[ir.ModelID]*lazyPolicy, len(models))
 	for _, model := range models {
-		policies[ir.ModelID(model)] = &lazyPolicy{build: func() (ir.Policy, map[golem.OperationID]ir.Policy, error) {
-			return buildModelPolicy(shared, resolver, providers, model)
-		}}
+		policies[ir.ModelID(model)] = &lazyPolicy{
+			build: func() (builtPolicy, error) {
+				return buildModelPolicy(shared, resolver, providers, model)
+			},
+			bind: func(frozen golem.FrozenPolicy) (ir.Policy, error) {
+				return buildPolicy(shared, resolver, providers, model, frozen)
+			},
+		}
 	}
 	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}, nil
 }
 
-func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (ir.Policy, map[golem.OperationID]ir.Policy, error) {
+func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (builtPolicy, error) {
 	frozen, frozenOperations, err := golem.BuildGeneratedModelPolicy(request.Bindings, model, request.Actor)
 	if err != nil {
-		return ir.Policy{}, nil, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
+		return builtPolicy{}, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
+	}
+	aggregates, err := golem.GeneratedAggregatePolicies(request.Bindings, frozen)
+	if err != nil {
+		return builtPolicy{}, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
 	}
 	policy, err := buildPolicy(request, resolver, providers, model, frozen)
 	if err != nil {
-		return ir.Policy{}, nil, err
+		return builtPolicy{}, err
 	}
 	operations := make(map[golem.OperationID]ir.Policy, len(frozenOperations))
 	for operation, scopedFrozen := range frozenOperations {
 		scoped, scopedErr := buildPolicy(request, resolver, providers, model, scopedFrozen)
 		if scopedErr != nil {
-			return ir.Policy{}, nil, scopedErr
+			return builtPolicy{}, scopedErr
 		}
 		operations[operation] = scoped
 	}
-	return policy, operations, nil
+	return builtPolicy{policy: policy, operations: operations, aggregates: aggregates}, nil
 }
 
 func buildPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID, frozen golem.FrozenPolicy) (ir.Policy, error) {

@@ -825,7 +825,9 @@ func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descrip
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadCount)
 	defer func() { finishObservation(observation, resultErr) }()
-	prepared, err := prepareCallerCount(caller, descriptor, options)
+	counting := *caller
+	counting.policies = caller.policies.AggregateView()
+	prepared, err := prepareCallerCount(&counting, descriptor, options)
 	if err != nil {
 		return 0, err
 	}

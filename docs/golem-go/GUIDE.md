@@ -168,8 +168,10 @@ allows it, or when the caller's own policy does:
 - Field modes still bind: a `readonly`, `system` or `immutable` field stays
   closed whatever a Within grant says.
 
-A Within grant never widens reads, and `Within` offers no `Cannot*` verbs. The
-resolver still runs as the caller. Its predicates still bind, its hooks still
+A Within grant never widens row reads, and `Within` offers no `Cannot*` verbs.
+`CanCount` and `CanAggregate` widen only aggregate results, and only inside the
+operation (see [Counts and aggregates an operation owns](#counts-and-aggregates-an-operation-owns)).
+The resolver still runs as the caller. Its predicates still bind, its hooks still
 run, its events are delivered only to readers the policy allows, and it may
 link only to rows the caller can read. Nested writes, upserts and transactions
 opened inside the resolver carry the grant. It ends when the resolver returns:
@@ -230,6 +232,51 @@ a custom query resolver, fails the policy build when the caller is created,
 with an error naming it. Prefer `Within` to `SystemEscape` for a write an
 operation owns: `SystemEscape` skips every rule, predicate and hook, while
 `Within` grants one verb on the rows you name.
+
+### Counts and aggregates an operation owns
+
+A quota or budget check often has to count rows the caller cannot read: every
+asset uploaded to an artifact the caller owns, or every invite the caller has
+sent. Grant that count to a transaction operation, declared with
+`golem.TxOperation`, instead of reaching for `SystemEscape`:
+
+```go
+func (Asset) DefinePolicy(rules *golem.Rules[Asset], actor Actor) {
+	rules.CanRead(Assets.Owner.Eq(actor.ID))
+	golem.Within(rules, CommitAssetBudget).CanAggregate(Assets.Artifact.Is(Artifacts.Owner.Eq(actor.ID)), Assets.Size, Assets.ArtifactID)
+}
+
+func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
+	rules.CanRead(Invites.Email.Eq(actor.Email))
+	golem.Within(rules, CountPendingInvites).CanCount(Invites.Owner.Eq(actor.ID).And(Invites.Status.Eq("pending")))
+}
+```
+
+Inside `Run(ctx, tx, CommitAssetBudget, args)`, `Count` and `Aggregate` on the
+operation's transaction see the caller's own rows plus the rows the grant
+predicate matches. Relation hops inside the statement use the same operation's
+aggregate grants on the target model, so a grant on `Collections` widens a
+`Documents` count that reaches through it.
+
+- `CanCount(predicate)` widens rows only. A count over those rows may not filter
+  or measure any field the caller could not already use on its own rows.
+- `CanAggregate(predicate, fields...)` also lets the named fields be measured
+  and filtered on. Naming a field discloses its values over the granted rows:
+  `MIN` and `MAX` return them exactly, and filters on named fields can single
+  out rows. Name only the fields the operation must aggregate.
+- A filter or measure on any field the grant does not name is judged by the
+  caller's own field policy. It is refused with `FORBIDDEN` unless the
+  statement provably reaches only rows where the caller may already read that
+  field.
+
+The grant never applies to `FindMany`, `FindFirst`, `FindUnique`, includes,
+`GroupBy` (group keys are values), events, query-plan explanations, writes or
+link checks, inside the operation or out. Outside `Run`, and once the operation
+returns, counts are exactly the caller's own. `CanCount` and `CanAggregate`
+must name a generated transaction operation: naming a custom mutation or any
+other function fails the policy build. The safety rests on the operation's code
+choosing what to count; the caller supplies only arguments, so write the
+operation so its arguments cannot turn a count into a probe.
 
 A unique constraint is the one place a write can reveal a row you cannot read.
 Suppose you create or update a row and the value collides with a unique key or

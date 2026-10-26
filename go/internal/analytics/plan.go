@@ -69,7 +69,7 @@ func build(request golem.FrozenAnalyticsRequest, registry *schema.Registry, prov
 	if !ok {
 		return Plan{}, fmt.Errorf("P6_ANALYTICS_PLAN_MODEL: model is absent")
 	}
-	input := readir.RequestInput{Operation: readir.FindMany, Model: policyir.ModelID(request.ModelID()), Projection: readir.ProjectionSelect}
+	input := readir.RequestInput{Operation: readir.FindMany, Model: policyir.ModelID(request.ModelID()), Projection: readir.ProjectionSelect, Unordered: true}
 	if frozen, present := request.Where(); present {
 		where, err := policybind.Predicate(frozen, registry, providers)
 		if err != nil {
@@ -206,6 +206,7 @@ func build(request golem.FrozenAnalyticsRequest, registry *schema.Registry, prov
 	if len(input.Selection) == 0 {
 		input.Operation = readir.Count
 		input.Projection = readir.ProjectionDefault
+		input.Unordered = false
 	}
 	bound, err := readir.NewRequest(input)
 	if err != nil {

@@ -22,7 +22,7 @@ func CallerAggregate[P, A, M any](ctx context.Context, caller *Caller[P, A], des
 	if err != nil {
 		return golem.AggregateResult[M]{}, analyticsError("aggregate", descriptor, err)
 	}
-	rows, err := executeAnalytics(ctx, caller.app, caller.executor, caller.policies, false, descriptor.Metadata().ModelID(), frozen)
+	rows, err := executeAnalytics(ctx, caller.app, caller.executor, caller.policies.AggregateView(), false, descriptor.Metadata().ModelID(), frozen)
 	if err != nil {
 		return golem.AggregateResult[M]{}, err
 	}

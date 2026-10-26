@@ -498,7 +498,9 @@ func (e *canonicalEncoder) rule(rule Rule) {
 		e.u8(1)
 		e.condition(rule.condition)
 	}
-	if rule.fields == nil {
+	if rule.rowOnly {
+		e.u8(2)
+	} else if rule.fields == nil {
 		e.u8(0)
 	} else {
 		e.u8(1)
