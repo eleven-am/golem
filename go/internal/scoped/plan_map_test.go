@@ -56,10 +56,11 @@ func TestScopedStatementPlanMapOwnsRootJoinAndStatementUniquePolicyAliases(t *te
 	assertScopedAliasFact(t, onlyScopedAliasFact(t, first.PlanMap(), "golem_s1"), "golem_s1", policyir.ModelID(fixture.User), policyir.RelationID(fixture.Authorship), scopedAuthorizedFieldIDs(planned.occurrences[1].authorized), ScopedPlanAliasPhysicalAccess)
 	assertScopedAliasFact(t, onlyScopedAliasFact(t, first.PlanMap(), "golem_p1"), "golem_p1", policyir.ModelID(fixture.User), policyir.RelationID(fixture.Authorship), nil, ScopedPlanAliasCorrelatedRelation)
 	assertScopedAliasFact(t, onlyScopedAliasFact(t, first.PlanMap(), "golem_p2"), "golem_p2", policyir.ModelID(fixture.Post), policyir.RelationID(fixture.Authorship), nil, ScopedPlanAliasCorrelatedRelation)
+	assertScopedAliasFact(t, onlyScopedAliasFact(t, first.PlanMap(), "golem_p3"), "golem_p3", policyir.ModelID(fixture.Post), policyir.RelationID(fixture.Authorship), nil, ScopedPlanAliasCorrelatedRelation)
 	if first.PlanMap().MatchingAliasFacts("golem_p1")[0].ModelID() == first.PlanMap().MatchingAliasFacts("golem_p2")[0].ModelID() {
 		t.Fatal("independently compiled scoped policies collapsed onto one flat alias identity")
 	}
-	for _, unknown := range []string{"", "golem_p3", "golem_s9", "posts", "provider_guess"} {
+	for _, unknown := range []string{"", "golem_p4", "golem_s9", "posts", "provider_guess"} {
 		if facts := first.PlanMap().MatchingAliasFacts(unknown); len(facts) != 0 {
 			t.Fatalf("unknown alias %q guessed facts %#v", unknown, facts)
 		}

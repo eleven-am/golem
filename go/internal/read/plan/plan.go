@@ -4,6 +4,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -72,6 +73,7 @@ type Field struct {
 	conditional  bool
 	discharged   bool
 	mask         *policyir.Condition
+	sqlMask      *policyir.Condition
 	dependencies dependency.Tree
 }
 
@@ -87,6 +89,12 @@ func (field Field) Mask() (policyir.Condition, bool) {
 	}
 	return *field.mask, true
 }
+func (field Field) SQLMask() (policyir.Condition, bool) {
+	if field.sqlMask == nil {
+		return policyir.Condition{}, false
+	}
+	return *field.sqlMask, true
+}
 func (field Field) Dependencies() dependency.Tree { return field.dependencies }
 
 type Relation struct {
@@ -96,6 +104,7 @@ type Relation struct {
 	toMany     bool
 	public     bool
 	mask       *policyir.Condition
+	sqlMask    *policyir.Condition
 	child      *Plan
 	occurrence readir.OccurrenceID
 }
@@ -109,6 +118,7 @@ type RelationCount struct {
 	id         policyir.RelationID
 	target     policyir.ModelID
 	mask       *policyir.Condition
+	sqlMask    *policyir.Condition
 	child      *Plan
 	occurrence readir.OccurrenceID
 }
@@ -122,6 +132,12 @@ func (count RelationCount) Mask() (policyir.Condition, bool) {
 		return policyir.Condition{}, false
 	}
 	return *count.mask, true
+}
+func (count RelationCount) SQLMask() (policyir.Condition, bool) {
+	if count.sqlMask == nil {
+		return policyir.Condition{}, false
+	}
+	return *count.sqlMask, true
 }
 func (count RelationCount) Child() Plan {
 	if count.child == nil {
@@ -141,6 +157,12 @@ func (relation Relation) Mask() (policyir.Condition, bool) {
 		return policyir.Condition{}, false
 	}
 	return *relation.mask, true
+}
+func (relation Relation) SQLMask() (policyir.Condition, bool) {
+	if relation.sqlMask == nil {
+		return policyir.Condition{}, false
+	}
+	return *relation.sqlMask, true
 }
 func (relation Relation) Child() Plan {
 	if relation.child == nil {
@@ -374,18 +396,18 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		}
 		if selector, ok := request.Selector(); ok {
 			for _, field := range selector.Fields() {
-				if _, err := classifyField(registry, policy, model, field, classify.UseSelector, authorizedWhere, true); err != nil {
+				if _, err := classifyField(registry, policy, model, field, classify.UseSelector, authorizedWhere, true, expander, depth); err != nil {
 					return Plan{}, err
 				}
 			}
 		}
 		for _, order := range orders {
-			classification, classifyErr := classifyField(registry, policy, model, order.FieldID(), classify.UseOrder, authorizedWhere, true)
+			classification, classifyErr := classifyField(registry, policy, model, order.FieldID(), classify.UseOrder, authorizedWhere, true, expander, depth)
 			if classifyErr != nil {
 				return Plan{}, classifyErr
 			}
 			if classification.Access() == classify.AccessConditional {
-				guard, present := classification.FieldCondition()
+				guard, present := classification.ReachCondition()
 				if !present {
 					return Plan{}, fail(CodePolicy, model, order.FieldID(), "conditional order field has no authorization guard", nil)
 				}
@@ -396,7 +418,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			}
 		}
 		for _, field := range request.Distinct() {
-			if _, err := classifyField(registry, policy, model, field, classify.UseDistinct, authorizedWhere, true); err != nil {
+			if _, err := classifyField(registry, policy, model, field, classify.UseDistinct, authorizedWhere, true, expander, depth); err != nil {
 				return Plan{}, err
 			}
 		}
@@ -406,12 +428,12 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 				return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "cursor reach could not be resolved", reachErr)
 			}
 			for _, field := range cursor.Selector().Fields() {
-				classification, classifyErr := classifyField(registry, policy, model, field, classify.UseCursor, cursorReach, true)
+				classification, classifyErr := classifyField(registry, policy, model, field, classify.UseCursor, cursorReach, true, expander, depth)
 				if classifyErr != nil {
 					return Plan{}, classifyErr
 				}
 				if classification.Access() == classify.AccessConditional {
-					guard, present := classification.FieldCondition()
+					guard, present := classification.ReachCondition()
 					if !present {
 						return Plan{}, fail(CodePolicy, model, field, "conditional cursor field has no authorization guard", nil)
 					}
@@ -483,7 +505,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		}
 		var classification classify.Classification
 		if !system {
-			classification, err = classifyField(registry, policy, model, selection.FieldID(), classify.UseProjection, authorizedWhere, false)
+			classification, err = classifyField(registry, policy, model, selection.FieldID(), classify.UseProjection, authorizedWhere, false, expander, depth)
 			if err != nil {
 				return Plan{}, err
 			}
@@ -493,7 +515,9 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			if !system && classification.Access() == classify.AccessConditional {
 				field.conditional = true
 				mask, _ := classification.FieldCondition()
+				sqlMask, _ := classification.ReachCondition()
 				field.mask = &mask
+				field.sqlMask = &sqlMask
 				field.dependencies = classification.Dependencies()
 				maskConditions = append(maskConditions, mask)
 			}
@@ -534,7 +558,9 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			count := RelationCount{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), child: &child, occurrence: selection.OccurrenceID()}
 			if !system && classification.Access() == classify.AccessConditional {
 				mask, _ := classification.FieldCondition()
+				sqlMask, _ := classification.ReachCondition()
 				count.mask = &mask
+				count.sqlMask = &sqlMask
 				maskConditions = append(maskConditions, mask)
 				injectScalarDependencies(&result, registry, classification.Requires(), planned)
 			}
@@ -544,7 +570,9 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		relation := Relation{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), toMany: endpoint.Cardinality() == compilerir.RelationMany, public: true, child: &child, occurrence: selection.OccurrenceID()}
 		if !system && classification.Access() == classify.AccessConditional {
 			mask, _ := classification.FieldCondition()
+			sqlMask, _ := classification.ReachCondition()
 			relation.mask = &mask
+			relation.sqlMask = &sqlMask
 			maskConditions = append(maskConditions, mask)
 			injectScalarDependencies(&result, registry, classification.Requires(), planned)
 		}
@@ -684,7 +712,7 @@ func classifyCondition(condition policyir.Condition, registry *schema.Registry, 
 		return nil
 	case policyir.ConditionScalar, policyir.ConditionList, policyir.ConditionJSON:
 		field, _ := condition.Field()
-		_, err := classifyField(registry, policy, condition.ModelID(), field, classify.UseFilter, selecting, true)
+		_, err := classifyField(registry, policy, condition.ModelID(), field, classify.UseFilter, selecting, true, expander, depth)
 		return err
 	case policyir.ConditionLogical:
 		_, children, _ := condition.Logical()
@@ -696,7 +724,7 @@ func classifyCondition(condition policyir.Condition, registry *schema.Registry, 
 		return nil
 	case policyir.ConditionRelation:
 		field, _, target, _, child, _ := condition.Relation()
-		if _, err := classifyField(registry, policy, condition.ModelID(), field, classify.UseFilter, selecting, true); err != nil {
+		if _, err := classifyField(registry, policy, condition.ModelID(), field, classify.UseFilter, selecting, true, expander, depth); err != nil {
 			return err
 		}
 		if child == nil {
@@ -724,14 +752,14 @@ func classifyCondition(condition policyir.Condition, registry *schema.Registry, 
 	}
 }
 
-func classifyField(registry *schema.Registry, policy policyir.Policy, model policyir.ModelID, field policyir.FieldID, use classify.UseKind, selecting policyir.Condition, requireDischarged bool) (classify.Classification, error) {
-	request, err := classify.NewRequestWithConstraint(registry, policy, model, []policyir.FieldID{field}, use, policyir.ActionRead, selecting)
+func classifyField(registry *schema.Registry, policy policyir.Policy, model policyir.ModelID, field policyir.FieldID, use classify.UseKind, selecting policyir.Condition, requireDischarged bool, expander *policyExpander, depth int) (classify.Classification, error) {
+	request, err := classify.NewRequestWithReach(registry, policy, model, []policyir.FieldID{field}, use, policyir.ActionRead, selecting, expander.reach(model, depth))
 	if err != nil {
-		return classify.Classification{}, fail(CodePolicy, model, field, "field classification request failed", err)
+		return classify.Classification{}, classificationFailure(model, field, "field classification request failed", err)
 	}
 	result, err := classify.Fields(request)
 	if err != nil {
-		return classify.Classification{}, fail(CodePolicy, model, field, "field classification failed", err)
+		return classify.Classification{}, classificationFailure(model, field, "field classification failed", err)
 	}
 	classification, ok := result.Field(field)
 	if !ok {
@@ -741,6 +769,14 @@ func classifyField(registry *schema.Registry, policy policyir.Policy, model poli
 		return classify.Classification{}, fail(CodeField, model, field, "field is not readable in this statement position", nil)
 	}
 	return classification, nil
+}
+
+func classificationFailure(model policyir.ModelID, field policyir.FieldID, detail string, cause error) error {
+	var expansion *Error
+	if errors.As(cause, &expansion) {
+		return expansion
+	}
+	return fail(CodePolicy, model, field, detail, cause)
 }
 
 func injectScalarDependencies(plan *Plan, registry *schema.Registry, fields []policyir.FieldID, planned map[policyir.FieldID]int) {
@@ -805,6 +841,10 @@ func cloneRelationCounts(values []RelationCount) []RelationCount {
 			mask := *value.mask
 			result[index].mask = &mask
 		}
+		if value.sqlMask != nil {
+			sqlMask := *value.sqlMask
+			result[index].sqlMask = &sqlMask
+		}
 		if value.child != nil {
 			child := value.child.clone()
 			result[index].child = &child
@@ -821,6 +861,10 @@ func cloneFields(values []Field) []Field {
 			value := *result[index].mask
 			result[index].mask = &value
 		}
+		if result[index].sqlMask != nil {
+			value := *result[index].sqlMask
+			result[index].sqlMask = &value
+		}
 	}
 	return result
 }
@@ -831,6 +875,10 @@ func cloneRelations(values []Relation) []Relation {
 		if value.mask != nil {
 			mask := *value.mask
 			result[index].mask = &mask
+		}
+		if value.sqlMask != nil {
+			sqlMask := *value.sqlMask
+			result[index].sqlMask = &sqlMask
 		}
 		if value.child != nil {
 			child := value.child.clone()

@@ -189,12 +189,17 @@ func renderFullTextCandidates[P, A any](app *App[P, A], prepared PreparedRead, p
 		if !present {
 			return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read is not permitted", nil)
 		}
+		reach := readplan.ReadLens(prepared.policies, planned.ModelID(), app.readLimits.plan.MaxRelationDepth)
 		for _, field := range fields {
 			policyField, err := semanticPolicyFieldID(field)
 			if err != nil {
 				return renderedSemanticCandidates{}, err
 			}
 			condition, err := policyresolve.FieldCondition(policy, policyir.ActionRead, planned.ModelID(), policyField)
+			if err != nil {
+				return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(policyField), "full-text index field is not readable", err)
+			}
+			condition, err = reach.Read(condition)
 			if err != nil {
 				return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(policyField), "full-text index field is not readable", err)
 			}

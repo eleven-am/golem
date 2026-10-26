@@ -58,24 +58,47 @@ type Request struct {
 	selectingAction     ir.Action
 	selectingConstraint ir.Condition
 	readConstraint      ir.Condition
+	reach               Reach
 }
 
 // NewRequest validates all identities against the exact runtime schema and
 // derives both constraints from one immutable policy.
 func NewRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action) (Request, error) {
-	return newRequest(registry, policy, model, fields, use, selectingAction, nil)
+	return newRequest(registry, policy, model, fields, use, selectingAction, nil, RawReach())
 }
 
-// NewRequestWithConstraint is the P3 boundary for classifying fields against
-// the actual statement reach (caller predicate AND row policy). The supplied
-// constraint must itself imply the policy row constraint, preventing a caller
-// from widening policy reach while still allowing its narrower filter to
-// discharge a conditional field lens.
-func NewRequestWithConstraint(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, selecting ir.Condition) (Request, error) {
-	return newRequest(registry, policy, model, fields, use, selectingAction, &selecting)
+type Lens func(ir.Condition) (ir.Condition, error)
+
+type Reach struct {
+	Selecting Lens
+	Read      Lens
 }
 
-func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, actual *ir.Condition) (Request, error) {
+func RawReach() Reach {
+	return Reach{Selecting: raw, Read: raw}
+}
+
+func raw(condition ir.Condition) (ir.Condition, error) { return condition, nil }
+
+func NewRequestWithReach(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, actual ir.Condition, reach Reach) (Request, error) {
+	return newRequest(registry, policy, model, fields, use, selectingAction, &actual, reach)
+}
+
+func focus(lens Lens, model ir.ModelID, condition ir.Condition) (ir.Condition, error) {
+	if lens == nil {
+		return ir.Condition{}, fmt.Errorf("policy classify: reach lens is absent")
+	}
+	result, err := lens(condition)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	if result.ModelID() != model {
+		return ir.Condition{}, fmt.Errorf("policy classify: reach lens changed the constraint model")
+	}
+	return result, nil
+}
+
+func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, actual *ir.Condition, reach Reach) (Request, error) {
 	if registry == nil {
 		return Request{}, fmt.Errorf("policy classify: nil schema registry")
 	}
@@ -119,9 +142,17 @@ func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, f
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: resolve read constraint: %w", err)
 	}
+	readConstraint, err = focus(reach.Read, model, readConstraint)
+	if err != nil {
+		return Request{}, fmt.Errorf("policy classify: reach read constraint: %w", err)
+	}
 	selectingConstraint, err := resolve.RowConstraint(policyCopy, selectingAction, model)
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: resolve selecting constraint: %w", err)
+	}
+	selectingConstraint, err = focus(reach.Selecting, model, selectingConstraint)
+	if err != nil {
+		return Request{}, fmt.Errorf("policy classify: reach selecting constraint: %w", err)
 	}
 	if actual != nil {
 		if actual.ModelID() != model {
@@ -144,6 +175,7 @@ func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, f
 		selectingAction:     selectingAction,
 		selectingConstraint: selectingConstraint,
 		readConstraint:      readConstraint,
+		reach:               reach,
 	}, nil
 }
 
@@ -161,6 +193,7 @@ type Classification struct {
 	field        ir.FieldID
 	access       Access
 	condition    ir.Condition
+	reach        ir.Condition
 	requires     []ir.FieldID
 	dependencies dependency.Tree
 	discharged   bool
@@ -170,6 +203,9 @@ func (classification Classification) FieldID() ir.FieldID { return classificatio
 func (classification Classification) Access() Access      { return classification.access }
 func (classification Classification) FieldCondition() (ir.Condition, bool) {
 	return classification.condition, classification.access == AccessConditional
+}
+func (classification Classification) ReachCondition() (ir.Condition, bool) {
+	return classification.reach, classification.access == AccessConditional
 }
 func (classification Classification) Requires() []ir.FieldID {
 	return append([]ir.FieldID(nil), classification.requires...)
@@ -243,12 +279,17 @@ func Fields(request Request) (Plan, error) {
 		if err != nil {
 			return Plan{}, fmt.Errorf("policy classify: dependencies for field %x: %w", field, err)
 		}
-		discharged, err := imply.Condition(request.selectingConstraint, fieldCondition)
+		reachCondition, err := focus(request.reach.Read, request.model, fieldCondition)
+		if err != nil {
+			return Plan{}, fmt.Errorf("policy classify: reach field %x: %w", field, err)
+		}
+		discharged, err := imply.Condition(request.selectingConstraint, reachCondition)
 		if err != nil {
 			return Plan{}, fmt.Errorf("policy classify: discharge field %x: %w", field, err)
 		}
 		classification.access = AccessConditional
 		classification.condition = fieldCondition
+		classification.reach = reachCondition
 		classification.requires = dependencies.Requires()
 		classification.dependencies = dependencies.Dependencies()
 		classification.discharged = discharged
@@ -268,6 +309,9 @@ func (request Request) validate() error {
 	}
 	if request.selectingConstraint.ModelID() != request.model || request.readConstraint.ModelID() != request.model {
 		return fmt.Errorf("policy classify: request constraint model mismatch")
+	}
+	if request.reach.Selecting == nil || request.reach.Read == nil {
+		return fmt.Errorf("policy classify: reach lens is absent")
 	}
 	return nil
 }

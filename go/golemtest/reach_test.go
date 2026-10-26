@@ -7,6 +7,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/classify"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
 
@@ -22,9 +23,14 @@ func postCommentsField(t *testing.T) golem.FieldID {
 	return golem.FieldID{}
 }
 
-func acceptsReach(t *testing.T, registry *schema.Registry, policy ir.Policy, model golem.ModelID, fields []ir.FieldID, reach ir.Condition) bool {
+func acceptsReach(t *testing.T, registry *schema.Registry, policies runtimePolicySet, policy ir.Policy, model golem.ModelID, fields []ir.FieldID, reach ir.Condition) bool {
 	t.Helper()
-	_, err := classify.NewRequestWithConstraint(registry, policy, ir.ModelID(model), fields, classify.UseProjection, ir.ActionRead, reach)
+	lens := readplan.ReadLens(policies, ir.ModelID(model), readplan.DefaultLimits().MaxRelationDepth)
+	expanded, err := lens.Selecting(reach)
+	if err != nil {
+		return false
+	}
+	_, err = classify.NewRequestWithReach(registry, policy, ir.ModelID(model), fields, classify.UseProjection, ir.ActionRead, expanded, lens)
 	return err == nil
 }
 
@@ -44,6 +50,7 @@ func TestPolicyTestKitNarrowerReachDischargesButNeverWidensPolicy(t *testing.T) 
 		t.Fatal(err)
 	}
 	actor := p5social.Actor{AllowedTag: "alpha"}
+	policySet, _ := productionPolicySet(t, bindings, actor, bundle)
 
 	kit := socialKit(t)
 	policies, err := kit.ForActor(actor)
@@ -116,7 +123,7 @@ func TestPolicyTestKitNarrowerReachDischargesButNeverWidensPolicy(t *testing.T) 
 
 		policy, registry, providers := productionPolicy(t, bindings, actor, bundle, kernelPostModel(t))
 		narrower := boundPredicate(t, open, p5social.GolemGeneratedPostDescriptor, registry, providers)
-		if !acceptsReach(t, registry, policy, kernelPostModel(t), []ir.FieldID{ir.FieldID(postCommentsField(t))}, narrower) {
+		if !acceptsReach(t, registry, policySet, policy, kernelPostModel(t), []ir.FieldID{ir.FieldID(postCommentsField(t))}, narrower) {
 			t.Fatal("production refused a reach the kit accepted")
 		}
 	})
@@ -173,13 +180,39 @@ func TestPolicyTestKitNarrowerReachDischargesButNeverWidensPolicy(t *testing.T) 
 			}
 
 			reach := boundPredicate(t, candidate.predicate, p5social.GolemGeneratedTagDescriptor, registry, providers)
-			accepted := acceptsReach(t, registry, policy, model, tagScanFields(t), reach)
+			accepted := acceptsReach(t, registry, policySet, policy, model, tagScanFields(t), reach)
 			if accepted != (reachErr == nil) {
 				t.Fatalf("%s: production accepted=%v while the kit accepted=%v; the kit disagrees with the production reach rule", candidate.name, accepted, reachErr == nil)
 			}
 		}
 		if widened != 2 {
 			t.Fatalf("the candidate set exercised %d widenings, want 2", widened)
+		}
+	})
+
+	t.Run("ARelationBearingReachIsExpandedThroughTheTargetReadPolicies", func(t *testing.T) {
+		tagged := p5social.Posts.Title.EndsWith("-open").And(p5social.Posts.PostTags.Some(p5social.PostTags.Tag.Is(p5social.Tags.Name.Eq("beta"))))
+
+		reached, reachedErr := posts.ClassifyReadFieldsWithReach(UseProjection, golem.FrozenActionRead, tagged, p5social.Posts.Comments)
+		if reachedErr != nil {
+			t.Fatalf("ClassifyReadFieldsWithReach: %v", reachedErr)
+		}
+		discharged, present := reached.Field(p5social.Posts.Comments)
+		if !present || discharged.Access() != AccessConditional || !discharged.DischargedByConstraint() {
+			t.Fatalf("a relation-bearing narrower reach did not discharge the field: present=%v access=%v", present, discharged.Access())
+		}
+
+		policy, registry, providers := productionPolicy(t, bindings, actor, bundle, kernelPostModel(t))
+		raw := boundPredicate(t, tagged, p5social.GolemGeneratedPostDescriptor, registry, providers)
+		expanded, expandErr := readplan.ReadLens(policySet, ir.ModelID(kernelPostModel(t)), readplan.DefaultLimits().MaxRelationDepth).Selecting(raw)
+		if expandErr != nil {
+			t.Fatalf("ReadLens: %v", expandErr)
+		}
+		if canonical(t, expanded) == canonical(t, raw) {
+			t.Fatal("the relation-bearing reach was not scoped by the tag read policy")
+		}
+		if !acceptsReach(t, registry, policySet, policy, kernelPostModel(t), []ir.FieldID{ir.FieldID(postCommentsField(t))}, raw) {
+			t.Fatal("production refused a relation-bearing reach the kit accepted")
 		}
 	})
 
@@ -194,7 +227,7 @@ func TestPolicyTestKitNarrowerReachDischargesButNeverWidensPolicy(t *testing.T) 
 		expectCode(t, reachErr, ErrorPolicyAnalysis, "unsatisfiable reach")
 
 		empty := boundPredicate(t, golem.None[p5social.Tag](), p5social.GolemGeneratedTagDescriptor, registry, providers)
-		if acceptsReach(t, registry, policy, model, tagScanFields(t), empty) {
+		if acceptsReach(t, registry, policySet, policy, model, tagScanFields(t), empty) {
 			t.Fatal("production accepted an unsatisfiable reach as a proof of policy preservation")
 		}
 

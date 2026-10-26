@@ -33,6 +33,7 @@ var permittedImports = map[string]bool{
 	"github.com/eleven-am/golem/go/internal/policy/normalize":  true,
 	"github.com/eleven-am/golem/go/internal/policy/resolve":    true,
 	"github.com/eleven-am/golem/go/internal/policy/schema":     true,
+	"github.com/eleven-am/golem/go/internal/read/plan":         true,
 }
 
 var forbiddenMethods = map[string]map[string]bool{

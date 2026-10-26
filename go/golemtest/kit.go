@@ -67,6 +67,7 @@ type ModelPolicy[M any] struct {
 	descriptor golem.ModelDescriptor[M]
 	policy     golem.FrozenPolicy
 	bound      ir.Policy
+	reach      boundPolicies
 	registry   *schema.Registry
 	providers  ir.ProviderSet
 }
@@ -281,6 +282,7 @@ func Model[M any](policies PolicySet, descriptor golem.ModelDescriptor[M]) (Mode
 		descriptor: descriptor,
 		policy:     policy,
 		bound:      compiled,
+		reach:      boundPolicies(policies.bound),
 		registry:   policies.registry,
 		providers:  policies.providers,
 	}, nil
@@ -681,4 +683,11 @@ func sameFieldOrder(left, right []golem.FieldID) bool {
 		}
 	}
 	return true
+}
+
+type boundPolicies map[golem.ModelID]ir.Policy
+
+func (policies boundPolicies) Policy(model ir.ModelID) (ir.Policy, bool) {
+	policy, present := policies[golem.ModelID(model)]
+	return policy, present
 }

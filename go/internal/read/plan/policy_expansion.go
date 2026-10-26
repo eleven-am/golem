@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"github.com/eleven-am/golem/go/internal/policy/classify"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
@@ -34,6 +35,10 @@ func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policy
 	return normalize.Condition(row)
 }
 
+func ReadLens(policies PolicySet, model policyir.ModelID, maxDepth int) classify.Reach {
+	return newPolicyExpander(policies, maxDepth).reach(model, 0)
+}
+
 func (expander *policyExpander) model(model policyir.ModelID, depth int) (policyir.Condition, error) {
 	if expander == nil || expander.policies == nil || model == (policyir.ModelID{}) {
 		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "relation target policy is unavailable", nil)
@@ -56,9 +61,23 @@ func (expander *policyExpander) model(model policyir.ModelID, depth int) (policy
 		}
 		return result, nil
 	}
+	return expander.within(model, depth, row)
+}
+
+func (expander *policyExpander) within(model policyir.ModelID, depth int, condition policyir.Condition) (policyir.Condition, error) {
+	if expander.active[model] {
+		return expander.condition(condition, depth)
+	}
 	expander.active[model] = true
 	defer delete(expander.active, model)
-	return expander.condition(row, depth)
+	return expander.condition(condition, depth)
+}
+
+func (expander *policyExpander) reach(model policyir.ModelID, depth int) classify.Reach {
+	lens := func(condition policyir.Condition) (policyir.Condition, error) {
+		return expander.within(model, depth, condition)
+	}
+	return classify.Reach{Selecting: lens, Read: lens}
 }
 
 func (expander *policyExpander) condition(condition policyir.Condition, depth int) (policyir.Condition, error) {
