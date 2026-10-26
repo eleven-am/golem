@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
@@ -311,7 +313,7 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 	if err != nil {
 		return err
 	}
-	return retryConflicts(attempts, func() error { return callerTransactionAttempt(ctx, caller, callback, isolation) })
+	return retryConflicts(ctx, attempts, jitteredRetryBackoff, func() error { return callerTransactionAttempt(ctx, caller, callback, isolation) })
 }
 
 func callerTransactionAttempt[P, A any](ctx context.Context, caller *Caller[P, A], callback func(*CallerTx[P, A]) error, isolation golem.IsolationLevel) (err error) {
@@ -358,7 +360,7 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	if err != nil {
 		return err
 	}
-	return retryConflicts(attempts, func() error { return systemTransactionAttempt(ctx, system, callback, isolation) })
+	return retryConflicts(ctx, attempts, jitteredRetryBackoff, func() error { return systemTransactionAttempt(ctx, system, callback, isolation) })
 }
 
 func systemTransactionAttempt[P, A any](ctx context.Context, system System[P, A], callback func(*SystemTx[P, A]) error, isolation golem.IsolationLevel) (err error) {
@@ -395,12 +397,32 @@ func transactionBeginOptions(provider policyir.Provider, isolation golem.Isolati
 	return nil
 }
 
-func retryConflicts(attempts int, attempt func() error) error {
+const (
+	retryBackoffBase = 5 * time.Millisecond
+	retryBackoffCap  = 200 * time.Millisecond
+)
+
+func retryConflicts(ctx context.Context, attempts int, backoff func(int) time.Duration, attempt func() error) error {
 	err := attempt()
-	for remaining := attempts - 1; remaining > 0 && isConflict(err); remaining-- {
+	for retry := 1; retry < attempts && isConflict(err); retry++ {
+		timer := time.NewTimer(backoff(retry))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 		err = attempt()
 	}
 	return err
+}
+
+func jitteredRetryBackoff(retry int) time.Duration {
+	ceiling := retryBackoffCap
+	if retry < 7 {
+		ceiling = min(retryBackoffBase<<(retry-1), retryBackoffCap)
+	}
+	return time.Duration(rand.Int64N(int64(ceiling) + 1))
 }
 
 func isConflict(err error) bool {

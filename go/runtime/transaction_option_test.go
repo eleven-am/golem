@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -162,6 +163,75 @@ func TestRetryConflictsStopsWhenTheContextEnds(t *testing.T) {
 	}, golem.RetryConflicts(5))
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err=%v calls=%d; want the cancellation after one attempt", err, calls)
+	}
+}
+
+func TestRetryBackoffCancellationStopsRetrying(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	requested := make(chan int, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- retryConflicts(ctx, 5, func(retry int) time.Duration {
+			requested <- retry
+			return time.Hour
+		}, func() error {
+			calls++
+			return retryConflictFailure()
+		})
+	}()
+	if retry := <-requested; retry != 1 {
+		t.Fatalf("first backoff retry=%d; want 1", retry)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("err=%v calls=%d; want the cancellation during backoff after one attempt", err, calls)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation during backoff did not stop retrying")
+	}
+}
+
+func TestRetryBackoffPassesEachRetryNumberBetweenAttempts(t *testing.T) {
+	var retries []int
+	calls := 0
+	err := retryConflicts(context.Background(), 4, func(retry int) time.Duration {
+		retries = append(retries, retry)
+		return 0
+	}, func() error {
+		calls++
+		return retryConflictFailure()
+	})
+	requireTransactionCode(t, err, golem.CodeConflict)
+	if calls != 4 || len(retries) != 3 || retries[0] != 1 || retries[2] != 3 {
+		t.Fatalf("calls=%d retries=%v; want four attempts and backoffs 1..3", calls, retries)
+	}
+	retries = nil
+	if err := retryConflicts(context.Background(), 4, func(retry int) time.Duration {
+		retries = append(retries, retry)
+		return 0
+	}, func() error { return nil }); err != nil || len(retries) != 0 {
+		t.Fatalf("err=%v retries=%v; want no backoff after a commit", err, retries)
+	}
+}
+
+func TestJitteredRetryBackoffStaysWithinItsDoublingCappedCeiling(t *testing.T) {
+	for retry := 1; retry <= 12; retry++ {
+		ceiling := retryBackoffCap
+		if shifted := retryBackoffBase << (retry - 1); retry < 7 && shifted < ceiling {
+			ceiling = shifted
+		}
+		for range 200 {
+			if delay := jitteredRetryBackoff(retry); delay < 0 || delay > ceiling {
+				t.Fatalf("retry=%d delay=%s; want within [0, %s]", retry, delay, ceiling)
+			}
+		}
+	}
+	if retryBackoffBase != 5*time.Millisecond || retryBackoffCap != 200*time.Millisecond {
+		t.Fatalf("base=%s cap=%s; want 5ms doubling to a 200ms cap", retryBackoffBase, retryBackoffCap)
 	}
 }
 

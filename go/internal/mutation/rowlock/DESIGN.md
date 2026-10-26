@@ -174,10 +174,18 @@ rules of step 4 and of the section above change:
 - **Authorization is judged at the transaction snapshot.** The fresh-read
   statement still runs after the lock round, but it reads the snapshot the
   transaction began with, not a fresh one, so a grant revoked by a transaction
-  that committed after this one started is not seen. This is still safe: the
-  write is ordered before the revocation in the serial order PostgreSQL
-  guarantees, or, if no such order exists, one transaction fails with 40001,
-  reported as `CONFLICT`.
+  that committed after this one started is not seen. PostgreSQL tracks
+  read-write dependencies only between SERIALIZABLE transactions. When the
+  revoking transaction is also Serializable, the write is ordered before the
+  revocation in a serial order, or, if no such order exists, one transaction
+  fails with 40001, reported as `CONFLICT`. When the revoking transaction runs
+  at READ COMMITTED, as every default golem transaction and every standalone
+  mutation does, it takes no predicate locks: the revocation is not detected,
+  and this transaction commits a write authorized on its snapshot. So
+  Serializable protects invariants that every participating writer checks
+  under Serializable, such as count-check-insert. It does not make
+  authorization fresher; under READ COMMITTED a grant is read after every
+  lock wait, and that is the stronger rule for revocation.
 - **A concurrently changed row is a `CONFLICT`, not a re-check.** When a lock
   statement reaches a row that another transaction updated or deleted and
   committed after this snapshot, PostgreSQL raises 40001 instead of
@@ -193,7 +201,21 @@ state; after-commit hooks run once, after the attempt that commits. Without it
 the callback runs exactly once. SQLite already runs one writer at a time
 (`BEGIN IMMEDIATE`), which meets Serializable, so the option sends it no level.
 REPEATABLE READ is not offered: it has the per-transaction snapshot without the
-serializable check, so it could write on a stale grant without an abort.
+serializable check, so it could write on a stale grant without an abort even
+when every other writer is Serializable, and it does not stop count-check-insert.
+
+Serializable aborts can be false positives. PostgreSQL records what a
+serializable transaction read as predicate locks on btree index pages, and
+promotes them to relation locks when there are many, so an insert into a page
+another serializable transaction read conflicts with it even when the rows are
+unrelated. Every golem write also inserts into shared system tables (the event
+outbox and delivery rows, and queue jobs when it enqueues), whose indexes
+concentrate inserts on the same rightmost pages, and any serializable read of
+those tables, or of a hot application index, widens the shared surface. Two
+serializable transactions that touch unrelated application rows can therefore
+form a read-write cycle through shared pages, and one fails with 40001,
+reported as `CONFLICT`. This is inherent to SSI, not a golem fault; callers
+that use Serializable should pass `RetryConflicts`.
 Tests: `runtime/postgresql_serializable_test.go`,
 `runtime/transaction_option_test.go`.
 
