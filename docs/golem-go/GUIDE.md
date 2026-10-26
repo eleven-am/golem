@@ -383,7 +383,7 @@ aggregate grants on the target model, so a grant on `Collections` widens a
 
 - `CanCount(predicate)` widens rows only. A count over those rows may not filter
   or measure any field the caller could not already use on its own rows.
-- `CanAggregate(predicate, fields...)` also lets the named fields be measured
+- `CanAggregate(predicate, field, more...)` takes one or more fields and also lets them be measured
   and filtered on. Naming a field discloses its values over the granted rows:
   `MIN` and `MAX` return them exactly, and filters on named fields can single
   out rows. Name only the fields the operation must aggregate.
@@ -430,8 +430,9 @@ a change event for each affected row: a deleted event for every cascaded row and
 updated event for every cleared reference, in the same transaction as the
 delete. Each subscriber still receives only the events its own read policy
 allows. A delete event is judged against the deleted row's stored snapshot
-and, for each related parent its policy reaches, against the state that
-parent had before the transaction. A parent the same transaction also deleted
+and, for each related parent its policy reaches, against that parent's
+current state, unless the same transaction changed it. A parent the same
+transaction also deleted
 is judged from its own delete snapshot. A parent the same transaction created
 or updated, or whose state cannot be established exactly, ends that
 subscriber's stream with `GOLEM_SUBSCRIPTION_RESYNC` instead of guessing;
@@ -1366,13 +1367,13 @@ An event is judged by the subscriber's policy when it arrives, but a stream
 that receives nothing is never judged. Two settings end streams whose caller
 has lost access:
 
-- **`EventLimits.RevalidateEvery`** (off by default, at most 24h) re-resolves
+- **`EventLimits.RevalidateEvery`** (off by default, at least 1s, at most 24h) re-resolves
   the principal, re-checks the read grant and re-runs the read hooks of every
   stream on a jittered interval. A principal that no longer resolves ends the
   stream with `REVALIDATION`; a read grant that is gone ends it with
   `FORBIDDEN`.
 - **`golem.EventRecheck[M](interval, check)`** adds your own check to one
-  stream, for revocation the policy cannot see, such as removal from a team
+  stream, on an interval of at least 1s, for revocation the policy cannot see, such as removal from a team
   through a relation:
 
   ```go
@@ -1385,8 +1386,8 @@ has lost access:
   panic ends it with `SOURCE_CLOSED`.
 
 For GraphQL subscriptions, `GraphQLConfig.SubscriptionRecheck` takes an
-`Interval` and a `Check(ctx, principal, operation) error`, set both or
-neither. A failing check ends only that operation.
+`Interval` of at least 1s and a `Check(ctx, principal, operation) error`, set
+both or neither. A failing check ends only that operation.
 
 ### Caps
 
@@ -1395,7 +1396,7 @@ bounds the subscriptions on one GraphQL WebSocket connection. One more is
 refused as an error on that operation, with `GOLEM_SUBSCRIPTION_LIMIT`, and the
 connection stays open.
 
-`EventLimits.MaxSubscriptionsPerPrincipal` bounds the streams one principal
+`EventLimits.MaxSubscriptionsPerPrincipal` (at most 65,536) bounds the streams one principal
 holds across Go, WebSocket and SSE. It needs `Config.SubscriptionPrincipalKey`,
 a `func(P) (string, bool)` that names the principal; returning `false` leaves
 that principal uncounted. Subscribing beyond the cap fails with
