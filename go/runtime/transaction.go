@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
+	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -298,22 +301,29 @@ func finishObservationOrPanic(observation *observeexec.Span, observer *observeex
 }
 
 // CallerTransaction owns the outer transaction around one generated caller
-// callback. The callback is invoked exactly once; this function never retries
-// application code.
-func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], callback func(*CallerTx[P, A]) error) (err error) {
+// callback.
+func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], callback func(*CallerTx[P, A]) error, options ...golem.TransactionOption) error {
 	if caller == nil || caller.app == nil || caller.policies == nil || caller.execution == 0 {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: caller execution is unavailable")
 	}
 	if ctx == nil || callback == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
 	}
+	isolation, attempts, err := golem.RuntimeTransactionOptions(options)
+	if err != nil {
+		return err
+	}
+	return retryConflicts(ctx, attempts, jitteredRetryBackoff, func() error { return callerTransactionAttempt(ctx, caller, callback, isolation) })
+}
+
+func callerTransactionAttempt[P, A any](ctx context.Context, caller *Caller[P, A], callback func(*CallerTx[P, A]) error, isolation golem.IsolationLevel) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	ctx, observation := beginObservation(ctx, caller.app, golem.ModelID{}, observe.KindTransaction, observe.OperationCallerTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(caller.app.observer)
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
-	transaction, err := caller.app.database.BeginTxx(ctx, nil)
+	transaction, err := caller.app.database.BeginTxx(ctx, transactionBeginOptions(caller.app.provider, isolation))
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin caller transaction: %w", err)
 	}
@@ -339,20 +349,28 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 
 // SystemTransaction owns the outer transaction around one generated system
 // callback. It does not construct caller policy or make caller hooks available.
-func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callback func(*SystemTx[P, A]) error) (err error) {
+func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callback func(*SystemTx[P, A]) error, options ...golem.TransactionOption) error {
 	if system.app == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: system capability is unavailable")
 	}
 	if ctx == nil || callback == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
 	}
+	isolation, attempts, err := golem.RuntimeTransactionOptions(options)
+	if err != nil {
+		return err
+	}
+	return retryConflicts(ctx, attempts, jitteredRetryBackoff, func() error { return systemTransactionAttempt(ctx, system, callback, isolation) })
+}
+
+func systemTransactionAttempt[P, A any](ctx context.Context, system System[P, A], callback func(*SystemTx[P, A]) error, isolation golem.IsolationLevel) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	ctx, observation := beginObservation(ctx, system.app, golem.ModelID{}, observe.KindTransaction, observe.OperationSystemTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(system.app.observer)
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
-	transaction, err := system.app.database.BeginTxx(ctx, nil)
+	transaction, err := system.app.database.BeginTxx(ctx, transactionBeginOptions(system.app.provider, isolation))
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin system transaction: %w", err)
 	}
@@ -370,6 +388,55 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	}
 	capability := &SystemTx[P, A]{system: System[P, A]{app: system.app, executor: binding}, execution: execution}
 	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
+}
+
+func transactionBeginOptions(provider policyir.Provider, isolation golem.IsolationLevel) *sql.TxOptions {
+	if provider == policyir.ProviderPostgreSQL && isolation == golem.Serializable {
+		return &sql.TxOptions{Isolation: sql.LevelSerializable}
+	}
+	return nil
+}
+
+const (
+	retryBackoffBase = 5 * time.Millisecond
+	retryBackoffCap  = 200 * time.Millisecond
+)
+
+func retryConflicts(ctx context.Context, attempts int, backoff func(int) time.Duration, attempt func() error) error {
+	err := attempt()
+	for retry := 1; retry < attempts && isConflict(err); retry++ {
+		timer := time.NewTimer(backoff(retry))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		err = attempt()
+	}
+	return err
+}
+
+func jitteredRetryBackoff(retry int) time.Duration {
+	ceiling := retryBackoffCap
+	if retry < 7 {
+		ceiling = min(retryBackoffBase<<(retry-1), retryBackoffCap)
+	}
+	return time.Duration(rand.Int64N(int64(ceiling) + 1))
+}
+
+func isConflict(err error) bool {
+	var failure *golem.Error
+	return errors.As(err, &failure) && failure.Code == golem.CodeConflict
+}
+
+func providerInterference(err error) bool {
+	var failure *golem.Error
+	return !errors.As(err, &failure) && mutationupsert.ClassifyProviderFault(err) == mutationupsert.ProviderFaultInterference
+}
+
+func transactionConflict(message string, cause error) error {
+	return golem.RuntimeOperationError(golem.CodeConflict, "transaction", golem.ModelID{}, golem.FieldID{}, message, cause)
 }
 
 // CallerTxSystem is the policy escape: it returns the unrestricted system
@@ -414,6 +481,9 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 	}
 	if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 		binding.discardMutation()
+		if providerInterference(err) {
+			err = transactionConflict("transaction flush conflicted with another transaction", err)
+		}
 		return rollbackTransaction(transaction, err)
 	}
 	if commitErr := binding.operationWrites.commit(transaction.Commit); commitErr != nil {
@@ -421,6 +491,9 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
 			_ = transaction.Rollback()
 			return binding.operationWrites.refusal()
+		}
+		if providerInterference(commitErr) {
+			return transactionConflict("transaction commit conflicted with another transaction", commitErr)
 		}
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}
@@ -561,4 +634,11 @@ func SystemTxCount[P, A, M any](ctx context.Context, transaction *SystemTx[P, A]
 		}
 		return SystemCount(ctx, transaction.system, descriptor, options...)
 	})
+}
+
+func readFaultCode(err error) golem.ErrorCode {
+	if providerInterference(err) {
+		return golem.CodeConflict
+	}
+	return golem.CodeBadUserInput
 }

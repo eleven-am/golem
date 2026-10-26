@@ -520,15 +520,15 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "\tresult.%s = System%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\treturn result\n}\n")
-	fmt.Fprintf(source, "\nfunc (caller *Caller[P]) Transaction(ctx %s.Context, callback func(*CallerTx[P]) error) error {\n", contextAlias)
-	fmt.Fprintf(source, "\tif caller == nil { return %s.CallerTransaction(ctx, (*%s.Caller[P, %s])(nil), nil) }\n", runtimeAlias, runtimeAlias, actorType)
-	fmt.Fprintf(source, "\tif callback == nil { return %s.CallerTransaction(ctx, caller.runtime, nil) }\n", runtimeAlias)
+	fmt.Fprintf(source, "\nfunc (caller *Caller[P]) Transaction(ctx %s.Context, callback func(*CallerTx[P]) error, options ...%s.TransactionOption) error {\n", contextAlias, golemAlias)
+	fmt.Fprintf(source, "\tif caller == nil { return %s.CallerTransaction(ctx, (*%s.Caller[P, %s])(nil), nil, options...) }\n", runtimeAlias, runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tif callback == nil { return %s.CallerTransaction(ctx, caller.runtime, nil, options...) }\n", runtimeAlias)
 	fmt.Fprintf(source, "\treturn %s.CallerTransaction(ctx, caller.runtime, func(inner *%s.CallerTx[P, %s]) error {\n", runtimeAlias, runtimeAlias, actorType)
 	source.WriteString("\t\tresult := &CallerTx[P]{runtime: inner}\n")
 	for _, model := range models {
 		fmt.Fprintf(source, "\t\tresult.%s = CallerTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
-	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+	source.WriteString("\t\treturn callback(result)\n\t}, options...)\n}\n")
 	fmt.Fprintf(source, "func (transaction *CallerTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.CallerTxEnqueue(ctx, (*%s.CallerTx[P, %s])(nil), pending) }; return %s.CallerTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "func (transaction *CallerTx[P]) LockKeys(ctx %s.Context, keys ...%s.LockKey) error { if transaction == nil { return %s.CallerTxLockKeys(ctx, (*%s.CallerTx[P, %s])(nil), keys...) }; return %s.CallerTxLockKeys(ctx, transaction.runtime, keys...) }\n", contextAlias, golemAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	source.WriteString("\n// SystemEscape leaves the authorized path. It returns the unrestricted\n")
@@ -549,14 +549,14 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\treturn result\n}\n")
-	fmt.Fprintf(source, "\nfunc (system System[P]) Transaction(ctx %s.Context, callback func(*SystemTx[P]) error) error {\n", contextAlias)
-	fmt.Fprintf(source, "\tif callback == nil { return %s.SystemTransaction(ctx, system.runtime, nil) }\n", runtimeAlias)
+	fmt.Fprintf(source, "\nfunc (system System[P]) Transaction(ctx %s.Context, callback func(*SystemTx[P]) error, options ...%s.TransactionOption) error {\n", contextAlias, golemAlias)
+	fmt.Fprintf(source, "\tif callback == nil { return %s.SystemTransaction(ctx, system.runtime, nil, options...) }\n", runtimeAlias)
 	fmt.Fprintf(source, "\treturn %s.SystemTransaction(ctx, system.runtime, func(inner *%s.SystemTx[P, %s]) error {\n", runtimeAlias, runtimeAlias, actorType)
 	source.WriteString("\t\tresult := &SystemTx[P]{runtime: inner}\n")
 	for _, model := range models {
 		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
-	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+	source.WriteString("\t\treturn callback(result)\n\t}, options...)\n}\n")
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.SystemTxEnqueue(ctx, (*%s.SystemTx[P, %s])(nil), pending) }; return %s.SystemTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) LockKeys(ctx %s.Context, keys ...%s.LockKey) error { if transaction == nil { return %s.SystemTxLockKeys(ctx, (*%s.SystemTx[P, %s])(nil), keys...) }; return %s.SystemTxLockKeys(ctx, transaction.runtime, keys...) }\n", contextAlias, golemAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 }

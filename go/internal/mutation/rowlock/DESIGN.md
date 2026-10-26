@@ -161,6 +161,64 @@ changes exactly the rows it holds, and the count, hooks, events and cascade
 facts are built from those rows. Tests: `runtime/row_lock_ledger_test.go`,
 `runtime/row_lock_batch_rule_test.go` (injected through `WithEnumeratedFault`).
 
+## Under `Isolation(Serializable)`
+
+Everything above assumes READ COMMITTED, the default, where every statement
+takes a new snapshot. A transaction opened with
+`golem.Isolation(golem.Serializable)` begins with `sql.LevelSerializable` and
+keeps one snapshot for its whole life. The ordering rules (steps 1 to 3 and 6
+to 9) are unchanged: locks are still taken in ledger order, so the waits-for
+graph stays acyclic, and serializable checking adds aborts, not waits. Two
+rules of step 4 and of the section above change:
+
+- **Authorization is judged at the transaction snapshot.** The fresh-read
+  statement still runs after the lock round, but it reads the snapshot the
+  transaction began with, not a fresh one, so a grant revoked by a transaction
+  that committed after this one started is not seen. PostgreSQL tracks
+  read-write dependencies only between SERIALIZABLE transactions. When the
+  revoking transaction is also Serializable, the write is ordered before the
+  revocation in a serial order, or, if no such order exists, one transaction
+  fails with 40001, reported as `CONFLICT`. When the revoking transaction runs
+  at READ COMMITTED, as every default golem transaction and every standalone
+  mutation does, it takes no predicate locks: the revocation is not detected,
+  and this transaction commits a write authorized on its snapshot. So
+  Serializable protects invariants that every participating writer checks
+  under Serializable, such as count-check-insert. It does not make
+  authorization fresher; under READ COMMITTED a grant is read after every
+  lock wait, and that is the stronger rule for revocation.
+- **A concurrently changed row is a `CONFLICT`, not a re-check.** When a lock
+  statement reaches a row that another transaction updated or deleted and
+  committed after this snapshot, PostgreSQL raises 40001 instead of
+  re-evaluating the newer version (EvalPlanQual). The `<match>` column is
+  never computed on a newer version, and a row deleted after the snapshot is
+  not silently absent: the statement fails and golem reports `CONFLICT`.
+
+40001 and 40P01 are classified as `CONFLICT` wherever they surface: at a write
+statement, at a read statement, while flushing the outbox, and at COMMIT.
+`golem.RetryConflicts(n)` re-runs the whole callback on `CONFLICT`, at most `n`
+attempts in all, each in a fresh transaction with a fresh ledger and mutation
+state; after-commit hooks run once, after the attempt that commits. Without it
+the callback runs exactly once. SQLite already runs one writer at a time
+(`BEGIN IMMEDIATE`), which meets Serializable, so the option sends it no level.
+REPEATABLE READ is not offered: it has the per-transaction snapshot without the
+serializable check, so it could write on a stale grant without an abort even
+when every other writer is Serializable, and it does not stop count-check-insert.
+
+Serializable aborts can be false positives. PostgreSQL records what a
+serializable transaction read as predicate locks on btree index pages, and
+promotes them to relation locks when there are many, so an insert into a page
+another serializable transaction read conflicts with it even when the rows are
+unrelated. Every golem write also inserts into shared system tables (the event
+outbox and delivery rows, and queue jobs when it enqueues), whose indexes
+concentrate inserts on the same rightmost pages, and any serializable read of
+those tables, or of a hot application index, widens the shared surface. Two
+serializable transactions that touch unrelated application rows can therefore
+form a read-write cycle through shared pages, and one fails with 40001,
+reported as `CONFLICT`. This is inherent to SSI, not a golem fault; callers
+that use Serializable should pass `RetryConflicts`.
+Tests: `runtime/postgresql_serializable_test.go`,
+`runtime/transaction_option_test.go`.
+
 ## Cost
 
 Beyond its enumeration, a merged predicate selection costs one statement; a

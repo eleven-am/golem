@@ -236,7 +236,7 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 		if contextErr := ctx.Err(); contextErr != nil {
 			err = contextErr
 		}
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics query failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), "analytics", descriptor, golem.FieldID{}, "analytics query failed", err)
 	}
 	defer rows.Close()
 	columns := statement.Columns()
@@ -292,7 +292,7 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 		if contextErr := ctx.Err(); contextErr != nil {
 			err = contextErr
 		}
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics query failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), "analytics", descriptor, golem.FieldID{}, "analytics query failed", err)
 	}
 	if detail := statement.LimitOverflow(contributionRows, intermediateGroups, len(result)); detail != "" {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, detail, nil)

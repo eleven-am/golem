@@ -212,7 +212,7 @@ func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], execut
 	}
 	rows, err := queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation execution failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation execution failed", err)
 	}
 	result := make([]executedRow, 0)
 	for rows.Next() {
@@ -243,7 +243,7 @@ func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], execut
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation result stream failed", err)
+		return nil, golem.RuntimeReadError(readFaultCode(err), operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation result stream failed", err)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation result stream could not be closed", err)
