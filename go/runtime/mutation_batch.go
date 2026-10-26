@@ -767,9 +767,8 @@ func publicBatchPreparationError(operation mutationir.Operation, model golem.Mod
 	if limited, ok := publicLimitError(batchOperationName(operation), model, err); ok {
 		return limited
 	}
-	var planned *mutationplan.Error
-	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
-		return golem.RuntimeOperationError(golem.CodeForbidden, batchOperationName(operation), model, golem.FieldID(planned.Field), "batch mutation is not authorized", err)
+	if refused, ok := publicMutationAuthorizationError(batchOperationName(operation), model, "batch mutation is not authorized", err); ok {
+		return refused
 	}
 	if refused, ok := publicForeignKeyArithmetic(batchOperationName(operation), model, err); ok {
 		return refused

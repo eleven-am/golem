@@ -485,6 +485,9 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		value := externalAnchor.clone()
 		anchor = &value
 	}
+	if err := CreateGranted(node); err != nil {
+		return err
+	}
 	identity, err := engine.requiredUpsertIdentity(node)
 	if err != nil {
 		return err

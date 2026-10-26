@@ -537,7 +537,7 @@ func TestUpsertHiddenExistingNeverFallsThroughToUnauthorizedUpdate(t *testing.T)
 
 		_, err = CallerUpsert(ctx, caller, fixture.postDescriptor, fixture.target(74),
 			fixture.createPost(74, golem.UUID{15: 1}, "create"), fixture.updateTitle("must-not-update"))
-		assertPublicUpsertCode(t, err, golem.CodeConflict)
+		assertPublicUpsertCode(t, err, golem.CodeForbidden)
 		assertUpsertStoredTitle(t, fixture, posts, placeholder, 74, "hidden")
 
 		_, err = CallerUpsert(ctx, caller, fixture.postDescriptor, fixture.target(76),

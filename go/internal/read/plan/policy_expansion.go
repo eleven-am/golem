@@ -37,7 +37,39 @@ func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policy
 }
 
 func ReadLens(policies PolicySet, model policyir.ModelID, maxDepth int) classify.Reach {
+	if maxDepth <= 0 {
+		maxDepth = DefaultLimits().MaxRelationDepth
+	}
 	return newPolicyExpander(policies, maxDepth).reach(model, 0)
+}
+
+func ReachWithin(policies PolicySet, model policyir.ModelID, condition policyir.Condition, maxDepth int) (policyir.Condition, error) {
+	if maxDepth <= 0 {
+		maxDepth = DefaultLimits().MaxRelationDepth
+	}
+	if condition.ModelID() != model {
+		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "reach condition belongs to another model", nil)
+	}
+	expanded, err := newPolicyExpander(policies, maxDepth).within(model, 0, condition)
+	if err != nil {
+		return policyir.Condition{}, err
+	}
+	return normalize.Condition(expanded)
+}
+
+func ReadFieldReach(policies PolicySet, model policyir.ModelID, field policyir.FieldID, maxDepth int) (policyir.Condition, error) {
+	if policies == nil {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field policy is unavailable", nil)
+	}
+	policy, ok := policies.Policy(model)
+	if !ok {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field policy is absent", nil)
+	}
+	condition, err := resolve.FieldCondition(policy, policyir.ActionRead, model, field)
+	if err != nil {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field condition could not be resolved", err)
+	}
+	return ReachWithin(policies, model, condition, maxDepth)
 }
 
 func (expander *policyExpander) model(model policyir.ModelID, depth int) (policyir.Condition, error) {

@@ -30,6 +30,7 @@ const (
 
 type Error struct {
 	Code    ErrorCode
+	Reason  golem.Reason
 	Model   golem.ModelID
 	Field   golem.FieldID
 	Limit   golem.Limit
@@ -171,4 +172,8 @@ func (result Result) SourceUpperBound() uint32 { return result.sourceUpperBound 
 
 func fail(code ErrorCode, model golem.ModelID, field golem.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Model: model, Field: field, Detail: detail, Cause: cause}
+}
+
+func failReason(code ErrorCode, reason golem.Reason, model golem.ModelID, field golem.FieldID, detail string, cause error) error {
+	return &Error{Code: code, Reason: reason, Model: model, Field: field, Detail: detail, Cause: cause}
 }

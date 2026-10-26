@@ -242,13 +242,13 @@ func TestGraphQLNestedDenialAndLimitOverflowRollBackDataHooksAndFacts(t *testing
 		log := &socialHookLog{}
 		fixture := newSocialMutationFixture(t, golem.ModelID{}, log)
 		fixture = p5ReopenSocialMutation(t, fixture, fixture.schema.Post, log, MutationLimits{})
-		assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeForbidden)
+		assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeForbidden, nil)
 	})
 	t.Run("touched-graph-limit-overflow", func(t *testing.T) {
 		log := &socialHookLog{}
 		fixture := newSocialMutationFixture(t, golem.ModelID{}, log)
 		fixture = p5ReopenSocialMutation(t, fixture, golem.ModelID{}, log, MutationLimits{MaxTouchedRows: 1})
-		assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeBadUserInput)
+		assertP5GraphQLNestedRollback(t, fixture, log, golem.CodeBadUserInput, []string{"post"})
 	})
 }
 
@@ -280,7 +280,7 @@ func p5ReopenSocialMutation(t testing.TB, fixture socialMutationFixture, denied 
 	return fixture
 }
 
-func assertP5GraphQLNestedRollback(t testing.TB, fixture socialMutationFixture, log *socialHookLog, wantCode golem.ErrorCode) {
+func assertP5GraphQLNestedRollback(t testing.TB, fixture socialMutationFixture, log *socialHookLog, wantCode golem.ErrorCode, wantBefore []string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := SystemCreate(ctx, fixture.app.System(), fixture.userDescriptor, fixture.userCreate(1, "before")); err != nil {
@@ -316,7 +316,7 @@ func assertP5GraphQLNestedRollback(t testing.TB, fixture socialMutationFixture, 
 	if err := fixture.app.database.GetContext(ctx, &facts, `SELECT COUNT(*) FROM `+nestedAcceptanceOutbox(fixture.app)); err != nil || facts != 0 {
 		t.Fatalf("rolled-back outbox facts=%d err=%v", facts, err)
 	}
-	if !reflect.DeepEqual(log.before, []string{"post"}) || len(log.after) != 0 || len(log.afterCommit) != 0 {
+	if len(log.before) != len(wantBefore) || len(wantBefore) != 0 && !reflect.DeepEqual(log.before, wantBefore) || len(log.after) != 0 || len(log.afterCommit) != 0 {
 		t.Fatalf("rolled-back hook trace before=%v after=%v afterCommit=%v", log.before, log.after, log.afterCommit)
 	}
 }

@@ -55,8 +55,8 @@ func assertCallerNestedNonCreateDenials(t *testing.T, fixture mutationResultFixt
 		input golem.UpdateInput[mutationResultUser]
 		code  golem.ErrorCode
 	}{
-		{"update", userUpdate("denied-update", golem.GeneratedNestedUpdate[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, postTarget(60), fixture.updateTitle("must-not-update"))), golem.CodeNotFound},
-		{"delete", userUpdate("denied-delete", golem.GeneratedNestedDelete[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, postTarget(61))), golem.CodeNotFound},
+		{"update", userUpdate("denied-update", golem.GeneratedNestedUpdate[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, postTarget(60), fixture.updateTitle("must-not-update"))), golem.CodeForbidden},
+		{"delete", userUpdate("denied-delete", golem.GeneratedNestedDelete[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, postTarget(61))), golem.CodeForbidden},
 		{"membership", userUpdate("denied-membership", golem.GeneratedNestedConnect[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, postTarget(62))), golem.CodeNotFound},
 		{"updateMany", userUpdate("denied-update-many", golem.GeneratedNestedUpdateMany[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, fixture.postID.In(golem.UUID{15: 63}, golem.UUID{15: 64}), fixture.updateManyTitle("must-not-batch-update"))), golem.CodeForbidden},
 		{"deleteMany", userUpdate("denied-delete-many", golem.GeneratedNestedDeleteMany[mutationResultUser, mutationResultPost](fixture.schema.User, fixture.schema.UserPosts, fixture.schema.Authorship, fixture.schema.Post, fixture.postID.In(golem.UUID{15: 65}, golem.UUID{15: 66}))), golem.CodeForbidden},
@@ -187,7 +187,7 @@ func TestCallerSourceExactConnectAuthorizesSelectedTargetReadReachAcrossProvider
 					}
 					want := golem.CodeNotFound
 					if test.read == sourceTargetReachAbsent {
-						want = golem.CodeBadUserInput
+						want = golem.CodeForbidden
 					}
 					if failure.Code != want {
 						t.Fatalf("source Connect to an unreadable target code=%s want=%s", failure.Code, want)
