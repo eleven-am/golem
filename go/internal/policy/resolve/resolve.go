@@ -160,10 +160,9 @@ func validateQuestion(policy ir.Policy, action ir.Action, model ir.ModelID) erro
 }
 
 func chainForRow(policy ir.Policy, action ir.Action, model ir.ModelID) []ir.Rule {
-	rules := policy.Rules()
-	chain := make([]ir.Rule, 0, len(rules))
-	for index := len(rules) - 1; index >= 0; index-- {
-		rule := rules[index]
+	chain := make([]ir.Rule, 0, policy.RuleCount())
+	for index := policy.RuleCount() - 1; index >= 0; index-- {
+		rule := policy.RuleAt(index)
 		if rule.Action() != action || rule.ModelID() != model {
 			continue
 		}
@@ -176,10 +175,9 @@ func chainForRow(policy ir.Policy, action ir.Action, model ir.ModelID) []ir.Rule
 }
 
 func chainForField(policy ir.Policy, action ir.Action, model ir.ModelID, field ir.FieldID) []ir.Rule {
-	rules := policy.Rules()
-	chain := make([]ir.Rule, 0, len(rules))
-	for index := len(rules) - 1; index >= 0; index-- {
-		rule := rules[index]
+	chain := make([]ir.Rule, 0, policy.RuleCount())
+	for index := policy.RuleCount() - 1; index >= 0; index-- {
+		rule := policy.RuleAt(index)
 		if rule.Action() != action || rule.ModelID() != model {
 			continue
 		}

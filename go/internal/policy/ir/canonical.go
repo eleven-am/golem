@@ -21,14 +21,56 @@ func CanonicalCondition(condition Condition) ([]byte, error) {
 	if err := condition.Validate(); err != nil {
 		return nil, err
 	}
+	body, err := condition.canonicalBody()
+	if err != nil {
+		return nil, err
+	}
+	model := condition.node.modelID()
+	encoded := make([]byte, 0, len(conditionDomain)+len(model)+len(body))
+	encoded = append(encoded, conditionDomain...)
+	encoded = append(encoded, model[:]...)
+	return append(encoded, body...), nil
+}
+
+type CanonicalKey struct {
+	model ModelID
+	body  []byte
+}
+
+func CanonicalKeyOf(condition Condition) (CanonicalKey, error) {
+	if err := condition.Validate(); err != nil {
+		return CanonicalKey{}, err
+	}
+	body, err := condition.canonicalBody()
+	if err != nil {
+		return CanonicalKey{}, err
+	}
+	return CanonicalKey{model: condition.node.modelID(), body: body}, nil
+}
+func (key CanonicalKey) Compare(other CanonicalKey) int {
+	for index := range key.model {
+		if key.model[index] != other.model[index] {
+			if key.model[index] < other.model[index] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return bytes.Compare(key.body, other.body)
+}
+func (condition Condition) canonicalBody() ([]byte, error) {
+	state := condition.node.memo()
+	if cached := state.canonical.Load(); cached != nil {
+		return *cached, nil
+	}
 	encoder := canonicalEncoder{}
-	encoder.raw([]byte(conditionDomain))
-	encoder.id16(condition.ModelID())
-	encoder.condition(condition)
+	encoder.node(condition)
 	if encoder.err != nil {
 		return nil, encoder.err
 	}
-	return encoder.buffer.Bytes(), nil
+	body := encoder.buffer.Bytes()
+	state.canonical.Store(&body)
+	return body, nil
 }
 func ConditionFingerprint(condition Condition) (Fingerprint, error) {
 	encoded, err := CanonicalCondition(condition)
@@ -241,12 +283,28 @@ func (e *canonicalEncoder) path(path JSONPath) {
 	}
 }
 func (e *canonicalEncoder) condition(condition Condition) {
+	if e.err != nil {
+		return
+	}
+	if condition.node == nil {
+		e.u8(0)
+		e.fail("unknown condition variant")
+		return
+	}
+	body, err := condition.canonicalBody()
+	if err != nil {
+		e.err = err
+		return
+	}
+	e.raw(body)
+}
+func (e *canonicalEncoder) node(condition Condition) {
 	e.u8(uint8(condition.Kind()))
 	switch node := condition.node.(type) {
-	case constantNode:
+	case *constantNode:
 		e.id16(node.model)
 		e.boolean(node.truth)
-	case logicalNode:
+	case *logicalNode:
 		e.id16(node.model)
 		e.u8(uint8(node.operator))
 		e.count(len(node.children))
@@ -254,7 +312,7 @@ func (e *canonicalEncoder) condition(condition Condition) {
 			e.condition(child)
 		}
 		e.requirements(node.requirements)
-	case scalarNode:
+	case *scalarNode:
 		e.id16(node.model)
 		e.id16(node.field)
 		e.typeRef(node.fieldType)
@@ -262,14 +320,14 @@ func (e *canonicalEncoder) condition(condition Condition) {
 		e.u8(uint8(node.mode))
 		e.operand(node.operand)
 		e.requirements(node.requirements)
-	case listNode:
+	case *listNode:
 		e.id16(node.model)
 		e.id16(node.field)
 		e.typeRef(node.fieldType)
 		e.u16(uint16(node.operator))
 		e.operand(node.operand)
 		e.requirements(node.requirements)
-	case jsonNode:
+	case *jsonNode:
 		e.id16(node.model)
 		e.id16(node.field)
 		e.typeRef(node.fieldType)
@@ -278,18 +336,18 @@ func (e *canonicalEncoder) condition(condition Condition) {
 		e.path(node.path)
 		e.operand(node.operand)
 		e.requirements(node.requirements)
-	case relationNode:
+	case *relationNode:
 		e.id16(node.model)
 		e.id16(node.field)
 		e.id16(node.relation)
 		e.id16(node.target)
 		e.u8(uint8(node.cardinality))
 		e.u16(uint16(node.operator))
-		if node.child == nil {
+		if node.child.node == nil {
 			e.u8(0)
 		} else {
 			e.u8(1)
-			e.condition(*node.child)
+			e.condition(node.child)
 		}
 		e.requirements(node.requirements)
 	default:
@@ -300,11 +358,11 @@ func (e *canonicalEncoder) rule(rule Rule) {
 	e.u8(uint8(rule.action))
 	e.u8(uint8(rule.effect))
 	e.id16(rule.model)
-	if rule.condition == nil {
+	if rule.condition.node == nil {
 		e.u8(0)
 	} else {
 		e.u8(1)
-		e.condition(*rule.condition)
+		e.condition(rule.condition)
 	}
 	if rule.fields == nil {
 		e.u8(0)
