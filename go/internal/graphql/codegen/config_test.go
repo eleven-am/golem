@@ -477,7 +477,7 @@ func TestGeneratedGraphQLBindsTypedEventsAndNativeSubscriptionResolver(t *testin
 		t.Fatal(err)
 	}
 	adapter := string(result.Source)
-	for _, required := range []string{"WebSocketInit", "Shutdown(ctx context.Context)", "SubscribeFrozenEvents", "CallerFrozenReadEvents", "AdaptGeneratedEventStream", "NewGeneratedEvent", `Kind: "subscription", Field: "postEvents"`} {
+	for _, required := range []string{"WebSocketInit", "golemgraphql.SubscriptionRecheck[P]", "SubscriptionRecheck: config.SubscriptionRecheck", "Shutdown(ctx context.Context)", "SubscribeFrozenEvents", "CallerFrozenReadEvents", "AdaptGeneratedEventStream", "NewGeneratedEvent", `Kind: "subscription", Field: "postEvents"`} {
 		if !strings.Contains(adapter, required) {
 			t.Errorf("generated P7 adapter missing %q", required)
 		}

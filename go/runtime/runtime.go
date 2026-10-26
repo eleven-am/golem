@@ -75,9 +75,10 @@ type Config[P, A any] struct {
 	SnapshotActor func(A) (A, error)
 	// Queue enables the durable job queue. When omitted, no job storage is
 	// created and every queue entry point refuses with CodeConfigInvalid.
-	Queue          *QueueConfig
-	PolicyCache    PolicyCacheConfig
-	PolicyCacheKey func(A) (string, bool)
+	Queue                    *QueueConfig
+	PolicyCache              PolicyCacheConfig
+	PolicyCacheKey           func(A) (string, bool)
+	SubscriptionPrincipalKey func(P) (string, bool)
 }
 
 // App contains immutable process-wide metadata and the actor-keyed policy
@@ -120,6 +121,8 @@ type App[P, A any] struct {
 	eventMu                   sync.Mutex
 	eventHubs                 map[golem.ModelID]*subscription.ModelHub[any]
 	nextSubscription          atomic.Uint64
+	subscriptionPrincipalKey  func(P) (string, bool)
+	subscriptionCounts        subscriptionCounter
 	deleteCoverageReported    sync.Map
 	afterCommitError          func(context.Context, golem.AfterCommitFailure)
 	auditPrincipal            func(P) string
@@ -312,7 +315,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonSchemaDrift
 		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
 	}
-	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, policyCache: cache, policyCacheKey: config.PolicyCacheKey, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
+	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, policyCache: cache, policyCacheKey: config.PolicyCacheKey, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, subscriptionPrincipalKey: config.SubscriptionPrincipalKey, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	providerhandle.AttachMaintenanceObserver((*providerhandle.Database)(databaseHandle), config.Observer)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
@@ -354,6 +357,9 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 	limits, err := events.NormalizeLimits(config.EventLimits)
 	if err != nil {
 		return events.Limits{}, err
+	}
+	if limits.MaxSubscriptionsPerPrincipal > 0 && config.SubscriptionPrincipalKey == nil {
+		return events.Limits{}, events.Failf(events.CodeEventConfig, "MaxSubscriptionsPerPrincipal (%d) requires SubscriptionPrincipalKey", limits.MaxSubscriptionsPerPrincipal)
 	}
 	if config.EventTransport != nil {
 		capabilities, topologyErr := validateEventTransportTopology(providerIdentity, config.EventTransport)
@@ -819,7 +825,9 @@ func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descrip
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadCount)
 	defer func() { finishObservation(observation, resultErr) }()
-	prepared, err := prepareCallerCount(caller, descriptor, options)
+	counting := *caller
+	counting.policies = caller.policies.AggregateView()
+	prepared, err := prepareCallerCount(&counting, descriptor, options)
 	if err != nil {
 		return 0, err
 	}
@@ -840,9 +848,8 @@ func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descript
 	return executeCount(ctx, system.app, prepared)
 }
 
-// preparedReadStatement is the single authorized render boundary shared by a
-// production Caller read and its explicit query-plan explanation. It retains
-// typed authority and the exact rendered statement, but is never public.
+// preparedReadStatement retains typed authority and the exact rendered
+// statement, but is never public.
 type preparedReadStatement struct {
 	prepared  PreparedRead
 	plan      readplan.Plan

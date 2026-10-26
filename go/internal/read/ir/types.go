@@ -225,6 +225,7 @@ type RequestInput struct {
 	Omit       []policyir.FieldID
 	Selector   *Selector
 	Cursor     *Cursor
+	Unordered  bool
 }
 
 type Request struct {
@@ -240,6 +241,7 @@ type Request struct {
 	omit       []policyir.FieldID
 	selector   *Selector
 	cursor     *Cursor
+	unordered  bool
 }
 
 func NewRequest(input RequestInput) (Request, error) {
@@ -261,7 +263,10 @@ func NewRequest(input RequestInput) (Request, error) {
 	if projection < ProjectionDefault || projection > ProjectionInclude {
 		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: projection mode is invalid")
 	}
-	result := Request{operation: input.Operation, model: input.Model, projection: projection}
+	if input.Unordered && (input.Operation != FindMany || len(input.OrderBy) != 0 || input.Take != nil || input.Skip != nil || len(input.Distinct) != 0 || input.Cursor != nil) {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: an unordered request is a findMany without order, window, distinct, or cursor")
+	}
+	result := Request{operation: input.Operation, model: input.Model, projection: projection, unordered: input.Unordered}
 	if input.Where != nil {
 		where := *input.Where
 		result.where = &where
@@ -383,6 +388,7 @@ func (request Request) Selection() []Selection {
 	return result
 }
 func (request Request) ProjectionMode() ProjectionMode { return request.projection }
+func (request Request) Unordered() bool                { return request.unordered }
 func (request Request) Omitted() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), request.omit...)
 }
@@ -399,7 +405,7 @@ func (request Request) Cursor() (Cursor, bool) {
 	return Cursor{selector: request.cursor.Selector(), predicate: request.cursor.Predicate()}, true
 }
 func (request Request) clone() Request {
-	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection, Projection: request.projection, Omit: request.omit, Selector: request.selector, Cursor: request.cursor}
+	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection, Projection: request.projection, Omit: request.omit, Selector: request.selector, Cursor: request.cursor, Unordered: request.unordered}
 	result, _ := NewRequest(input)
 	return result
 }

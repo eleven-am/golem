@@ -6,6 +6,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 )
 
 // policyExpander closes every relation hop over the target model's read
@@ -29,15 +30,87 @@ func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policy
 	if maxDepth <= 0 {
 		maxDepth = DefaultLimits().MaxRelationDepth
 	}
-	row, err := newPolicyExpander(policies, maxDepth).model(model, 0)
+	row, err := newPolicyExpander(policies, maxDepth).entry(model, 0)
 	if err != nil {
 		return policyir.Condition{}, err
 	}
 	return normalize.Condition(row)
 }
 
+func CallerReach(policies PolicySet, model policyir.ModelID, where *policyir.Condition, maxDepth int) (policyir.Condition, *policyir.Condition, error) {
+	if maxDepth < 0 {
+		return policyir.Condition{}, nil, fail(CodeLimit, model, policyir.FieldID{}, "relation policy depth limit is invalid", nil)
+	}
+	expander := newPolicyExpander(policies, maxDepth)
+	row, err := expander.model(model, 0)
+	if err != nil {
+		return policyir.Condition{}, nil, err
+	}
+	row, err = normalize.Condition(row)
+	if err != nil {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "read row constraint could not be normalized", err)
+	}
+	if where == nil {
+		return row, nil, nil
+	}
+	if where.ModelID() != model {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "caller predicate is rooted at a different model", nil)
+	}
+	expanded, err := expander.condition(*where, 0)
+	if err != nil {
+		return policyir.Condition{}, nil, err
+	}
+	expanded, err = normalize.Condition(expanded)
+	if err != nil {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "caller predicate could not be normalized", err)
+	}
+	return row, &expanded, nil
+}
+
 func ReadLens(policies PolicySet, model policyir.ModelID, maxDepth int) classify.Reach {
+	if maxDepth <= 0 {
+		maxDepth = DefaultLimits().MaxRelationDepth
+	}
 	return newPolicyExpander(policies, maxDepth).reach(model, 0)
+}
+
+func ReachWithin(policies PolicySet, model policyir.ModelID, condition policyir.Condition, maxDepth int) (policyir.Condition, error) {
+	if maxDepth <= 0 {
+		maxDepth = DefaultLimits().MaxRelationDepth
+	}
+	if condition.ModelID() != model {
+		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "reach condition belongs to another model", nil)
+	}
+	expanded, err := newPolicyExpander(policies, maxDepth).within(model, 0, condition)
+	if err != nil {
+		return policyir.Condition{}, err
+	}
+	return normalize.Condition(expanded)
+}
+
+func ReadFieldReach(policies PolicySet, model policyir.ModelID, field policyir.FieldID, maxDepth int) (policyir.Condition, error) {
+	maxDepth = ReachDepth(maxDepth)
+	key := policyruntime.MemoKey{Kind: policyruntime.MemoReadFieldReach, Model: model, Field: field, Depth: maxDepth}
+	return Memoize(policies, key, func(source PolicySet) (policyir.Condition, error) {
+		return readFieldReach(source, model, field, maxDepth)
+	}, func() (policyir.Condition, error) {
+		return readFieldReach(policies, model, field, maxDepth)
+	})
+}
+
+func readFieldReach(policies PolicySet, model policyir.ModelID, field policyir.FieldID, maxDepth int) (policyir.Condition, error) {
+	if policies == nil {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field policy is unavailable", nil)
+	}
+	policy, ok := policies.Policy(model)
+	if !ok {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field policy is absent", nil)
+	}
+	condition, err := resolve.FieldCondition(policy, policyir.ActionRead, model, field)
+	if err != nil {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "read field condition could not be resolved", err)
+	}
+	return ReachWithin(policies, model, condition, maxDepth)
 }
 
 func (expander *policyExpander) model(model policyir.ModelID, depth int) (policyir.Condition, error) {

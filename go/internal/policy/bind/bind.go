@@ -115,7 +115,8 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 		}
 
 		publicFields, modelWide := ruleView.Fields()
-		if modelWide && len(publicFields) != 0 || !modelWide && len(publicFields) == 0 {
+		rowOnly := !modelWide && len(publicFields) == 0
+		if modelWide && len(publicFields) != 0 || rowOnly && (action != ir.ActionRead || effect != ir.EffectGrant) {
 			return ir.Policy{}, value.failureFor(CodeRule, path+".fields", model, ir.FieldID{}, ir.RelationID{}, 0, "field-scope tag and field inventory disagree")
 		}
 		fields := make([]ir.FieldID, len(publicFields))
@@ -133,7 +134,9 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 		}
 
 		var built ir.Rule
-		if modelWide {
+		if rowOnly {
+			built, err = ir.NewRowRule(action, effect, model, condition, uint32(index))
+		} else if modelWide {
 			built, err = ir.NewModelRule(action, effect, model, condition, uint32(index))
 		} else {
 			built, err = ir.NewFieldRule(action, effect, model, condition, fields[0], fields[1:], uint32(index))

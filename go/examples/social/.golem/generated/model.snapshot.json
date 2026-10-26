@@ -2,8 +2,8 @@
   "kind": "model_snapshot",
   "formatVersion": 1,
   "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "42fbcf3c995f03bba212fe8a01fd2c7f6e0263537b9b8624d4dbe74f976925ca",
-  "generationDigest": "57cf067d42094574595b011da439e9199afe6490624dc0624f48628f18786434",
+  "contractFingerprint": "708d9e3b81cfc320a2d97308bddfed783c30188c596abb557dda810e677cd8ad",
+  "generationDigest": "0d122e4fb2bb4582c8563eb0e9a4b43b9ac04f59f97aa871a2ec394b0d28b55a",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {

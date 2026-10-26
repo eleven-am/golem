@@ -185,7 +185,9 @@ events.CodeEventSourceClosed const ErrorCode = "GOLEM_EVENT_SOURCE_CLOSED"
 events.CodeEventTransport const ErrorCode = "GOLEM_EVENT_TRANSPORT"
 events.CodeOf func(error) (ErrorCode, bool)
 events.CodeSubscriptionCancelled const ErrorCode = "GOLEM_SUBSCRIPTION_CANCELLED"
+events.CodeSubscriptionForbidden const ErrorCode = "GOLEM_SUBSCRIPTION_FORBIDDEN"
 events.CodeSubscriptionInvalid const ErrorCode = "GOLEM_SUBSCRIPTION_INVALID"
+events.CodeSubscriptionLimit const ErrorCode = "GOLEM_SUBSCRIPTION_LIMIT"
 events.CodeSubscriptionOverflow const ErrorCode = "GOLEM_SUBSCRIPTION_OVERFLOW"
 events.CodeSubscriptionResync const ErrorCode = "GOLEM_SUBSCRIPTION_RESYNC"
 events.CodeSubscriptionRevalidation const ErrorCode = "GOLEM_SUBSCRIPTION_REVALIDATION"
@@ -219,7 +221,7 @@ events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
 events.Limits comparable
 events.Limits type struct
-events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
+events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher, RevalidateEvery, MaxSubscriptionsPerPrincipal}
 events.Limits.ClaimRows field int
 events.Limits.ConnectionInitBytes field int
 events.Limits.ConnectionInitTimeout field time.Duration
@@ -230,6 +232,7 @@ events.Limits.LeaseDuration field time.Duration
 events.Limits.MaxEncodedBatchBytes field int
 events.Limits.MaxEncodedEventBytes field int
 events.Limits.MaxSubscriptionsPerConnection field int
+events.Limits.MaxSubscriptionsPerPrincipal field int
 events.Limits.PublishTimeout field time.Duration
 events.Limits.PublisherConcurrency field int
 events.Limits.RequireExclusiveProcessLocalPublisher field bool
@@ -238,6 +241,7 @@ events.Limits.RetentionDeleteRows field int
 events.Limits.RetentionEvery field time.Duration
 events.Limits.RetryBase field time.Duration
 events.Limits.RetryCap field time.Duration
+events.Limits.RevalidateEvery field time.Duration
 events.Limits.ShutdownGrace field time.Duration
 events.Limits.SubscriberQueue field int
 events.Limits.WebSocketKeepAlive field time.Duration
@@ -253,6 +257,7 @@ events.MemoryLimits comparable
 events.MemoryLimits type struct
 events.MemoryLimits unkeyed literal {Buffer}
 events.MemoryLimits.Buffer field int
+events.MinimumRecheckInterval const time.Duration = 1000000000
 events.NewMemoryTransport func(MemoryLimits) (EventTransport, error)
 events.NewRetentionPolicy func(time.Time, int) (RetentionPolicy, error)
 events.NewRetentionResult func(int, int) RetentionResult
@@ -337,6 +342,7 @@ events.Stream.Recv func(context.Context) (internal/event/value.Notice, error)
 events.Subscription = internal/event/value.Subscription
 events.SuppressionCorrelatedGolemWrite const SuppressionReason = "correlated_golem_write"
 events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
+events.SuppressionDeleteOverDelivered const SuppressionReason = "delete_over_delivered"
 events.SuppressionDeletionUnverifiable const SuppressionReason = "deletion-unverifiable"
 events.SuppressionEntityAbsent const SuppressionReason = "entity_absent"
 events.SuppressionFiltered const SuppressionReason = "filtered"
@@ -491,6 +497,7 @@ golem.(*FrozenAnalyticsRequest).Skip func() (int, bool)
 golem.(*FrozenAnalyticsRequest).Take func() (int, bool)
 golem.(*FrozenAnalyticsRequest).Where func() (FrozenPredicate, bool)
 golem.(*FrozenEventRequest).ModelID func() ModelID
+golem.(*FrozenEventRequest).Recheck func() (time.Duration, func(context.Context) error, bool)
 golem.(*FrozenEventRequest).Selection func() []FieldID
 golem.(*FrozenEventRequest).Where func() (FrozenPredicate, bool)
 golem.(*FrozenMutationField).FieldID func() FieldID
@@ -744,6 +751,8 @@ golem.(*NullableTextField).Ne func(V) Predicate[M]
 golem.(*NullableTextField).NotIn func(...V) Predicate[M]
 golem.(*NullableTextField).StartsWith func(V) Predicate[M]
 golem.(*OpaqueField).Expr func() SchemaExpr[M, V]
+golem.(*OperationRules).CanAggregate func(Predicate[M], Field[M], ...Field[M])
+golem.(*OperationRules).CanCount func(Predicate[M])
 golem.(*OperationRules).CanCreate func(Predicate[M])
 golem.(*OperationRules).CanCreateFields func(Predicate[M], Field[M], ...Field[M])
 golem.(*OperationRules).CanDelete func(Predicate[M])
@@ -1227,6 +1236,7 @@ golem.(FrozenAnalyticsRequest).Skip func() (int, bool)
 golem.(FrozenAnalyticsRequest).Take func() (int, bool)
 golem.(FrozenAnalyticsRequest).Where func() (FrozenPredicate, bool)
 golem.(FrozenEventRequest).ModelID func() ModelID
+golem.(FrozenEventRequest).Recheck func() (time.Duration, func(context.Context) error, bool)
 golem.(FrozenEventRequest).Selection func() []FieldID
 golem.(FrozenEventRequest).Where func() (FrozenPredicate, bool)
 golem.(FrozenMutationField).FieldID func() FieldID
@@ -1976,6 +1986,7 @@ golem.EventMetadata comparable
 golem.EventMetadata type struct
 golem.EventModelMetadata type struct
 golem.EventOption[M any] type interface {} sealed
+golem.EventRecheck func[M any](time.Duration, func(context.Context) error) EventOption[M]
 golem.EventRegistry type struct
 golem.EventSchemaDigest comparable
 golem.EventSchemaDigest type [32]uint8
@@ -2250,6 +2261,7 @@ golem.Generated func[M any, V any](ScalarColumn[M, V], SchemaExpr[M, V], Generat
 golem.GeneratedAfterCommitHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAfterHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAggregate func[M any](ModelID, ...AggregateOption[M]) AggregateRequest[M]
+golem.GeneratedAggregatePolicies func[A any](ApplicationBindings[A], FrozenPolicy) (map[OperationID]FrozenPolicy, error)
 golem.GeneratedAggregateSelect func[M any](AggregateMeasure[M], ...AggregateMeasure[M]) AggregateOption[M]
 golem.GeneratedAggregateWhere func[M any](Predicate[M]) AggregateOption[M]
 golem.GeneratedApplicationBindings func[A any](SchemaDigest, ...PackageBindings[A]) (ApplicationBindings[A], error)
@@ -3436,7 +3448,7 @@ graphql.ComputedRequest unkeyed literal {Parent, Arguments}
 graphql.ComputedRequest.Arguments field []ComputedArgument
 graphql.ComputedRequest.Parent field golem.RuntimeModelRow
 graphql.ComputedResolveFunc type func(context.Context, ComputedRequest) (any, error)
-graphql.Config unkeyed literal {PrincipalFromContext, Limits, Introspection, ContractFingerprint, ReportInternalError, ExecutableSchema, EventLimits, Observer, Provider, WebSocketInit}
+graphql.Config unkeyed literal {PrincipalFromContext, Limits, Introspection, ContractFingerprint, ReportInternalError, ExecutableSchema, EventLimits, Observer, Provider, WebSocketInit, SubscriptionRecheck}
 graphql.Config.ContractFingerprint field golem.SchemaDigest
 graphql.Config.EventLimits field events.Limits
 graphql.Config.ExecutableSchema field github.com/99designs/gqlgen/graphql.ExecutableSchema
@@ -3446,6 +3458,7 @@ graphql.Config.Observer field observe.Observer
 graphql.Config.PrincipalFromContext field func(context.Context) (P, bool)
 graphql.Config.Provider field golem.Provider
 graphql.Config.ReportInternalError field func(context.Context, error)
+graphql.Config.SubscriptionRecheck field SubscriptionRecheck[P]
 graphql.Config.WebSocketInit field func(context.Context, encoding/json.RawMessage) (context.Context, error)
 graphql.Config[P any] type struct
 graphql.CustomArgument comparable
@@ -3543,6 +3556,10 @@ graphql.ResponseStream.Recv func(context.Context) (Response, error)
 graphql.Server[P any] type struct
 graphql.SubscriptionExecutor.Subscribe func(context.Context, P, Operation) (ResponseStream, error)
 graphql.SubscriptionExecutor[P any] type interface {Subscribe}
+graphql.SubscriptionRecheck unkeyed literal {Interval, Check}
+graphql.SubscriptionRecheck.Check field func(context.Context, P, Operation) error
+graphql.SubscriptionRecheck.Interval field time.Duration
+graphql.SubscriptionRecheck[P any] type struct
 internal/event/metadatavalue.(*Value).Action func() string
 internal/event/metadatavalue.(*Value).CausationID func() [16]uint8
 internal/event/metadatavalue.(*Value).EventID func() [16]uint8
@@ -4336,7 +4353,7 @@ runtime.CallerUpdateVersioned func[P any, A any, M any](context.Context, *Caller
 runtime.CallerUpsert func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerUpsertVersioned func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.ConcurrencyExpectation, golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.Caller[P any, A any] type struct
-runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue, PolicyCache, PolicyCacheKey}
+runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue, PolicyCache, PolicyCacheKey, SubscriptionPrincipalKey}
 runtime.Config.AfterCommitError field func(context.Context, golem.AfterCommitFailure)
 runtime.Config.AnalyticsLimits field AnalyticsLimits
 runtime.Config.AuditPrincipal field func(P) string
@@ -4362,6 +4379,7 @@ runtime.Config.ReportScopedQuery field func(context.Context, golem.ScopedAuditRe
 runtime.Config.ResolvePrincipal field func(context.Context, P) (A, error)
 runtime.Config.SnapshotActor field func(A) (A, error)
 runtime.Config.SnapshotPrincipal field func(P) (P, error)
+runtime.Config.SubscriptionPrincipalKey field func(P) (string, bool)
 runtime.Config[P any, A any] type struct
 runtime.DefaultMutationDeleteSnapshotBytes const untyped int = 65536
 runtime.DispatchCallerOperation func[P any, A any](context.Context, *Caller[P, A], any, func(context.Context, *Caller[P, A]) (any, error)) (any, error)

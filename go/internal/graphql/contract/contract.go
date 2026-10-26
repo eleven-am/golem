@@ -337,9 +337,6 @@ func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, de
 	if model == nil {
 		return []ir.Diagnostic{ir.NewError("P7_EVENT_MODEL_MISSING", fmt.Sprintf("subscription model %s has no logical model", contract.ModelID), span)}
 	}
-	if !contract.Exposed {
-		return []ir.Diagnostic{ir.NewError("P7_SUBSCRIPTION_MODEL_HIDDEN", fmt.Sprintf("model %s cannot enable subscriptions while hidden", contract.ModelID), span)}
-	}
 	if model.PrimaryKey == nil || len(model.PrimaryKey.Fields) == 0 {
 		return []ir.Diagnostic{ir.NewError("P7_SUBSCRIPTION_PRIMARY_KEY", fmt.Sprintf("model %s requires a primary key for subscriptions", contract.ModelID), span)}
 	}

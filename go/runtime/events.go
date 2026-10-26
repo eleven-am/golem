@@ -15,7 +15,6 @@ import (
 	eventcodec "github.com/eleven-am/golem/go/internal/event/codec"
 	typedvalue "github.com/eleven-am/golem/go/internal/event/typedvalue"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/policy/dependency"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -171,7 +170,7 @@ func CallerFrozenEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], 
 	if err != nil {
 		return nil, err
 	}
-	return CallerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected)
+	return callerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected, frozenEventRecheck(request))
 }
 
 // CallerFrozenReadEvents is the full-selection P5/P7 handoff used by the
@@ -184,6 +183,10 @@ func CallerFrozenEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], 
 // existing operation encoder, and closes it before the next frame; computed
 // loaders never live in this hub or across events.
 func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], readRequest golem.FrozenReadRequest, entitySelected bool) (golem.EventStream[E], error) {
+	return callerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected, eventRecheck{})
+}
+
+func callerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], readRequest golem.FrozenReadRequest, entitySelected bool, recheck eventRecheck) (golem.EventStream[E], error) {
 	if ctx == nil || caller == nil || caller.app == nil || caller.execution == 0 || readRequest.ModelID() == (golem.ModelID{}) || readRequest.Operation() != golem.ReadFindMany {
 		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: caller execution or frozen event read is unavailable")
 	}
@@ -240,14 +243,21 @@ func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 		context: ctx, principal: principal, model: model, readRequest: readRequest,
 		originalWhere: originalWhere, metadata: metadata, entitySelected: entitySelected,
 	}
+	release, err := caller.app.reserveSubscription(principal)
+	if err != nil {
+		return nil, err
+	}
 	hub, err := caller.app.eventHub(model)
 	if err != nil {
+		release()
 		return nil, err
 	}
-	stream, err := hub.SubscribeWithState(ctx, key, state, nil)
+	stream, err := hub.SubscribeWithState(ctx, key, state, func(any) { release() })
 	if err != nil {
+		release()
 		return nil, err
 	}
+	caller.app.startEventRecheck(stream, state, recheck)
 	caller.app.reportSubscriberWithoutPublisher(ctx)
 	return &callerEventStream[E]{stream: stream}, nil
 }
@@ -500,17 +510,12 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 			entity = &row
 		}
 	case golem.EventDeleted:
-		if state.originalWhere != nil {
-			return subscription.Suppress[any](events.SuppressionDeleteFiltered), nil
+		suppressed, delivered, deleteErr := app.evaluateDeletedEvent(eventContext, fresh, state, fact, identity)
+		if deleteErr != nil {
+			return subscription.Evaluation[any]{}, deleteErr
 		}
-		switch app.authorizeDeletedEvent(eventContext, fresh, fact) {
-		case deleteAuthorizationAllowed:
-		case deleteAuthorizationDenied:
-			return subscription.Suppress[any](events.SuppressionUnauthorized), nil
-		case deleteAuthorizationUnverifiable:
-			return subscription.Suppress[any](events.SuppressionDeletionUnverifiable), nil
-		default:
-			return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
+		if !delivered {
+			return suppressed, nil
 		}
 	default:
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
@@ -582,30 +587,11 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 	if truth, constant := constraint.Constant(); constant && !truth {
 		return golem.RuntimeModelRow{}, false, nil
 	}
-	envelope, err := golem.RuntimeReadHookRequestFromFrozen(state.readRequest)
+	transformed, prepared, err := app.eventHookedRead(ctx, caller, state)
 	if err != nil {
-		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionSourceClosed)
+		return golem.RuntimeModelRow{}, false, err
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	transformed, err := invokeReadBeforeHooks(hookContext, app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
-		if value.Request().ModelID() != state.model || value.Request().Operation() != golem.ReadFindMany {
-			return fmt.Errorf("event read hook changed operation identity")
-		}
-		_, prepareErr := caller.Prepare(value.Request())
-		return prepareErr
-	})
-	if err != nil {
-		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionRevalidation)
-	}
-	prepared, err := caller.Prepare(transformed.Request())
-	if err != nil {
-		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionRevalidation)
-	}
-	request, err := eventRequestWithOriginalWhere(prepared.request, state.originalWhere)
-	if err != nil {
-		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionSourceClosed)
-	}
-	prepared.request = request
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return golem.RuntimeModelRow{}, false, nil
@@ -639,6 +625,34 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 		return golem.RuntimeModelRow{}, false, nil
 	}
 	return rows[0].row, true, nil
+}
+
+func (app *App[P, A]) eventHookedRead(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P]) (golem.RuntimeReadHookRequest, PreparedRead, error) {
+	envelope, err := golem.RuntimeReadHookRequestFromFrozen(state.readRequest)
+	if err != nil {
+		return golem.RuntimeReadHookRequest{}, PreparedRead{}, events.Failure(events.CodeSubscriptionSourceClosed)
+	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	transformed, err := invokeReadBeforeHooks(hookContext, app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
+		if value.Request().ModelID() != state.model || value.Request().Operation() != golem.ReadFindMany {
+			return fmt.Errorf("event read hook changed operation identity")
+		}
+		_, prepareErr := caller.Prepare(value.Request())
+		return prepareErr
+	})
+	if err != nil {
+		return golem.RuntimeReadHookRequest{}, PreparedRead{}, events.Failure(events.CodeSubscriptionRevalidation)
+	}
+	prepared, err := caller.Prepare(transformed.Request())
+	if err != nil {
+		return golem.RuntimeReadHookRequest{}, PreparedRead{}, events.Failure(events.CodeSubscriptionRevalidation)
+	}
+	request, err := eventRequestWithOriginalWhere(prepared.request, state.originalWhere)
+	if err != nil {
+		return golem.RuntimeReadHookRequest{}, PreparedRead{}, events.Failure(events.CodeSubscriptionSourceClosed)
+	}
+	prepared.request = request
+	return transformed, prepared, nil
 }
 
 func eventRequestWithOriginalWhere(request readir.Request, original *policyir.Condition) (readir.Request, error) {
@@ -723,103 +737,28 @@ func equalityCondition(registry *schema.Registry, provider policyir.Provider, mo
 	return policyir.NewLogical(model, policyir.LogicalAnd, conditions)
 }
 
-type deleteAuthorizationDisposition uint8
-
-const (
-	deleteAuthorizationAllowed deleteAuthorizationDisposition = iota + 1
-	deleteAuthorizationDenied
-	deleteAuthorizationUnverifiable
-)
-
-func (app *App[P, A]) authorizeDeletedEvent(ctx context.Context, caller *Caller[P, A], factEnvelope interface {
-	PrivateDeleteSnapshot() (mutationdecode.Row, bool)
-	DeleteSnapshotState() mutationir.DeleteSnapshotState
-}) deleteAuthorizationDisposition {
-	if factEnvelope.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
-		return deleteAuthorizationUnverifiable
-	}
-	snapshot, present := factEnvelope.PrivateDeleteSnapshot()
-	if !present {
-		return deleteAuthorizationUnverifiable
-	}
-	if !app.deleteSnapshotDeclared(snapshot) {
-		return deleteAuthorizationUnverifiable
-	}
-	policy, ok := caller.policies.Policy(snapshot.ModelID())
-	if !ok {
-		return deleteAuthorizationDenied
-	}
-	constraint, err := policyresolve.RowConstraint(policy, policyir.ActionRead, snapshot.ModelID())
-	if err != nil {
-		return deleteAuthorizationUnverifiable
-	}
-	record, verifiable, err := app.deleteSnapshotRecord(ctx, caller, snapshot, constraint)
-	if err != nil || !verifiable {
-		return deleteAuthorizationUnverifiable
-	}
-	allowed, err := evaluate.Condition(constraint, record, app.providers)
-	if err != nil {
-		return deleteAuthorizationUnverifiable
-	}
-	if !allowed {
-		return deleteAuthorizationDenied
-	}
-	return deleteAuthorizationAllowed
-}
-
-func (app *App[P, A]) deleteSnapshotRecord(ctx context.Context, caller *Caller[P, A], snapshot mutationdecode.Row, constraint policyir.Condition) (evaluate.Record, bool, error) {
-	fields := make([]evaluate.Field, 0, len(snapshot.Cells()))
-	for _, cell := range snapshot.Cells() {
-		field, err := eventEvaluateField(cell)
-		if err != nil {
-			return evaluate.Record{}, false, err
-		}
-		fields = append(fields, field)
-	}
-	dependencies, err := dependency.Collect(constraint)
-	if err != nil {
-		return evaluate.Record{}, false, err
-	}
-	for _, entry := range dependencies.Dependencies().Entries() {
-		if entry.Kind() == dependency.Scalar {
-			if _, present := snapshot.Cell(entry.FieldID()); !present {
-				return evaluate.Record{}, false, nil
-			}
-			continue
-		}
-		if entry.Kind() != dependency.Relation {
-			continue
-		}
-		endpoint, hydratable := app.deletedRelationHydratable(golem.ModelID(snapshot.ModelID()), entry)
-		if !hydratable {
-			return evaluate.Record{}, false, nil
-		}
-		related, verifiable, err := app.hydrateDeletedForwardRelation(ctx, caller, snapshot, endpoint, entry.Children())
-		if err != nil || !verifiable {
-			return evaluate.Record{}, false, err
-		}
-		fields = append(fields, related)
-	}
-	record, err := evaluate.NewRecord(snapshot.ModelID(), fields...)
-	return record, err == nil, err
-}
-
-func (app *App[P, A]) deletedRelationHydratable(model golem.ModelID, entry dependency.Entry) (schema.RelationEndpoint, bool) {
+func (app *App[P, A]) deletedRelationCovered(model golem.ModelID, entry dependency.Entry, covered map[golem.FieldID]bool) bool {
 	if entry.Kind() != dependency.Relation {
-		return schema.RelationEndpoint{}, false
+		return false
 	}
 	relationField, ok := app.registry.Field(model, golem.FieldID(entry.FieldID()))
-	relationID, relationOK := relationField.RelationID()
-	endpoint, forward := app.registry.ForwardToOneRelation(model, relationID)
-	if !ok || !relationOK || !forward || endpoint.FieldID() != golem.FieldID(entry.FieldID()) {
-		return schema.RelationEndpoint{}, false
+	if !ok {
+		return false
 	}
-	for _, child := range entry.Children().Entries() {
-		if child.Kind() != dependency.Scalar {
-			return schema.RelationEndpoint{}, false
+	relationID, ok := relationField.RelationID()
+	if !ok {
+		return false
+	}
+	endpoint, forward := app.registry.ForwardToOneRelation(model, relationID)
+	if !forward || endpoint.FieldID() != golem.FieldID(entry.FieldID()) || endpoint.Cardinality() != compilerir.RelationOne || len(endpoint.Correlation()) == 0 {
+		return false
+	}
+	for _, pair := range endpoint.Correlation() {
+		if !covered[pair.ParentFieldID()] {
+			return false
 		}
 	}
-	return endpoint, true
+	return true
 }
 
 func (app *App[P, A]) deleteSnapshotDeclared(snapshot mutationdecode.Row) bool {
@@ -872,7 +811,7 @@ func (app *App[P, A]) observeDeleteCoverage(ctx context.Context, model golem.Mod
 				missing = append(missing, fieldID)
 			}
 		case dependency.Relation:
-			if _, hydratable := app.deletedRelationHydratable(model, entry); !hydratable {
+			if !app.deletedRelationCovered(model, entry, covered) {
 				missing = append(missing, fieldID)
 			}
 		}
@@ -911,97 +850,6 @@ func eventEvaluateField(cell mutationdecode.Cell) (evaluate.Field, error) {
 		return evaluate.ListField(cell.FieldID(), elements...)
 	}
 	return evaluate.ValueField(cell.FieldID(), value)
-}
-
-func (app *App[P, A]) hydrateDeletedForwardRelation(ctx context.Context, caller *Caller[P, A], snapshot mutationdecode.Row, endpoint schema.RelationEndpoint, children dependency.Tree) (evaluate.Field, bool, error) {
-	if endpoint.Cardinality() != compilerir.RelationOne || policyir.ModelID(endpoint.TargetModelID()) != children.ModelID() {
-		return evaluate.Field{}, false, nil
-	}
-	components := make([]mutationdecode.IdentityComponent, 0, len(endpoint.Correlation()))
-	nullCorrelation := false
-	for _, pair := range endpoint.Correlation() {
-		cell, present := snapshot.Cell(policyir.FieldID(pair.ParentFieldID()))
-		if !present {
-			return evaluate.Field{}, false, nil
-		}
-		if cell.IsNull() {
-			nullCorrelation = true
-			continue
-		}
-		if nullCorrelation {
-			return evaluate.Field{}, false, nil
-		}
-		value, present := cell.PolicyValue()
-		if !present {
-			return evaluate.Field{}, false, nil
-		}
-		component, err := mutationdecode.IdentityValue(policyir.FieldID(pair.ChildFieldID()), value)
-		if err != nil {
-			return evaluate.Field{}, false, err
-		}
-		components = append(components, component)
-	}
-	if nullCorrelation {
-		if len(components) != 0 {
-			return evaluate.Field{}, false, nil
-		}
-		field, err := evaluate.ToOneField(policyir.FieldID(endpoint.FieldID()), policyir.ModelID(endpoint.TargetModelID()))
-		return field, err == nil, err
-	}
-	if len(components) == 0 {
-		return evaluate.Field{}, false, nil
-	}
-	selected := make([]golem.FieldID, 0, len(children.Entries()))
-	for _, child := range children.Entries() {
-		selected = append(selected, golem.FieldID(child.FieldID()))
-	}
-	if len(selected) == 0 {
-		target, ok := app.registry.Model(endpoint.TargetModelID())
-		if !ok || len(target.PrimaryKey()) == 0 {
-			return evaluate.Field{}, false, nil
-		}
-		selected = target.PrimaryKey()
-	}
-	selection := make([]golem.RuntimeReadSelectionInput, len(selected))
-	for index, fieldID := range selected {
-		field, ok := app.registry.Field(endpoint.TargetModelID(), fieldID)
-		if !ok || field.Kind() == compilerir.FieldRelation {
-			return evaluate.Field{}, false, nil
-		}
-		selection[index] = golem.RuntimeReadSelectionInput{Kind: golem.RuntimeReadScalar, Field: fieldID}
-	}
-	request, err := golem.RuntimeFreezeReadRequest(golem.RuntimeReadRequestInput{
-		Operation: golem.ReadFindMany, Model: endpoint.TargetModelID(),
-		Selection: selection, Projection: golem.ProjectionSelect,
-	})
-	if err != nil {
-		return evaluate.Field{}, false, err
-	}
-	prepared, err := caller.Prepare(request)
-	if err != nil {
-		return evaluate.Field{}, false, nil
-	}
-	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
-	if err != nil {
-		return evaluate.Field{}, false, nil
-	}
-	correlation, err := equalityCondition(app.registry, app.provider, policyir.ModelID(endpoint.TargetModelID()), components)
-	if err != nil {
-		return evaluate.Field{}, false, err
-	}
-	planned, err = readplan.WithAdditionalWhere(planned, correlation)
-	if err == nil {
-		planned, err = readplan.WithMaximumTake(planned, 1)
-	}
-	if err != nil {
-		return evaluate.Field{}, false, err
-	}
-	rows, err := executePlan(ctx, app, caller.executor, golem.ReadFindMany, planned)
-	if err != nil || len(rows) != 1 {
-		return evaluate.Field{}, false, nil
-	}
-	field, err := evaluate.ToOneField(policyir.FieldID(endpoint.FieldID()), policyir.ModelID(endpoint.TargetModelID()), rows[0].record)
-	return field, err == nil, err
 }
 
 func snapshotEventPrincipal[P any](principal P, snapshot func(P) (P, error)) (P, error) {

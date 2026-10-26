@@ -8,6 +8,7 @@ import (
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
+	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -93,6 +94,37 @@ func publicLimit(operation string, model golem.ModelID, limit golem.Limit, maxim
 	failure := golem.RuntimeLimitError(operation, model, limit, maximum, reasonMessage(golem.ReasonLimitExceeded, string(limit), maximum), cause).(*golem.Error)
 	failure.Field = field
 	return failure
+}
+
+func publicMutationAuthorizationError(operation string, model golem.ModelID, message string, err error) (error, bool) {
+	var reason golem.Reason
+	var field golem.FieldID
+	var planned *mutationplan.Error
+	var nested *mutationnested.Error
+	switch {
+	case errors.As(err, &planned) && (planned.Code == mutationplan.CodePolicy || planned.Code == mutationplan.CodeClassification):
+		reason, field = planned.Reason, golem.FieldID(planned.Field)
+		if reason == "" && planned.Code == mutationplan.CodeClassification {
+			reason = golem.ReasonAuthorizationUnproven
+		}
+	case errors.As(err, &nested) && (nested.Code == mutationnested.CodePolicy || nested.Code == mutationnested.CodeClassification):
+		reason, field = nested.Reason, nested.Field
+		if reason == "" && nested.Code == mutationnested.CodeClassification {
+			reason = golem.ReasonAuthorizationUnproven
+		}
+	default:
+		return nil, false
+	}
+	if reason == "" {
+		var expanded *readplan.Error
+		if errors.As(err, &expanded) {
+			reason = expanded.Reason
+		}
+	}
+	if reason == "" {
+		return golem.RuntimeOperationError(golem.CodeForbidden, operation, model, field, message, err), true
+	}
+	return golem.RuntimeOperationErrorWithReason(golem.CodeForbidden, reason, operation, model, field, reasonMessage(reason, "", 0), err), true
 }
 
 func publicValueError(operation string, model golem.ModelID, err error) (error, bool) {

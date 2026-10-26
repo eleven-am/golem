@@ -10,7 +10,6 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
-	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
@@ -695,13 +694,8 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 	if limited, ok := publicLimitError(scalarMutationOperationName(operation), model, err); ok {
 		return limited
 	}
-	var planned *mutationplan.Error
-	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
-		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID(planned.Field), "mutation is not authorized", err)
-	}
-	var nested *mutationnested.Error
-	if errors.As(err, &nested) && nested.Code == mutationnested.CodePolicy {
-		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, nested.Field, "mutation is not authorized", err)
+	if refused, ok := publicMutationAuthorizationError(scalarMutationOperationName(operation), model, "mutation is not authorized", err); ok {
+		return refused
 	}
 	if refused, ok := publicForeignKeyArithmetic(scalarMutationOperationName(operation), model, err); ok {
 		return refused

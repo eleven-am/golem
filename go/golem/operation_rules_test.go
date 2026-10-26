@@ -217,8 +217,10 @@ func TestApplicationBindingsResolveOnlyRegisteredOperationResolvers(t *testing.T
 	}
 }
 
-func TestOperationRulesOfferOnlyWriteGrants(t *testing.T) {
+func TestOperationRulesOfferWriteAndAggregateGrants(t *testing.T) {
 	var rules *OperationRules[bindingModel]
+	var _ func(Predicate[bindingModel]) = rules.CanCount
+	var _ func(Predicate[bindingModel], Field[bindingModel], ...Field[bindingModel]) = rules.CanAggregate
 	var _ func(Predicate[bindingModel]) = rules.CanCreate
 	var _ func(Predicate[bindingModel]) = rules.CanUpdate
 	var _ func(Predicate[bindingModel]) = rules.CanDelete

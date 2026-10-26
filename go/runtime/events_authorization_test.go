@@ -154,23 +154,15 @@ func TestSQLiteFreshSubscriptionAuthorizationDeleteAndDuplicateOracle(t *testing
 	if _, present := deleteEvent.validated.Entity(); present {
 		t.Fatal("delete event exposed an entity")
 	}
-	for {
-		select {
-		case observation := <-fixture.suppressed:
-			if observation.Reason() == observe.ReasonFiltered {
-				goto deleteFiltered
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("delete with where was not suppressed")
-		}
+	if event := receiveP7Event(t, filtered); event.validated.Metadata().EventID() != p7OracleID(4) || event.validated.Metadata().Action() != golem.EventDeleted {
+		t.Fatalf("filtered stream did not receive the delete its filter cannot rule out: %x", event.validated.Metadata().EventID())
 	}
-deleteFiltered:
 	if _, err := fixture.app.database.Exec(`INSERT INTO "posts"("id","author_id","title") VALUES (?,?,?)`, mutationResultUUIDText(9), mutationResultUUIDText(1), "visible"); err != nil {
 		t.Fatal(err)
 	}
 	fixture.publish(t, fixture.notice(t, golem.EventCreated, 5, "visible", false))
 	if event := receiveP7Event(t, filtered); event.validated.Metadata().EventID() != p7OracleID(5) {
-		t.Fatalf("where-delete leaked before next matching create: %x", event.validated.Metadata().EventID())
+		t.Fatalf("next matching create was lost after the filtered delete: %x", event.validated.Metadata().EventID())
 	}
 
 	bulk, err := CallerEvents[p7EventPrincipal, p7EventActor, p7EventPost, p7EventOracleValue](ctx, caller, fixture.descriptor)
@@ -225,7 +217,9 @@ deleteFiltered:
 }
 
 func TestDeleteSuppressionDistinguishesDeniedFromUnverifiable(t *testing.T) {
-	fixture := newP7EventRuntimeFixture(t)
+	fixture := newP7EventRuntimeFixtureWith(t, schematest.NewSubscribedIndexed(t), func(schemaFixture schematest.Fixture) golem.Predicate[p7EventPost] {
+		return golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle).Eq("visible")
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	caller, err := fixture.app.ForPrincipal(ctx, p7EventPrincipal{Subject: "alice"})
@@ -253,6 +247,37 @@ func TestDeleteSuppressionDistinguishesDeniedFromUnverifiable(t *testing.T) {
 	fixture.publish(t, fixture.unverifiableDeleteNotice(t, 701, "visible"))
 	if reason := receiveP7Suppression(t, fixture.suppressed); reason != observe.ReasonDeletionUnverifiable {
 		t.Fatalf("unverifiable delete suppression=%q", reason)
+	}
+	receive, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if value, err := stream.Recv(receive); err == nil {
+		t.Fatalf("unverifiable delete delivered %x", value.validated.Metadata().EventID())
+	} else if code, ok := events.CodeOf(err); !ok || code != events.CodeSubscriptionResync {
+		t.Fatalf("unverifiable delete ended the stream with %v", err)
+	}
+}
+
+func TestIdentityOnlyDeleteResolvesAConstantPolicy(t *testing.T) {
+	fixture := newP7EventRuntimeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caller, err := fixture.app.ForPrincipal(ctx, p7EventPrincipal{Subject: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := CallerEvents[p7EventPrincipal, p7EventActor, p7EventPost, p7EventOracleValue](ctx, caller, fixture.descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	select {
+	case <-fixture.transport.subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("model hub did not subscribe")
+	}
+	fixture.publish(t, fixture.unverifiableDeleteNotice(t, 702, "visible"))
+	if event := receiveP7Event(t, stream); event.validated.Metadata().EventID() != p7OracleID(702) || event.validated.Metadata().Action() != golem.EventDeleted {
+		t.Fatalf("identity-only delete under a constant policy = %x", event.validated.Metadata().EventID())
 	}
 }
 
@@ -511,5 +536,83 @@ func (fixture p7EventRuntimeFixture) publish(t *testing.T, notices ...events.Not
 		if err := fixture.transport.Publish(context.Background(), batch); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestDeleteEventPolicyAndFilterMatrix(t *testing.T) {
+	type outcome uint8
+	const (
+		deliver outcome = iota + 1
+		overDeliver
+		filtered
+		unauthorized
+		resync
+	)
+	policies := map[string]func(deleteEvalFields) golem.Predicate[deleteEvalComment]{
+		"true": func(fields deleteEvalFields) golem.Predicate[deleteEvalComment] {
+			return fields.commentPID.Eq(deleteEvalUUID(deleteEvalPublished))
+		},
+		"false": func(fields deleteEvalFields) golem.Predicate[deleteEvalComment] {
+			return fields.commentPID.Eq(deleteEvalUUID(deleteEvalMissing))
+		},
+		"unknown": func(fields deleteEvalFields) golem.Predicate[deleteEvalComment] {
+			return fields.commentBody.Eq("hello")
+		},
+	}
+	filters := map[string]func(deleteEvalFields) []golem.EventOption[deleteEvalComment]{
+		"none": func(deleteEvalFields) []golem.EventOption[deleteEvalComment] { return nil },
+		"true": func(fields deleteEvalFields) []golem.EventOption[deleteEvalComment] {
+			return []golem.EventOption[deleteEvalComment]{golem.EventWhere[deleteEvalComment](fields.commentID.Eq(deleteEvalUUID(deleteEvalOnPub)))}
+		},
+		"false": func(fields deleteEvalFields) []golem.EventOption[deleteEvalComment] {
+			return []golem.EventOption[deleteEvalComment]{golem.EventWhere[deleteEvalComment](fields.commentID.Eq(deleteEvalUUID(deleteEvalOnDraft)))}
+		},
+		"unknown": func(fields deleteEvalFields) []golem.EventOption[deleteEvalComment] {
+			return []golem.EventOption[deleteEvalComment]{golem.EventWhere[deleteEvalComment](fields.commentBody.Eq("hello"))}
+		},
+	}
+	matrix := []struct {
+		policy, filter string
+		want           outcome
+	}{
+		{"true", "none", deliver}, {"true", "true", deliver}, {"true", "false", filtered}, {"true", "unknown", overDeliver},
+		{"false", "none", unauthorized}, {"false", "true", unauthorized}, {"false", "false", unauthorized}, {"false", "unknown", unauthorized},
+		{"unknown", "none", resync}, {"unknown", "true", resync}, {"unknown", "false", filtered}, {"unknown", "unknown", resync},
+	}
+	for _, entry := range matrix {
+		entry := entry
+		t.Run(entry.policy+"-"+entry.filter, func(t *testing.T) {
+			runDeleteEvalProfiles(t, deleteEvalPolicies{
+				comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
+					return policies[entry.policy](fields), true
+				},
+			}, func(t *testing.T, fixture deleteEvalFixture) {
+				stream := fixture.subscribeComments(t, "alice", filters[entry.filter](fixture.fields)...)
+				fixture.removeComment(t, deleteEvalOnPub)
+				fixture.deleteComment(t, 40, deleteEvalOnPub, deleteEvalPublished)
+				switch entry.want {
+				case deliver, overDeliver:
+					expectDeleteDelivered(t, stream, 40)
+					reported := false
+					for _, value := range fixture.observed.kind(events.ObservationDelivery) {
+						if value.SuppressionReason() == events.SuppressionDeleteOverDelivered {
+							reported = true
+						}
+					}
+					if reported != (entry.want == overDeliver) {
+						t.Fatalf("over-delivery reported=%t", reported)
+					}
+				case filtered:
+					fixture.awaitSuppression(t, events.SuppressionDeleteFiltered)
+					expectDeleteSilent(t, stream)
+				case unauthorized:
+					fixture.awaitSuppression(t, events.SuppressionUnauthorized)
+					expectDeleteSilent(t, stream)
+				case resync:
+					expectDeleteResync(t, stream)
+					fixture.awaitSuppression(t, events.SuppressionDeletionUnverifiable)
+				}
+			})
+		})
 	}
 }

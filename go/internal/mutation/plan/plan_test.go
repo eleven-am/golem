@@ -217,7 +217,7 @@ func TestWriteDischargeUsesCanonicalConstraintIdentity(t *testing.T) {
 	}
 }
 
-func TestWriteDischargeRefusesWriteWiderThanReadAndAcceptsNarrower(t *testing.T) {
+func TestWriteDischargeNarrowsWriteWiderThanReadAndAcceptsNarrower(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	mine := uuidEqual(t, policyir.ModelID(fixture.Post), policyir.FieldID(fixture.AuthorID), [16]byte{9})
@@ -225,8 +225,12 @@ func TestWriteDischargeRefusesWriteWiderThanReadAndAcceptsNarrower(t *testing.T)
 	wide := mutationPolicy(t, policyir.ModelID(fixture.Post), &mine, nil)
 	request := baseRequest(t, fixture, policySet(fixture, wide), mutationir.Caller, mutationir.Update)
 	request.Target, request.Update = &inputs.target, &inputs.update
-	if _, err := BuildRoot(request); !hasCode(err, CodeClassification) {
-		t.Fatalf("write-wider-than-read error=%#v", err)
+	planned, err := BuildRoot(request)
+	if err != nil {
+		t.Fatalf("write-wider-than-read was not narrowed: %v", err)
+	}
+	if !implies(t, rootSelection(t, planned), mine) {
+		t.Fatal("write-wider-than-read selection omitted the read conjunct")
 	}
 
 	narrow := mutationPolicy(t, policyir.ModelID(fixture.Post), &mine, &mine)
