@@ -177,7 +177,7 @@ func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state 
 		hub.launchRun(run)
 	}
 	stream := &Stream[T]{hub: hub, id: item.id, member: item}
-	stream.installStop(context.AfterFunc(ctx, func() { stream.closeWith(events.CodeSubscriptionCancelled) }))
+	stream.installStop(context.AfterFunc(ctx, func() { stream.closeWith(events.Cancelled(ctx.Err())) }))
 	select {
 	case <-run.live:
 	case <-item.done:
@@ -357,7 +357,7 @@ func (hub *ModelHub[T]) evaluationWorker(run *hubRun[T]) {
 		if err != nil {
 			code := normalizedEvaluationCode(err)
 			for _, id := range job.members {
-				hub.remove(id, job.runID, code)
+				hub.remove(id, job.runID, events.Failure(code))
 			}
 			events.Observe(hub.config.Observer, run.ctx, job.notice.ModelID(), job.notice.Action(), events.ObservationEvaluation, events.OutcomeFailure, "", 0, 0, hub.limits.EvaluationConcurrency, time.Since(started), 1)
 			close(job.done)
@@ -371,7 +371,7 @@ func (hub *ModelHub[T]) evaluationWorker(run *hubRun[T]) {
 		for _, id := range job.members {
 			owned, cloneErr := hub.clone(result.value)
 			if cloneErr != nil {
-				hub.remove(id, job.runID, events.CodeSubscriptionSourceClosed)
+				hub.remove(id, job.runID, events.Failure(events.CodeSubscriptionSourceClosed))
 				continue
 			}
 			hub.enqueue(id, job.runID, owned, job.notice)
@@ -425,18 +425,18 @@ func (hub *ModelHub[T]) enqueue(id, runID uint64, value T, notice events.Notice)
 		hub.mu.Unlock()
 		events.Observe(hub.config.Observer, context.Background(), notice.ModelID(), notice.Action(), events.ObservationDelivery, events.OutcomeSuccess, "", 0, depth, cap(item.queue), 0, 1)
 	default:
-		cleanup := hub.removeLocked(item, events.CodeSubscriptionOverflow)
+		cleanup := hub.removeLocked(item, events.Failure(events.CodeSubscriptionOverflow))
 		hub.mu.Unlock()
 		runCleanup(cleanup)
 		events.Observe(hub.config.Observer, context.Background(), notice.ModelID(), notice.Action(), events.ObservationOverflow, events.OutcomeFailure, "", 0, cap(item.queue), cap(item.queue), 0, 1)
 	}
 }
 
-func (hub *ModelHub[T]) remove(id, runID uint64, code events.ErrorCode) {
+func (hub *ModelHub[T]) remove(id, runID uint64, failure error) {
 	hub.mu.Lock()
 	cleanup := func() {}
 	if item := hub.members[id]; item != nil && item.runID == runID {
-		cleanup = hub.removeLocked(item, code)
+		cleanup = hub.removeLocked(item, failure)
 	}
 	hub.mu.Unlock()
 	runCleanup(cleanup)
@@ -446,11 +446,11 @@ func (hub *ModelHub[T]) remove(id, runID uint64, code events.ErrorCode) {
 // returns application cleanup to run after unlock. A drop callback may block,
 // reenter Stream.Close/Shutdown, or acquire unrelated application locks; none
 // of those behaviors may stall the hub mutex or deadlock cancellation.
-func (hub *ModelHub[T]) removeLocked(item *member[T], code events.ErrorCode) func() {
+func (hub *ModelHub[T]) removeLocked(item *member[T], failure error) func() {
 	cleanup := func() {}
 	delete(hub.members, item.id)
 	item.once.Do(func() {
-		item.err = events.Failure(code)
+		item.err = failure
 		state, drop := item.state, item.drop
 		item.state, item.drop = nil, nil
 		if drop != nil {
@@ -475,7 +475,7 @@ func (hub *ModelHub[T]) terminateRun(runID uint64, code events.ErrorCode) {
 	cleanups := make([]func(), 0)
 	for _, item := range hub.members {
 		if item.runID == runID {
-			cleanups = append(cleanups, hub.removeLocked(item, code))
+			cleanups = append(cleanups, hub.removeLocked(item, events.Failure(code)))
 		}
 	}
 	if run := hub.runs[runID]; run != nil {
@@ -508,7 +508,7 @@ func (stream *Stream[T]) Recv(ctx context.Context) (T, error) {
 	}
 	select {
 	case <-ctx.Done():
-		return zero, events.Failure(events.CodeSubscriptionCancelled)
+		return zero, events.Cancelled(ctx.Err())
 	case <-stream.member.done:
 		return zero, stream.member.err
 	case value := <-stream.member.queue:
@@ -517,7 +517,7 @@ func (stream *Stream[T]) Recv(ctx context.Context) (T, error) {
 }
 
 func (stream *Stream[T]) Close() error {
-	stream.closeWith(events.CodeSubscriptionCancelled)
+	stream.closeWith(events.Failure(events.CodeSubscriptionCancelled))
 	return nil
 }
 
@@ -544,7 +544,7 @@ func (stream *Stream[T]) closeStop() func() bool {
 	return stop
 }
 
-func (stream *Stream[T]) closeWith(code events.ErrorCode) {
+func (stream *Stream[T]) closeWith(failure error) {
 	remove := false
 	stream.once.Do(func() {
 		if stop := stream.closeStop(); stop != nil {
@@ -553,7 +553,7 @@ func (stream *Stream[T]) closeWith(code events.ErrorCode) {
 		remove = true
 	})
 	if remove {
-		stream.hub.remove(stream.id, stream.member.runID, code)
+		stream.hub.remove(stream.id, stream.member.runID, failure)
 	}
 }
 
@@ -566,7 +566,7 @@ func (hub *ModelHub[T]) Shutdown(ctx context.Context) error {
 	if !hub.closed {
 		hub.closed = true
 		for _, item := range hub.members {
-			cleanups = append(cleanups, hub.removeLocked(item, events.CodeSubscriptionCancelled))
+			cleanups = append(cleanups, hub.removeLocked(item, events.Failure(events.CodeSubscriptionCancelled)))
 		}
 		for id, run := range hub.runs {
 			delete(hub.runs, id)

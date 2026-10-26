@@ -6,6 +6,7 @@ package transporttest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -90,14 +91,57 @@ func Run(t *testing.T, factory Factory, expected ExpectedCapabilities) {
 		cancel()
 		ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 		defer stop()
-		if _, err := stream.Recv(ctx); err == nil {
+		_, err = stream.Recv(ctx)
+		if err == nil {
 			t.Fatal("cancelled subscription returned no error")
+		}
+		if code, ok := events.CodeOf(err); !ok || code != events.CodeSubscriptionCancelled || !errors.Is(err, context.Canceled) {
+			t.Fatalf("owner-cancelled Recv = %v, want %s caused by context.Canceled", err, events.CodeSubscriptionCancelled)
 		}
 		if err := stream.Close(); err != nil {
 			t.Fatal(err)
 		}
 		if err := stream.Close(); err != nil {
 			t.Fatalf("second Close must be safe: %v", err)
+		}
+	})
+	t.Run("per-call-deadline-survives", func(t *testing.T) {
+		transport := open(t, factory)
+		generation, model, causation := golem.SchemaDigest{10}, golem.ModelID{11}, golem.CausationID{12}
+		stream := subscribe(t, transport, generation, model)
+		defer stream.Close()
+		expired, stop := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer stop()
+		_, err := stream.Recv(expired)
+		if code, ok := events.CodeOf(err); !ok || code != events.CodeSubscriptionCancelled {
+			t.Fatalf("expired Recv = %v, want %s", err, events.CodeSubscriptionCancelled)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expired Recv = %v, want it to wrap context.DeadlineExceeded", err)
+		}
+		if !errors.Is(err, events.Failure(events.CodeSubscriptionCancelled)) {
+			t.Fatalf("expired Recv = %v, want code identity preserved", err)
+		}
+		following := notice(t, golem.EventID{13}, generation, model, causation, 1, []byte("after-deadline"))
+		if err := transport.Publish(context.Background(), causalBatch(t, causation, []events.Notice{following})); err != nil {
+			t.Fatal(err)
+		}
+		assertNotice(t, receive(t, stream), following)
+	})
+	t.Run("close-carries-no-context-cause", func(t *testing.T) {
+		transport := open(t, factory)
+		stream := subscribe(t, transport, golem.SchemaDigest{14}, golem.ModelID{15})
+		if err := stream.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		_, err := stream.Recv(ctx)
+		if _, ok := events.CodeOf(err); !ok {
+			t.Fatalf("Recv after Close = %v, want a classified events error", err)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Recv after Close = %v, want no context cause", err)
 		}
 	})
 }

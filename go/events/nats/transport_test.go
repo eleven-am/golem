@@ -648,6 +648,7 @@ func conformanceBinding(t testing.TB) mapBinding {
 		"second":                mustNotice(t, golem.EventID{2}, golem.SchemaDigest{1}, golem.EventSchemaDigest{1}, golem.ModelID{2}, golem.CausationID{4}, 2, []byte("second")),
 		"third":                 mustNotice(t, golem.EventID{3}, golem.SchemaDigest{1}, golem.EventSchemaDigest{1}, golem.ModelID{3}, golem.CausationID{4}, 3, []byte("third")),
 		string([]byte{9, 8, 7}): mustNotice(t, golem.EventID{8}, golem.SchemaDigest{5}, golem.EventSchemaDigest{5}, golem.ModelID{6}, golem.CausationID{7}, 1, []byte{9, 8, 7}),
+		"after-deadline":        mustNotice(t, golem.EventID{13}, golem.SchemaDigest{10}, golem.EventSchemaDigest{10}, golem.ModelID{11}, golem.CausationID{12}, 1, []byte("after-deadline")),
 	}
 }
 
