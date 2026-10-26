@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
@@ -176,12 +177,15 @@ func TestDeclaredDeleteSnapshotOversizeIsUnverifiableAndObserved(t *testing.T) {
 }
 
 func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *testing.T) {
-	visible := func(title golem.TextField[p7EventPost, string]) golem.Predicate[p7EventPost] {
-		return title.Eq("visible")
+	title := func(schemaFixture schematest.Fixture) golem.TextField[p7EventPost, string] {
+		return golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle)
 	}
-	open := func(t *testing.T, schemaFixture schematest.Fixture) (p7EventRuntimeFixture, *deleteSnapshotObservations, golem.EventStream[p7EventOracleValue], context.CancelFunc) {
+	visible := func(schemaFixture schematest.Fixture) golem.Predicate[p7EventPost] {
+		return title(schemaFixture).Eq("visible")
+	}
+	open := func(t *testing.T, schemaFixture schematest.Fixture, policy func(schematest.Fixture) golem.Predicate[p7EventPost]) (p7EventRuntimeFixture, *deleteSnapshotObservations, golem.EventStream[p7EventOracleValue], context.CancelFunc) {
 		t.Helper()
-		fixture := newP7EventRuntimeFixtureWith(t, schemaFixture, visible)
+		fixture := newP7EventRuntimeFixtureWith(t, schemaFixture, policy)
 		capture := &deleteSnapshotObservations{}
 		fixture.app.eventObserver = capture
 		ctx, cancel := context.WithCancel(context.Background())
@@ -209,29 +213,53 @@ func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *t
 		}
 		return fixture, capture, stream, cancel
 	}
-
-	t.Run("outside", func(t *testing.T) {
-		fixture, capture, stream, cancel := open(t, schematest.NewSubscribedIndexed(t))
+	assertUnverifiable := func(t *testing.T, policy func(schematest.Fixture) golem.Predicate[p7EventPost], id uint16) {
+		t.Helper()
+		fixture, capture, stream, cancel := open(t, schematest.NewSubscribedIndexed(t), policy)
 		defer cancel()
 		defer stream.Close()
 		coverage := capture.kind(events.ObservationDeleteCoverage)
-		if len(coverage) != 1 || coverage[0].ModelID() != fixture.schema.Post || coverage[0].AggregateCount() != 1 || coverage[0].SuppressionReason() != events.SuppressionDeletionUnverifiable {
+		if len(coverage) != 1 || coverage[0].ModelID() != fixture.schema.Post || coverage[0].AggregateCount() != 1 || coverage[0].Outcome() != events.OutcomeSuccess || coverage[0].SuppressionReason() != "" {
 			t.Fatalf("coverage observations=%#v", coverage)
 		}
-		fixture.publish(t, fixture.notice(t, golem.EventDeleted, 801, "visible", false))
+		if suppressions := capture.kind(events.ObservationSuppression); len(suppressions) != 0 {
+			t.Fatalf("stream open recorded suppressions=%#v", suppressions)
+		}
+		fixture.publish(t, fixture.notice(t, golem.EventDeleted, id, "visible", false))
 		suppressed := capture.await(t, events.ObservationSuppression)
 		if suppressed.SuppressionReason() != events.SuppressionDeletionUnverifiable {
 			t.Fatalf("delete outside the snapshot suppression=%q", suppressed.SuppressionReason())
 		}
-		fixture.publish(t, fixture.notice(t, golem.EventCreated, 802, "visible", false))
+		fixture.publish(t, fixture.notice(t, golem.EventCreated, id+1, "visible", false))
 		event := receiveP7Event(t, stream)
-		if event.validated.Metadata().EventID() != p7OracleID(802) {
+		if event.validated.Metadata().EventID() != p7OracleID(id+1) {
 			t.Fatalf("stream delivered %x after the unverifiable delete", event.validated.Metadata().EventID())
 		}
+		for _, suppression := range capture.kind(events.ObservationSuppression) {
+			if suppression.SuppressionReason() != events.SuppressionDeletionUnverifiable || suppression.Action() != golem.EventDeleted {
+				t.Fatalf("unexpected suppression=%#v", suppression)
+			}
+		}
+	}
+
+	t.Run("outside", func(t *testing.T) {
+		assertUnverifiable(t, visible, 801)
+	})
+
+	t.Run("outside-negated", func(t *testing.T) {
+		assertUnverifiable(t, func(schemaFixture schematest.Fixture) golem.Predicate[p7EventPost] {
+			return golem.Not(title(schemaFixture).Eq("hidden"))
+		}, 821)
+	})
+
+	t.Run("outside-tautology", func(t *testing.T) {
+		assertUnverifiable(t, func(schemaFixture schematest.Fixture) golem.Predicate[p7EventPost] {
+			return golem.Or(golem.Not(title(schemaFixture).Eq("visible")), title(schemaFixture).Eq("visible"))
+		}, 831)
 	})
 
 	t.Run("inside", func(t *testing.T) {
-		fixture, capture, stream, cancel := open(t, schematest.NewSubscribedIndexedWithFullDeleteSnapshot(t))
+		fixture, capture, stream, cancel := open(t, schematest.NewSubscribedIndexedWithFullDeleteSnapshot(t), visible)
 		defer cancel()
 		defer stream.Close()
 		if coverage := capture.kind(events.ObservationDeleteCoverage); len(coverage) != 0 {
@@ -243,4 +271,70 @@ func TestDeleteAuthorizationOutsideSnapshotIsUnverifiableAndReportsCoverage(t *t
 			t.Fatalf("covered delete event=%#v", event.validated.Metadata())
 		}
 	})
+}
+
+func TestDeleteCoverageReportsRelationDependenciesThatCannotBeHydrated(t *testing.T) {
+	fixture := newP7EventRuntimeFixture(t)
+	capture := &deleteSnapshotObservations{}
+	fixture.app.eventObserver = capture
+	post, user := policyir.ModelID(fixture.schema.Post), policyir.ModelID(fixture.schema.User)
+	truth, err := policyir.NewConstant(post, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	posts, err := policyir.NewRelation(user, policyir.FieldID(fixture.schema.UserPosts), policyir.RelationID(fixture.schema.Authorship), post, policyir.RelationToMany, policyir.OperatorRelationSome, &truth, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := policyir.NewRelation(post, policyir.FieldID(fixture.schema.PostAuthor), policyir.RelationID(fixture.schema.Authorship), user, policyir.RelationToOne, policyir.OperatorRelationIs, &posts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userTruth, err := policyir.NewConstant(user, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, err := policyir.NewRelation(post, policyir.FieldID(fixture.schema.PostAuthor), policyir.RelationID(fixture.schema.Authorship), user, policyir.RelationToOne, policyir.OperatorRelationIs, &userTruth, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, direct)
+	if coverage := capture.kind(events.ObservationDeleteCoverage); len(coverage) != 0 {
+		t.Fatalf("hydratable forward hop reported coverage=%#v", coverage)
+	}
+	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, nested)
+	fixture.app.observeDeleteCoverage(context.Background(), fixture.schema.Post, nested)
+	coverage := capture.kind(events.ObservationDeleteCoverage)
+	if len(coverage) != 1 || coverage[0].ModelID() != fixture.schema.Post || coverage[0].AggregateCount() != 1 || coverage[0].Outcome() != events.OutcomeSuccess {
+		t.Fatalf("nested relation coverage=%#v", coverage)
+	}
+	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	titleValue, err := policyir.StringValue("visible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, post, []mutationdecode.Cell{
+		mutationdecode.Value(policyir.FieldID(fixture.schema.PostID), policyir.UUIDValue([16]byte{15: 9})),
+		mutationdecode.Value(policyir.FieldID(fixture.schema.AuthorID), policyir.UUIDValue([16]byte{15: 1})),
+		mutationdecode.Value(policyir.FieldID(fixture.schema.PostTitle), titleValue),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, _ := fixture.schema.Registry.Model(fixture.schema.Post)
+	_, declared, _ := model.EventSchema()
+	fields := make([]policyir.FieldID, len(declared))
+	for index, field := range declared {
+		fields[index] = policyir.FieldID(field)
+	}
+	snapshot, err := row.Select(fixture.schema.Registry, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, verifiable, err := fixture.app.deleteSnapshotRecord(context.Background(), caller, snapshot, nested); err != nil || verifiable {
+		t.Fatalf("nested relation delete verifiable=%t err=%v", verifiable, err)
+	}
 }

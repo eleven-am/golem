@@ -305,7 +305,7 @@ func newP7EventRuntimeFixture(t *testing.T) p7EventRuntimeFixture {
 	return newP7EventRuntimeFixtureWith(t, schematest.NewSubscribedIndexed(t), nil)
 }
 
-func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture, postRead func(golem.TextField[p7EventPost, string]) golem.Predicate[p7EventPost]) p7EventRuntimeFixture {
+func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture, postRead func(schematest.Fixture) golem.Predicate[p7EventPost]) p7EventRuntimeFixture {
 	t.Helper()
 	ctx := context.Background()
 	provider := sqlite.New()
@@ -348,7 +348,7 @@ func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture
 	allowPosts := golem.GeneratedPolicyBinding[p7EventActor, p7EventPost](schemaFixture.Post, func(actor p7EventActor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[p7EventPost]()
 		if actor.Allow && postRead != nil {
-			rules.CanRead(postRead(golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle)))
+			rules.CanRead(postRead(schemaFixture))
 		} else if actor.Allow {
 			rules.CanRead(golem.All[p7EventPost]())
 		}
