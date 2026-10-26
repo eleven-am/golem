@@ -10,7 +10,7 @@ import (
 )
 
 func TestNestedFilterExpansionCycleIsPolicyInvalidAcrossProviders(t *testing.T) {
-	handles := newReachHandles(schematest.NewIndexedExactScoped(t))
+	handles := newReachHandles(schematest.NewIndexedFullExactScopedNullableAuthor(t))
 	policies := reachPolicies{
 		user: func(rules *golem.Rules[testUser]) {
 			rules.CanRead(golem.All[testUser]())
@@ -36,7 +36,7 @@ func TestNestedFilterExpansionCycleIsPolicyInvalidAcrossProviders(t *testing.T) 
 }
 
 func TestNestedBatchUnderFieldScopedReadWritesReadableRowsAcrossProviders(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	author := golem.GeneratedEqualField[testPost, golem.UUID](fixture.AuthorID)
 	policies := reachPolicies{

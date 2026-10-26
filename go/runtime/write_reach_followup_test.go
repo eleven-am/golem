@@ -11,7 +11,7 @@ import (
 
 func runWriteReachScenario(t *testing.T, purpose string, policies reachPolicies, write func(context.Context, *Caller[testPrincipal, testActor], schematest.Fixture, reachHandles) error, check func(*testing.T, error, map[string]string, map[string]string)) {
 	t.Helper()
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	for index, open := range reachDatabases(t, purpose, fixture) {
 		open := open
@@ -67,7 +67,7 @@ func assertOnlyChanged(t *testing.T, err error, before, after map[string]string,
 }
 
 func TestNestedConstantBatchWritesOnlyReadableRowsAcrossProviders(t *testing.T) {
-	handles := newReachHandles(schematest.NewIndexedExactScoped(t))
+	handles := newReachHandles(schematest.NewIndexedFullExactScopedNullableAuthor(t))
 	t.Run("updateMany", func(t *testing.T) {
 		runWriteReachScenario(t, "batch_all_update", batchReachPolicies(handles), func(ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles) error {
 			data := golem.GeneratedUpdateManyInput[testPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, handles.title, "allowed-batch"))
@@ -90,7 +90,7 @@ func TestNestedConstantBatchWritesOnlyReadableRowsAcrossProviders(t *testing.T) 
 }
 
 func TestNestedBatchRelationFilterDoesNotProbeUnreadableRowsAcrossProviders(t *testing.T) {
-	handles := newReachHandles(schematest.NewIndexedExactScoped(t))
+	handles := newReachHandles(schematest.NewIndexedFullExactScopedNullableAuthor(t))
 	for name, want := range map[string][]string{"denied-public": nil, "nothing": nil, "allowed-public": {reachPosts[3].id}} {
 		name, want := name, want
 		t.Run(name, func(t *testing.T) {
@@ -129,8 +129,8 @@ func assertNotGrantedAndUnchanged(t *testing.T, err error, before, after map[str
 }
 
 func TestUpsertWithoutCreateGrantIsNotAnExistenceOracleAcrossProviders(t *testing.T) {
-	handles := newReachHandles(schematest.NewIndexedExactScoped(t))
-	missing := reachPost{id: "00000000-0000-0000-0000-000000000019", author: reachUsers[1].id, title: "missing"}
+	handles := newReachHandles(schematest.NewIndexedFullExactScopedNullableAuthor(t))
+	missing := reachPost{id: "00000000-0000-0000-0000-000000000019", author: &reachUsers[1].id, title: "missing"}
 	for name, post := range map[string]reachPost{"unreadable": reachPosts[2], "missing": missing} {
 		post := post
 		t.Run("root-"+name, func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestUpsertWithoutCreateGrantIsNotAnExistenceOracleAcrossProviders(t *testin
 				)
 				update := golem.GeneratedUpdateInput[testPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, handles.title, "allowed-updated"))
 				input := golem.GeneratedUpdateInput[testUser](fixture.User, golem.GeneratedNestedUpsert[testUser, testPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, writeReachTarget(fixture, post), create, update))
-				_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, post.author), input)
+				_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, *post.author), input)
 				return err
 			}, assertNotGrantedAndUnchanged)
 		})

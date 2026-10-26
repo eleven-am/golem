@@ -80,7 +80,7 @@ func updateWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], 
 func upsertWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles, post reachPost) error {
 	create := golem.GeneratedCreateInput[testPost](fixture.Post,
 		golem.GeneratedCreateFieldValue(fixture.Post, handles.postID, writeReachUUID(post.id)),
-		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.UUID](fixture.AuthorID), writeReachUUID(post.author)),
+		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.UUID](fixture.AuthorID), writeReachUUID(*post.author)),
 		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, int64](fixture.PostBigInt), int64(0)),
 		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.Decimal](fixture.PostDecimal), writeReachDecimal()),
 		golem.GeneratedCreateFieldValue(fixture.Post, handles.title, "allowed-created"),
@@ -91,7 +91,7 @@ func upsertWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], 
 
 func nestedDeleteWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles, post reachPost) error {
 	input := golem.GeneratedUpdateInput[testUser](fixture.User, golem.GeneratedNestedDelete[testUser, testPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, writeReachTarget(fixture, post)))
-	_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, post.author), input)
+	_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, *post.author), input)
 	return err
 }
 
@@ -103,7 +103,7 @@ func deleteManyWrite(ctx context.Context, caller *Caller[testPrincipal, testActo
 func nestedUpdateWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles, post reachPost) error {
 	update := golem.GeneratedUpdateInput[testPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, handles.title, post.title+"-mask"))
 	input := golem.GeneratedUpdateInput[testUser](fixture.User, golem.GeneratedNestedUpdate[testUser, testPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, writeReachTarget(fixture, post), update))
-	_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, post.author), input)
+	_, err := CallerUpdate(ctx, caller, handles.users, writeReachUserTarget(fixture, *post.author), input)
 	return err
 }
 
@@ -222,7 +222,7 @@ func assertWriteOutcome(t *testing.T, err error, want writeReachOutcome, before,
 }
 
 func TestExistingRowWritesPlanOverReadReachAcrossProviders(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	for index, open := range reachDatabases(t, "write_reach", fixture) {
 		open := open
@@ -253,7 +253,7 @@ func TestExistingRowWritesPlanOverReadReachAcrossProviders(t *testing.T) {
 }
 
 func TestWriteActionRelationProbeDoesNotDependOnUnreadableTarget(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	unreadableAuthor := reachPosts[2]
 	for index, open := range reachDatabases(t, "write_probe", fixture) {
@@ -294,7 +294,7 @@ func TestWriteActionRelationProbeDoesNotDependOnUnreadableTarget(t *testing.T) {
 }
 
 func TestWriteActionRelationRuleStillAppliesToReadableTarget(t *testing.T) {
-	fixture := schematest.NewIndexedExactScoped(t)
+	fixture := schematest.NewIndexedFullExactScopedNullableAuthor(t)
 	handles := newReachHandles(fixture)
 	readableAuthor := reachPosts[0]
 	for index, open := range reachDatabases(t, "write_probe_readable", fixture) {
