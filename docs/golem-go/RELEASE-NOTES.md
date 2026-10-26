@@ -16,8 +16,6 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.7.0
 
-Unreleased.
-
 **This release changes behaviour you may depend on.** Error codes, write
 authorization, datetime handling, delete events and a few signatures change.
 [MIGRATION.md](./MIGRATION.md) lists every breaking change and what to do. Two
