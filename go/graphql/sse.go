@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +34,81 @@ type sseStream[P any] struct {
 	closed  bool
 }
 
-func acceptsEventStream(request *http.Request) bool {
-	return strings.Contains(strings.ToLower(request.Header.Get("Accept")), eventStreamMediaType)
+type eventStreamNegotiation int
+
+const (
+	eventStreamRefused eventStreamNegotiation = iota
+	eventStreamAcceptable
+	eventStreamPreferred
+)
+
+type acceptedMediaRange struct {
+	kind, subtype string
+	quality       float64
+}
+
+func negotiateEventStream(values []string) eventStreamNegotiation {
+	ranges := parseAccept(values)
+	eventStream := acceptedQuality(ranges, "text", "event-stream")
+	if eventStream <= 0 {
+		return eventStreamRefused
+	}
+	for _, subtype := range []string{"json", "graphql-response+json"} {
+		if acceptedQuality(ranges, "application", subtype) >= eventStream {
+			return eventStreamAcceptable
+		}
+	}
+	return eventStreamPreferred
+}
+
+func parseAccept(values []string) []acceptedMediaRange {
+	var ranges []acceptedMediaRange
+	for _, value := range values {
+		for _, element := range strings.Split(value, ",") {
+			parameters := strings.Split(element, ";")
+			kind, subtype, found := strings.Cut(strings.ToLower(strings.TrimSpace(parameters[0])), "/")
+			kind, subtype = strings.TrimSpace(kind), strings.TrimSpace(subtype)
+			if !found || kind == "" || subtype == "" || kind == "*" && subtype != "*" {
+				continue
+			}
+			quality, valid := 1.0, true
+			for _, parameter := range parameters[1:] {
+				name, raw, _ := strings.Cut(strings.TrimSpace(parameter), "=")
+				if !strings.EqualFold(strings.TrimSpace(name), "q") {
+					continue
+				}
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+				if err != nil || parsed < 0 || parsed > 1 {
+					valid = false
+					break
+				}
+				quality = parsed
+			}
+			if valid {
+				ranges = append(ranges, acceptedMediaRange{kind: kind, subtype: subtype, quality: quality})
+			}
+		}
+	}
+	return ranges
+}
+
+func acceptedQuality(ranges []acceptedMediaRange, kind, subtype string) float64 {
+	quality, specificity := 0.0, -1
+	for _, candidate := range ranges {
+		rank := -1
+		switch {
+		case candidate.kind == kind && candidate.subtype == subtype:
+			rank = 2
+		case candidate.kind == kind && candidate.subtype == "*":
+			rank = 1
+		case candidate.kind == "*" && candidate.subtype == "*":
+			rank = 0
+		}
+		if rank > specificity || rank == specificity && rank >= 0 && candidate.quality > quality {
+			quality, specificity = candidate.quality, rank
+		}
+	}
+	return quality
 }
 
 func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Request) {
@@ -42,19 +116,6 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		refuseSSE(writer, publicError("METHOD_NOT_ALLOWED", "GraphQL over SSE requires POST"))
 		return
 	}
-	server.lifecycleMu.Lock()
-	if server.shuttingDown {
-		server.lifecycleMu.Unlock()
-		writer.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-	server.connections.Add(1)
-	server.lifecycleMu.Unlock()
-	defer server.connections.Done()
-	ctx, cancel := context.WithCancel(request.Context())
-	defer cancel()
-	stopLifecycle := context.AfterFunc(server.lifecycle, cancel)
-	defer stopLifecycle()
 	principal, authenticated := server.config.PrincipalFromContext(request.Context())
 	if !authenticated {
 		refuseSSE(writer, publicError("UNAUTHENTICATED", "authentication is required"))
@@ -71,6 +132,23 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		refuseSSE(writer, rejected.Errors...)
 		return
 	}
+	server.streamSSE(writer, request, principal, decoded, prepared)
+}
+
+func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Request, principal P, decoded Request, prepared preparedRequest) {
+	server.lifecycleMu.Lock()
+	if server.shuttingDown {
+		server.lifecycleMu.Unlock()
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	server.connections.Add(1)
+	server.lifecycleMu.Unlock()
+	defer server.connections.Done()
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	stopLifecycle := context.AfterFunc(server.lifecycle, cancel)
+	defer stopLifecycle()
 	if prepared.Operation.Definition.Operation != ast.Subscription {
 		stream := server.openSSE(ctx, cancel, writer)
 		defer stream.release()

@@ -14,7 +14,7 @@ func TestKeepAliveAcceptsTheWebSocketKeepAliveAlias(t *testing.T) {
 		"default":            {Limits{}, defaultLimits.KeepAlive},
 		"keep alive":         {Limits{KeepAlive: 7 * time.Second}, 7 * time.Second},
 		"deprecated alias":   {Limits{WebSocketKeepAlive: 9 * time.Second}, 9 * time.Second},
-		"keep alive wins":    {Limits{KeepAlive: 7 * time.Second, WebSocketKeepAlive: 9 * time.Second}, 7 * time.Second},
+		"both equal":         {Limits{KeepAlive: 7 * time.Second, WebSocketKeepAlive: 7 * time.Second}, 7 * time.Second},
 		"keep alive at most": {Limits{KeepAlive: maximumLimits.KeepAlive}, maximumLimits.KeepAlive},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -50,7 +50,16 @@ func TestKeepAliveRefusalNamesTheFieldTheCallerSet(t *testing.T) {
 			}
 		})
 	}
-	if _, err := NormalizeLimits(Limits{KeepAlive: time.Second, WebSocketKeepAlive: -1}); err != nil {
-		t.Fatalf("an overridden alias was still validated: %v", err)
+	for _, limits := range []Limits{
+		{KeepAlive: 7 * time.Second, WebSocketKeepAlive: 9 * time.Second},
+		{KeepAlive: time.Second, WebSocketKeepAlive: -1},
+	} {
+		_, err := NormalizeLimits(limits)
+		if errorCode(t, err) != CodeEventConfig {
+			t.Fatalf("conflicting keep-alive fields %+v: %v", limits, err)
+		}
+		if !strings.Contains(err.Error(), "KeepAlive (") || !strings.Contains(err.Error(), "WebSocketKeepAlive (") {
+			t.Fatalf("conflict error %q does not name both fields", err)
+		}
 	}
 }

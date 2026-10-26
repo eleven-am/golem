@@ -222,7 +222,8 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 		server.serveWebSocket(writer, request)
 		return
 	}
-	if acceptsEventStream(request) {
+	negotiated := negotiateEventStream(request.Header.Values("Accept"))
+	if negotiated == eventStreamPreferred {
 		server.serveSSE(writer, request)
 		return
 	}
@@ -242,6 +243,17 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		writeResponse(writer, Response{Errors: []Error{publicError("UNAUTHENTICATED", "authentication is required")}})
 		return
+	}
+	if negotiated == eventStreamAcceptable {
+		prepared, failure := server.prepareRequest(decoded, true)
+		if failure == nil && prepared.Operation.Definition.Operation == ast.Subscription {
+			server.streamSSE(writer, request, principal, decoded, prepared)
+			return
+		}
+		if failure == nil {
+			writeResponse(writer, server.execute(request.Context(), principal, decoded, true, &prepared))
+			return
+		}
 	}
 	writeResponse(writer, server.execute(request.Context(), principal, decoded, true, nil))
 }

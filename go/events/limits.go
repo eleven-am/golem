@@ -69,6 +69,9 @@ func MaximumLimits() Limits { return maximumLimits }
 func NormalizeLimits(input Limits) (Limits, error) {
 	output := input
 	keepAliveName := "KeepAlive"
+	if output.KeepAlive != 0 && output.WebSocketKeepAlive != 0 && output.KeepAlive != output.WebSocketKeepAlive {
+		return Limits{}, Failf(CodeEventConfig, "KeepAlive (%s) and WebSocketKeepAlive (%s) must match when both are set", output.KeepAlive, output.WebSocketKeepAlive)
+	}
 	if output.KeepAlive == 0 && output.WebSocketKeepAlive != 0 {
 		output.KeepAlive, keepAliveName = output.WebSocketKeepAlive, "WebSocketKeepAlive"
 	}
