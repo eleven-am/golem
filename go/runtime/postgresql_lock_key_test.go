@@ -412,7 +412,7 @@ func TestPostgreSQLLockKeyDeadlockWithAnUntrackedWaitIsAConflict(t *testing.T) {
 		var lockErr error
 		go func() {
 			first <- SystemTransaction(ctx, fixture.app.System(), func(transaction *lockKeyTx) error {
-				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '200ms'`); err != nil {
+				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '1s'`); err != nil {
 					return err
 				}
 				if _, err := SystemTxCreate(ctx, transaction, fixture.userDescriptor, fixture.userCreate(9, "first")); err != nil {
@@ -426,7 +426,7 @@ func TestPostgreSQLLockKeyDeadlockWithAnUntrackedWaitIsAConflict(t *testing.T) {
 		}()
 		go func() {
 			second <- SystemTransaction(ctx, fixture.app.System(), func(transaction *lockKeyTx) error {
-				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '30s'`); err != nil {
+				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '10s'`); err != nil {
 					return err
 				}
 				<-inserted
@@ -446,7 +446,7 @@ func TestPostgreSQLLockKeyDeadlockWithAnUntrackedWaitIsAConflict(t *testing.T) {
 			select {
 			case firstErr = <-first:
 			case secondErr = <-second:
-			case <-time.After(30 * time.Second):
+			case <-time.After(20 * time.Second):
 				t.Fatal("the deadlocked transactions did not finish")
 			}
 		}
