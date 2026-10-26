@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/observeexec"
@@ -64,6 +65,7 @@ type executionMutationConfig struct {
 	limits           normalizedMutationLimits
 	afterCommitError func(context.Context, golem.AfterCommitFailure)
 	invalidate       func()
+	eventObserver    events.Observer
 	outboxNamespace  string
 	queueWake        func()
 	// flushSemantic writes the transaction's semantic marks and schedules their
@@ -207,6 +209,7 @@ func (binding *executionBinding) enableMutation(config executionMutationConfig) 
 	binding.state, binding.stateErr = newMutationState(config.limits, [16]byte{})
 	if binding.stateErr == nil {
 		binding.state.binding = binding
+		binding.state.observer = config.eventObserver
 	}
 	if binding.stateErr == nil && config.invalidate != nil {
 		binding.stateErr = binding.state.setInvalidation(config.invalidate)
@@ -252,7 +255,7 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 		enabled: true, provider: app.provider, limits: app.mutationLimits,
 		afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution,
 		outboxNamespace: string(namespace), flushSemantic: app.flushSemanticMarks,
-		queueWake: app.queueWorker.Wake,
+		queueWake: app.queueWorker.Wake, eventObserver: app.eventObserver,
 	}
 }
 

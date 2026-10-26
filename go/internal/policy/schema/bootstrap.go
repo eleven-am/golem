@@ -68,6 +68,7 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 		},
 		logicalModels: make(map[compilerir.ModelID]compilerir.ModelDeclIR), logicalFields: make(map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR),
 		logicalEnums: append([]compilerir.EnumIR(nil), model.Enums...),
+		relations:    append([]compilerir.RelationIR(nil), model.Relations...),
 	}
 	if err := builder.indexLogical(model); err != nil {
 		return nil, err
@@ -264,6 +265,7 @@ type registryBuilder struct {
 	logicalModels map[compilerir.ModelID]compilerir.ModelDeclIR
 	logicalFields map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR
 	logicalEnums  []compilerir.EnumIR
+	relations     []compilerir.RelationIR
 }
 
 func equalOptionalCompilerFieldID(left, right *compilerir.FieldID) bool {
@@ -605,30 +607,19 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 			if model.Event == nil {
 				return fail(CodeContract, path+".event", "subscription-enabled model requires closed event metadata")
 			}
-			stored := make(map[compilerir.FieldID]bool, len(logical.Fields))
-			for _, field := range logical.Fields {
-				if field.Kind != compilerir.FieldRelation && field.Scalar != nil {
-					stored[field.ID] = true
-				}
-			}
 			snapshot := make([]compilerir.FieldID, len(model.Event.Schema.SnapshotFields))
-			seenSnapshot := make(map[compilerir.FieldID]bool, len(snapshot))
 			for index, field := range model.Event.Schema.SnapshotFields {
-				if !stored[field.FieldID] || seenSnapshot[field.FieldID] {
-					return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
-				}
-				seenSnapshot[field.FieldID] = true
 				snapshot[index] = field.FieldID
 			}
-			if len(seenSnapshot) != len(stored) {
-				return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
+			if err := compilerir.ValidateDeleteSnapshotFields(logical, builder.relations, snapshot); err != nil {
+				return fail(CodeContract, path+".event.schema", "event schema is not a valid declared delete snapshot: %v", err)
 			}
 			expected, err := compilerir.BuildEventSchemaShape(logical, builder.logicalEnums, snapshot)
 			if err != nil {
 				return fail(CodeContract, path+".event.schema", "%v", err)
 			}
-			if !reflect.DeepEqual(expected, model.Event.Schema) || !model.Event.DeleteSnapshotFull {
-				return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
+			if !reflect.DeepEqual(expected, model.Event.Schema) || model.Event.DeleteSnapshotFull != compilerir.DeleteSnapshotIsFull(logical, snapshot) {
+				return fail(CodeContract, path+".event.schema", "event schema is not the normalized declared delete snapshot shape")
 			}
 			fingerprint, err := compilerir.EventSchemaFingerprint(model.Event.Schema)
 			if err != nil || fingerprint != model.Event.SchemaFingerprint {

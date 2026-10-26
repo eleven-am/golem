@@ -240,7 +240,14 @@ func GraphQLHookOwned[M any](_ ...Column[M]) GraphQLOption { return GraphQLOptio
 // Subscriptions opts one model into durable event capture, generated typed
 // events, and its GraphQL subscription root. It is a compile-time declaration;
 // models that omit it remain subscription-disabled.
-func Subscriptions[M any]() ModelOption[M] { return modelOption[M]{} }
+func Subscriptions[M any](_ ...SubscriptionOption[M]) ModelOption[M] { return modelOption[M]{} }
+
+type SubscriptionOption[M any] interface{ subscriptionOption(M) }
+type subscriptionOption[M any] struct{ _ func() M }
+
+func (subscriptionOption[M]) subscriptionOption(M) {}
+
+func DeleteSnapshot[M any](_ ...Column[M]) SubscriptionOption[M] { return subscriptionOption[M]{} }
 
 type EnumValueOption struct{ _ enumValueOptionMarker }
 type enumValueOptionMarker struct{}

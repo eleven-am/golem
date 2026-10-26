@@ -207,7 +207,8 @@ func socialUserContract() ir.ModelContractIR {
 
 func socialPostContract() ir.ModelContractIR {
 	model := socialPostModel()
-	shape, err := ir.BuildEventSchemaShape(model, nil, []ir.FieldID{postIDFieldID, postAuthorIDFieldID, postTitleFieldID, postBodyFieldID, postCreatedAtFieldID})
+	snapshot := []ir.FieldID{postIDFieldID, postAuthorIDFieldID, postTitleFieldID, postBodyFieldID, postCreatedAtFieldID}
+	shape, err := ir.BuildEventSchemaShape(model, nil, snapshot)
 	if err != nil {
 		panic(err)
 	}
@@ -233,7 +234,7 @@ func socialPostContract() ir.ModelContractIR {
 		Subscriptions: true,
 		Event: &ir.EventContractIR{
 			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
-			DeleteSnapshotFull: true, Schema: shape, SchemaFingerprint: fingerprint,
+			DeleteSnapshotFull: ir.DeleteSnapshotIsFull(model, snapshot), Schema: shape, SchemaFingerprint: fingerprint,
 		},
 		Limits:  ir.LimitContractIR{MaxTake: 100},
 		Exposed: true,

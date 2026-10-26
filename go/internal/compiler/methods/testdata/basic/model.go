@@ -34,7 +34,7 @@ func (User) GolemModel() g.ModelSpec[User] {
 			g.GraphQLRoots(g.GraphQLRootNames{FindOne: "account", FindMany: "accounts", Events: "accountEvents"}),
 			g.GraphQLPageSizes(25, 250),
 		),
-		g.Subscriptions[User](),
+		g.Subscriptions[User](g.DeleteSnapshot(Users.Name)),
 		g.PrimaryKey("pk_users", Users.ID),
 		g.Unique("uq_users_name", Users.Name),
 		g.SemanticIndex("profile", "content", Users.Name),

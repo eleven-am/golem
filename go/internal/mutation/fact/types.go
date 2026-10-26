@@ -210,6 +210,15 @@ func (envelope Envelope) PrivateDeleteSnapshot() (mutationdecode.Row, bool) {
 func (envelope Envelope) DeleteSnapshotState() mutationir.DeleteSnapshotState {
 	return envelope.deleteState
 }
+func (envelope Envelope) WithUnverifiableDeleteSnapshot() (Envelope, error) {
+	if envelope.action != mutationir.FactDeleted {
+		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: only a deleted fact can drop its private snapshot")
+	}
+	envelope.deleteState = mutationir.DeleteSnapshotUnverifiable
+	envelope.snapshotFields = nil
+	envelope.deleteSnapshot = nil
+	return envelope, nil
+}
 
 func actionText(action mutationir.FactAction) string {
 	switch action {
