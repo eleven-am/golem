@@ -2,7 +2,7 @@ module github.com/eleven-am/golem/go
 
 go 1.25.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/99designs/gqlgen v0.17.70
