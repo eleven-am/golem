@@ -2511,6 +2511,8 @@ golem.ListElement type interface {}
 golem.ListField[M any, E ListElement] type struct
 golem.List[T any] type []T
 golem.LocalGroupDimension[M any] type interface {} sealed
+golem.LockKey comparable
+golem.LockKey type struct
 golem.Lower func[M any, V ~string](SchemaValue[M, V]) SchemaExpr[M, V]
 golem.Many func[M any, R any](Row[M], ToMany[M, R]) ReadValue[[]Row[R]]
 golem.MaskedDependency func(string, string) error
@@ -2534,6 +2536,7 @@ golem.ModelID type [16]uint8
 golem.ModelMetadata type struct
 golem.ModelOption[M any] type interface {} sealed
 golem.ModelSpec[M any] type struct
+golem.MustLockKey func(string, ...string) LockKey
 golem.MustParseExactDecimal func(string) ExactDecimal
 golem.MustParseExactInteger func(string) ExactInteger
 golem.Mutation func[Resolver any](*GraphQLSchema, string, Resolver)
@@ -2574,6 +2577,7 @@ golem.NewDecimal func(int64, uint8) (Decimal, error)
 golem.NewExactInteger func(int64) ExactInteger
 golem.NewJSONDocument func[T any]([]uint8) (JSON[T], error)
 golem.NewJSONPath func(JSONPathSegment, ...JSONPathSegment) JSONPath
+golem.NewLockKey func(string, ...string) (LockKey, error)
 golem.NewRules func[M any]() *Rules[M]
 golem.NewTime func(int, int, int, int) (Time, error)
 golem.NewUUID func([16]uint8) UUID
@@ -2819,6 +2823,7 @@ golem.RuntimeInvokeMutationResultHooks func[A any](context.Context, ApplicationB
 golem.RuntimeInvokeReadBeforeHooks func[A any](context.Context, ApplicationBindings[A], RuntimeReadHookRequest, func(RuntimeReadHookRequest) error) (RuntimeReadHookRequest, error)
 golem.RuntimeInvokeReadResultHooks func[A any](context.Context, ApplicationBindings[A], RuntimeReadHookResult) error
 golem.RuntimeJSONRootPath func() JSONPath
+golem.RuntimeLockKeyIdentity func(LockKey) (string, error)
 golem.RuntimeModelReadRow func(ModelID, ...RuntimeReadCell) (RuntimeModelRow, error)
 golem.RuntimeModelReadRowWithCounts func(ModelID, []RuntimeReadCell, []RuntimeRelationCountCell) (RuntimeModelRow, error)
 golem.RuntimeModelReadRowWithOccurrences func(ModelID, []RuntimeReadCell, []RuntimeRelationCountCell, []RuntimeOccurrenceCell) (RuntimeModelRow, error)
@@ -4244,6 +4249,7 @@ runtime.CallerTxFindFirst func[P any, A any, M any](context.Context, *CallerTx[P
 runtime.CallerTxFindMany func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) ([]golem.Row[M], error)
 runtime.CallerTxFindUnique func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.UniqueSelectorValue[M], ...golem.ReadOption[M]) (golem.Row[M], error)
 runtime.CallerTxGroupBy func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
+runtime.CallerTxLockKeys func[P any, A any](context.Context, *CallerTx[P, A], ...golem.LockKey) error
 runtime.CallerTxRelationGroupBy func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.CallerTxScoped func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
 runtime.CallerTxSearch func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
@@ -4365,6 +4371,7 @@ runtime.SystemTxFindFirst func[P any, A any, M any](context.Context, *SystemTx[P
 runtime.SystemTxFindMany func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], ...golem.ReadOption[M]) ([]golem.Row[M], error)
 runtime.SystemTxFindUnique func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.UniqueSelectorValue[M], ...golem.ReadOption[M]) (golem.Row[M], error)
 runtime.SystemTxGroupBy func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
+runtime.SystemTxLockKeys func[P any, A any](context.Context, *SystemTx[P, A], ...golem.LockKey) error
 runtime.SystemTxRelationGroupBy func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.SystemTxScoped func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
 runtime.SystemTxSearch func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)

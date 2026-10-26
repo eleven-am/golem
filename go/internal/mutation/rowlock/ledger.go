@@ -2,6 +2,7 @@ package rowlock
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"sort"
@@ -19,9 +20,11 @@ import (
 )
 
 const (
-	guardPrefix = "\x00"
-	rowPrefix   = "\x01"
-	lockAlias   = physical.PhysicalName("golem_lock")
+	guardPrefix  = "\x00\x00"
+	appPrefix    = "\x00\x01"
+	rowPrefix    = "\x01"
+	lockAlias    = physical.PhysicalName("golem_lock")
+	appLockClass = int32(0x676f6c6d)
 )
 
 type Mode uint8
@@ -78,6 +81,13 @@ func RowKeys(registry *schema.Registry, rows []mutationdecode.Row) ([]Key, error
 func guardOrder(token [32]byte) string { return guardPrefix + string(token[:]) }
 
 func GuardLockKey(token [32]byte) int64 { return int64(binary.BigEndian.Uint64(token[:8])) }
+
+func AppKey(identity string) Key { return Key{order: appPrefix + identity, mode: Update} }
+
+func AppLockID(key Key) (int32, int32) {
+	sum := sha256.Sum256([]byte(key.order))
+	return appLockClass, int32(binary.BigEndian.Uint32(sum[:4]))
+}
 
 type ConflictError struct {
 	Model  policyir.ModelID
@@ -358,31 +368,54 @@ func (session Session) Guard(ctx context.Context, token [32]byte) error {
 	if _, present := held[order]; present {
 		return nil
 	}
-	if highest > order {
+	if err := advisoryLock(ctx, session.Queryer, highest > order, "SELECT pg_catalog.pg_try_advisory_xact_lock($1)", "SELECT pg_catalog.pg_advisory_xact_lock($1)", GuardLockKey(token)); err != nil {
+		return err
+	}
+	session.Ledger.record([]Key{{order: order, mode: Update}})
+	return nil
+}
+
+func (session Session) LockApp(ctx context.Context, keys []Key) error {
+	if err := session.postgres(); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key.order, appPrefix) || key.mode != Update {
+			return fmt.Errorf("P4_ROW_LOCK_KEY: an application lock key is required")
+		}
+	}
+	for _, pending := range plan(session.Ledger, keys) {
+		class, hash := AppLockID(pending.key)
+		if err := advisoryLock(ctx, session.Queryer, pending.nowait, "SELECT pg_catalog.pg_try_advisory_xact_lock($1, $2)", "SELECT pg_catalog.pg_advisory_xact_lock($1, $2)", class, hash); err != nil {
+			return err
+		}
+		session.Ledger.record([]Key{pending.key})
+	}
+	return nil
+}
+
+func advisoryLock(ctx context.Context, queryer sqlx.QueryerContext, nowait bool, try, wait string, args ...any) error {
+	if nowait {
 		var acquired bool
-		if err := session.Queryer.QueryRowxContext(ctx, "SELECT pg_catalog.pg_try_advisory_xact_lock($1)", GuardLockKey(token)).Scan(&acquired); err != nil {
+		if err := queryer.QueryRowxContext(ctx, try, args...).Scan(&acquired); err != nil {
 			return err
 		}
 		if !acquired {
 			return &ContentionError{}
 		}
-	} else {
-		rows, err := session.Queryer.QueryxContext(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1)", GuardLockKey(token))
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
+		return nil
 	}
-	session.Ledger.record([]Key{{order: order, mode: Update}})
-	return nil
+	rows, err := queryer.QueryxContext(ctx, wait, args...)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	return rows.Close()
 }
 
 type enumeratedFaultKey struct{}
