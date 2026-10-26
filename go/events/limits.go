@@ -27,6 +27,7 @@ type Limits struct {
 	MaxSubscriptionsPerConnection         int
 	ConnectionInitBytes                   int
 	ConnectionInitTimeout                 time.Duration
+	KeepAlive                             time.Duration
 	WebSocketKeepAlive                    time.Duration
 	WebSocketPongTimeout                  time.Duration
 	ShutdownGrace                         time.Duration
@@ -42,7 +43,7 @@ var defaultLimits = Limits{
 	RetryCap: 5 * time.Minute, MaxEncodedEventBytes: 2 << 20, MaxEncodedBatchBytes: 16 << 20,
 	SubscriberQueue: 64, HubInputQueue: 256, EvaluationConcurrency: 32,
 	MaxSubscriptionsPerConnection: 32, ConnectionInitBytes: 64 << 10,
-	ConnectionInitTimeout: 10 * time.Second, WebSocketKeepAlive: 30 * time.Second, WebSocketPongTimeout: 10 * time.Second, ShutdownGrace: 15 * time.Second,
+	ConnectionInitTimeout: 10 * time.Second, KeepAlive: 30 * time.Second, WebSocketKeepAlive: 30 * time.Second, WebSocketPongTimeout: 10 * time.Second, ShutdownGrace: 15 * time.Second,
 	RetentionDeleteRows: eventprovider.MaximumCausationFacts, RetentionAge: 30 * 24 * time.Hour, RetentionEvery: time.Minute,
 }
 
@@ -52,7 +53,7 @@ var maximumLimits = Limits{
 	RetryCap: 24 * time.Hour, MaxEncodedEventBytes: 16 << 20, MaxEncodedBatchBytes: 64 << 20,
 	SubscriberQueue: 4096, HubInputQueue: 16384, EvaluationConcurrency: 256,
 	MaxSubscriptionsPerConnection: 256, ConnectionInitBytes: 1 << 20,
-	ConnectionInitTimeout: time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
+	ConnectionInitTimeout: time.Minute, KeepAlive: 5 * time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
 	RetentionDeleteRows: 4096, RetentionAge: 10 * 365 * 24 * time.Hour, RetentionEvery: 24 * time.Hour,
 }
 
@@ -67,6 +68,13 @@ func MaximumLimits() Limits { return maximumLimits }
 
 func NormalizeLimits(input Limits) (Limits, error) {
 	output := input
+	keepAliveName := "KeepAlive"
+	if output.KeepAlive != 0 && output.WebSocketKeepAlive != 0 && output.KeepAlive != output.WebSocketKeepAlive {
+		return Limits{}, Failf(CodeEventConfig, "KeepAlive (%s) and WebSocketKeepAlive (%s) must match when both are set", output.KeepAlive, output.WebSocketKeepAlive)
+	}
+	if output.KeepAlive == 0 && output.WebSocketKeepAlive != 0 {
+		output.KeepAlive, keepAliveName = output.WebSocketKeepAlive, "WebSocketKeepAlive"
+	}
 	integers := []struct {
 		name              string
 		value             *int
@@ -104,7 +112,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"RetryBase", &output.RetryBase, defaultLimits.RetryBase, maximumLimits.RetryBase},
 		{"RetryCap", &output.RetryCap, defaultLimits.RetryCap, maximumLimits.RetryCap},
 		{"ConnectionInitTimeout", &output.ConnectionInitTimeout, defaultLimits.ConnectionInitTimeout, maximumLimits.ConnectionInitTimeout},
-		{"WebSocketKeepAlive", &output.WebSocketKeepAlive, defaultLimits.WebSocketKeepAlive, maximumLimits.WebSocketKeepAlive},
+		{keepAliveName, &output.KeepAlive, defaultLimits.KeepAlive, maximumLimits.KeepAlive},
 		{"WebSocketPongTimeout", &output.WebSocketPongTimeout, defaultLimits.WebSocketPongTimeout, maximumLimits.WebSocketPongTimeout},
 		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
 		{"RetentionAge", &output.RetentionAge, defaultLimits.RetentionAge, maximumLimits.RetentionAge},
@@ -127,6 +135,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 			return Limits{}, Failf(CodeEventConfig, "%s must not exceed %s, got %s", item.name, item.maximum, *item.value)
 		}
 	}
+	output.WebSocketKeepAlive = output.KeepAlive
 	if output.RetryBase > output.RetryCap {
 		return Limits{}, Failf(CodeEventConfig, "RetryBase (%s) must not exceed RetryCap (%s)", output.RetryBase, output.RetryCap)
 	}
