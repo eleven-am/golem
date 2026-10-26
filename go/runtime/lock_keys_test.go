@@ -71,4 +71,7 @@ func TestLockKeysOutsideATransactionAreRefused(t *testing.T) {
 	if err := SystemTxLockKeys(ctx, escaped, key); err == nil {
 		t.Fatal("a transaction handle used after its callback returned took a lock key")
 	}
+	if err := SystemTxLockKeys(ctx, escaped, golem.LockKey{}); !errors.Is(err, errTransactionCallEnded) {
+		t.Fatalf("err=%v; want the ended-transaction refusal before key validation", err)
+	}
 }

@@ -2,7 +2,9 @@ package rowlock
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"testing"
 
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -37,10 +39,18 @@ func TestApplicationKeysSortBetweenGuardsAndRows(t *testing.T) {
 	if highest.mode != Update {
 		t.Fatal("an application lock key is not recorded as an exclusive lock")
 	}
-	class, hash := AppLockID(lowest)
-	again, same := AppLockID(AppKey("\x01"))
-	if class != appLockClass || class != again || hash != same {
+	high, low := AppLockID(lowest)
+	againHigh, againLow := AppLockID(AppKey("\x01"))
+	if high != againHigh || low != againLow {
 		t.Fatal("an application lock key does not map to one stable advisory lock")
+	}
+	sum := sha256.Sum256([]byte(lowest.order))
+	if high != int32(binary.BigEndian.Uint32(sum[0:4])) || low != int32(binary.BigEndian.Uint32(sum[4:8])) {
+		t.Fatal("an application lock key does not use 64 bits of its digest")
+	}
+	otherHigh, otherLow := AppLockID(highest)
+	if otherHigh == high && otherLow == low {
+		t.Fatal("two application lock keys map to one advisory lock")
 	}
 }
 

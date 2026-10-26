@@ -105,13 +105,18 @@ timeout behind the victims, so throughput collapsed under contention.
    otherwise with `pg_try_advisory_xact_lock` (failure is `CONTENTION` →
    `CONFLICT`).
 8. **Application lock keys** (`LockKeys` on a transaction, `Session.LockApp`)
-   are transaction advisory locks on the two-int4 key `(golem class, first 32
-   bits of SHA-256 of the order string)`, a key space disjoint from the guards'
-   single-bigint keys. A collision only adds serialization. The keys of one
-   call are sorted, recorded with `Mode=Update`, and taken by `plan`'s rule:
-   blocking with `pg_advisory_xact_lock` while nothing held sorts after the
-   key, otherwise with `pg_try_advisory_xact_lock` (failure is `CONTENTION` →
-   `CONFLICT`). SQLite validates the keys and takes no lock.
+   are transaction advisory locks on the two-int4 key formed from the first 64
+   bits of SHA-256 of the order string, a key space disjoint from the guards'
+   single-bigint keys. Two keys whose digests collide share one advisory lock:
+   that can add a wait, or form a cycle that PostgreSQL detects as a deadlock
+   and that is reported as `CONFLICT`. The keys of one call are sorted,
+   recorded with `Mode=Update`, and taken by `plan`'s rule: blocking with
+   `pg_advisory_xact_lock` while nothing held sorts after the key, otherwise
+   with `pg_try_advisory_xact_lock` (failure is `CONTENTION` → `CONFLICT`). A
+   blocking wait can still deadlock with a wait the ledger does not track, such
+   as a unique-index check on a row another transaction inserted; PostgreSQL
+   aborts one transaction and the lock call reports `CONFLICT`. SQLite
+   validates the keys and takes no lock.
 9. **Savepoints.** `Mark` records the ledger length when a savepoint opens;
    `RollbackTo` removes, or restores the previous mode of, every key acquired
    after it, because PostgreSQL releases those locks on rollback to the

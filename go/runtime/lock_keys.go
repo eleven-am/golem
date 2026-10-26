@@ -2,11 +2,11 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
+	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -32,7 +32,18 @@ func SystemTxLockKeys[P, A any](ctx context.Context, transaction *SystemTx[P, A]
 
 func operationErr(_ struct{}, err error) error { return err }
 
+type lockKeysFailure struct{ cause error }
+
+func (failure *lockKeysFailure) Error() string {
+	return "P4_RUNTIME_LOCK_KEYS: lock keys could not be acquired"
+}
+
+func (failure *lockKeysFailure) Unwrap() error { return failure.cause }
+
 func lockKeys[P, A any](ctx context.Context, app *App[P, A], binding *executionBinding, keys []golem.LockKey) error {
+	if callErr := binding.requireAdmitted(ctx); callErr != nil {
+		return callErr
+	}
 	ordered := make([]rowlock.Key, len(keys))
 	for index, key := range keys {
 		identity, err := golem.RuntimeLockKeyIdentity(key)
@@ -40,9 +51,6 @@ func lockKeys[P, A any](ctx context.Context, app *App[P, A], binding *executionB
 			return golem.RuntimeOperationError(golem.CodeBadUserInput, lockKeysOperation, golem.ModelID{}, golem.FieldID{}, "lock key is invalid", err)
 		}
 		ordered[index] = rowlock.AppKey(identity)
-	}
-	if callErr := binding.requireAdmitted(ctx); callErr != nil {
-		return callErr
 	}
 	if binding.rowLocks() == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: lock keys require a transaction-bound executor")
@@ -61,9 +69,10 @@ func lockKeys[P, A any](ctx context.Context, app *App[P, A], binding *executionB
 	if contextErr := ctx.Err(); contextErr != nil {
 		return golem.RuntimeOperationError(golem.CodeConflict, lockKeysOperation, golem.ModelID{}, golem.FieldID{}, "lock key wait was cancelled", contextErr)
 	}
-	var contention *rowlock.ContentionError
-	if errors.As(err, &contention) {
-		return golem.RuntimeOperationError(golem.CodeConflict, lockKeysOperation, golem.ModelID{}, golem.FieldID{}, "lock key is held by another transaction", err)
+	switch mutationupsert.ClassifyProviderFault(err) {
+	case mutationupsert.ProviderFaultInterference:
+		return golem.RuntimeOperationError(golem.CodeConflict, lockKeysOperation, golem.ModelID{}, golem.FieldID{}, "lock key conflicted with another transaction", err)
+	default:
+		return &lockKeysFailure{cause: err}
 	}
-	return golem.RuntimeOperationError(golem.CodeBadUserInput, lockKeysOperation, golem.ModelID{}, golem.FieldID{}, "lock keys could not be acquired", err)
 }

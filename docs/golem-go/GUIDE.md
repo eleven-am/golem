@@ -375,11 +375,16 @@ order, so two transactions passing the same keys in different orders do not
 deadlock. On SQLite, where one writer runs at a time, `LockKeys` only validates
 the keys.
 
-Take lock keys first, before any write in the transaction. Taken after a write
-has locked a row, a key cannot wait: it fails at once with `CONFLICT` when
-another transaction holds it, for the same reason as rows written out of order.
-A cancelled context while waiting also returns `CONFLICT`, wrapping the
-context's error.
+Take lock keys first, before any write in the transaction. Taken after an
+update, delete or upsert has locked a row, a key cannot wait: it fails at once
+with `CONFLICT` when another transaction holds it, for the same reason as rows
+written out of order. Taken after a plain create, a key may still wait, and
+that wait can deadlock with another transaction blocked on the row you
+inserted; PostgreSQL aborts one of the two, and if it is yours, `LockKeys`
+returns `CONFLICT`. A cancelled context while waiting also returns `CONFLICT`,
+wrapping the context's error. After a cancelled wait, or a deadlock that
+PostgreSQL resolved against you, the transaction cannot be used any further, so
+return the error from your callback and retry the whole transaction.
 
 ### Mutations return only what you select
 

@@ -20,11 +20,10 @@ import (
 )
 
 const (
-	guardPrefix  = "\x00\x00"
-	appPrefix    = "\x00\x01"
-	rowPrefix    = "\x01"
-	lockAlias    = physical.PhysicalName("golem_lock")
-	appLockClass = int32(0x676f6c6d)
+	guardPrefix = "\x00\x00"
+	appPrefix   = "\x00\x01"
+	rowPrefix   = "\x01"
+	lockAlias   = physical.PhysicalName("golem_lock")
 )
 
 type Mode uint8
@@ -86,7 +85,7 @@ func AppKey(identity string) Key { return Key{order: appPrefix + identity, mode:
 
 func AppLockID(key Key) (int32, int32) {
 	sum := sha256.Sum256([]byte(key.order))
-	return appLockClass, int32(binary.BigEndian.Uint32(sum[:4]))
+	return int32(binary.BigEndian.Uint32(sum[0:4])), int32(binary.BigEndian.Uint32(sum[4:8]))
 }
 
 type ConflictError struct {

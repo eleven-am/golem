@@ -383,12 +383,9 @@ func TestPostgreSQLCancelledLockKeyWaitIsAConflict(t *testing.T) {
 		defer cancel()
 		outcome := make(chan error, 1)
 		go func() {
-			var lockErr error
-			_ = SystemTransaction(context.Background(), fixture.app.System(), func(transaction *lockKeyTx) error {
-				lockErr = SystemTxLockKeys(ctx, transaction, key)
-				return lockErr
+			outcome <- SystemTransaction(context.Background(), fixture.app.System(), func(transaction *lockKeyTx) error {
+				return SystemTxLockKeys(ctx, transaction, key)
 			})
-			outcome <- lockErr
 		}()
 		if err := waitForLockKeyWaiter(fixture.app.database); err != nil {
 			t.Fatalf("the lock key never waited: %v", err)
@@ -402,6 +399,64 @@ func TestPostgreSQLCancelledLockKeyWaitIsAConflict(t *testing.T) {
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("a cancelled lock key wait did not return")
+		}
+	})
+}
+
+func TestPostgreSQLLockKeyDeadlockWithAnUntrackedWaitIsAConflict(t *testing.T) {
+	forEachPostgreSQLLockKeyFixture(t, func(t *testing.T, fixture socialMutationFixture) {
+		ctx := context.Background()
+		key := testLockKey(t, "deadlock")
+		inserted, keyHeld := make(chan struct{}), make(chan struct{})
+		first, second := make(chan error, 1), make(chan error, 1)
+		var lockErr error
+		go func() {
+			first <- SystemTransaction(ctx, fixture.app.System(), func(transaction *lockKeyTx) error {
+				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '200ms'`); err != nil {
+					return err
+				}
+				if _, err := SystemTxCreate(ctx, transaction, fixture.userDescriptor, fixture.userCreate(9, "first")); err != nil {
+					return err
+				}
+				close(inserted)
+				<-keyHeld
+				lockErr = SystemTxLockKeys(ctx, transaction, key)
+				return lockErr
+			})
+		}()
+		go func() {
+			second <- SystemTransaction(ctx, fixture.app.System(), func(transaction *lockKeyTx) error {
+				if _, err := transaction.system.executor.transaction.ExecContext(ctx, `SET LOCAL deadlock_timeout = '30s'`); err != nil {
+					return err
+				}
+				<-inserted
+				if err := SystemTxLockKeys(ctx, transaction, key); err != nil {
+					return err
+				}
+				close(keyHeld)
+				if err := waitForLockKeyWaiter(fixture.app.database); err != nil {
+					return fmt.Errorf("the first transaction never waited on the lock key: %w", err)
+				}
+				_, err := SystemTxCreate(ctx, transaction, fixture.userDescriptor, fixture.userCreate(9, "second"))
+				return err
+			})
+		}()
+		var firstErr, secondErr error
+		for range 2 {
+			select {
+			case firstErr = <-first:
+			case secondErr = <-second:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the deadlocked transactions did not finish")
+			}
+		}
+		if secondErr != nil {
+			t.Fatalf("the surviving transaction failed: %v", secondErr)
+		}
+		requireLockKeyConflict(t, lockErr)
+		requireLockKeyConflict(t, firstErr)
+		if !deadlockDetected(lockErr) {
+			t.Fatalf("err=%v; want PostgreSQL's deadlock as the cause", lockErr)
 		}
 	})
 }
