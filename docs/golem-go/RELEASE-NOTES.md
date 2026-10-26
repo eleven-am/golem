@@ -18,6 +18,191 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 Unreleased.
 
+**This release changes behaviour you may depend on.** Error codes, write
+authorization, datetime handling, delete events and a few signatures change.
+[MIGRATION.md](./MIGRATION.md) lists every breaking change and what to do. Two
+need action before you deploy: drain the v0.6.x event outbox, because every
+subscribable model's event schema changes, and make sure `DefinePolicy` is a
+pure function of the actor, because its result is now cached.
+
+### Policies
+
+**Relation checks see only rows the caller can read, everywhere.** A read
+rule, field rule, write rule, filter or delete-event check that tests a
+relation now ranges only over target rows the caller can read, as reads
+already did when they ran. A filter or rule that did not repeat the target's
+read rule, such as `Comments.Post.Is(Posts.Priority.Eq(0))`, failed every read
+with `FORBIDDEN`; those reads now succeed. SQL field masks over relations
+tested related rows the caller could not read, and a masked value could reveal
+whether such a row matched; they now use the same rule as reads. GUIDE.md,
+[How policies are proved](./GUIDE.md#how-policies-are-proved), explains the
+rule. Breaking: see [MIGRATION.md](./MIGRATION.md#policies).
+
+**Update and delete rules no longer repeat the read rule.** An existing-row
+write had to contain the read rule's conditions verbatim, or it failed with
+`BAD_USER_INPUT`. Updates, deletes, upserts, `UpdateMany`, `DeleteMany` and
+their nested forms are now planned over the action rule, the selector and the
+read condition of the rows they touch, so a rule wider than the read rule
+narrows to readable rows. A caller with no grant for the action is refused
+with `FORBIDDEN` and reason `NOT_GRANTED` before planning. A write rule's
+relation checks can no longer probe rows the caller cannot read, and an upsert
+without a create grant can no longer reveal whether an unreadable row exists:
+its create branch is refused with `NOT_GRANTED` before any hook runs. Breaking:
+see [MIGRATION.md](./MIGRATION.md#policies).
+
+**Policy-checked calls cost close to system calls.** Policy conditions are now
+immutable and built in linear time; a 1,024-leaf condition took about 900
+million allocations to build. A caller `Create` on SQLite went from 3.04 ms to
+0.94 ms and `FindFirst` from 10.99 ms to 2.17 ms in the policy benchmark.
+`ForPrincipal` caches the built policy set per actor, in a bounded LRU
+(`Config.PolicyCache`), and builds each model's policy only when a call first
+needs it: a warm `ForPrincipal` went from 25.4 µs and 321 allocations to
+0.83 µs and 16. `ResolvePrincipal` still runs on every call, so revocation is
+unaffected. `InvalidatePolicies` drops the cache. With `SnapshotActor` set,
+the cache is used only with `Config.PolicyCacheKey`. Breaking: `DefinePolicy`
+must be a pure function of the actor, and a broken policy fails the calls that
+use its model instead of `ForPrincipal`; see
+[MIGRATION.md](./MIGRATION.md#policies).
+
+### Errors
+
+**Errors say what went wrong.** `golem.Error` gains `Reason`, `Limit` and
+`LimitMax`, and an `Is` method, so `errors.Is(err, golem.CodeForbidden)` and
+`errors.Is(err, golem.ReasonNotGranted)` both work. `Field` was always empty;
+it now names the field a refusal is about, but only a field the request itself
+named. Every limit refusal has the new code `LIMIT_EXCEEDED` and names the
+limit, such as `touched_rows`, `outbox_bytes` or `take`, with its maximum;
+outbox and event-count overflows used to escape untyped and reach GraphQL
+clients as `INTERNAL_SERVER_ERROR`. Value refusals carry `VALUE_TOO_LONG`,
+`VALUE_PRECISION`, `VALUE_RANGE` or `INVALID_VALUE` and never echo the value.
+GraphQL errors carry `extensions.reason`, and `extensions.limit` and
+`extensions.max` for limits. GUIDE.md,
+[Limits and error codes](./GUIDE.md#limits-and-error-codes), is the reference.
+Breaking: see [MIGRATION.md](./MIGRATION.md#error-codes-and-messages).
+
+**Datetimes finer than a microsecond work.** A `time.Time` with nanoseconds,
+which `time.Now()` returns on Linux, was refused in writes and filters, so
+code that passed on macOS failed in production. Writes now truncate datetime
+and time values toward the past to the field's precision. A filter or policy
+operand finer than a microsecond is rewritten to an exact equivalent: `LT(v)`
+becomes `LTE(floor v)`, `Eq(v)` matches nothing, and `Ne(v)` matches every
+row, NULL included, as it would natively. Unique selectors, cursors, list
+operators, scoped reads and analytics refuse such an operand with
+`VALUE_PRECISION`, naming the field. Breaking: see
+[MIGRATION.md](./MIGRATION.md#datetimes).
+
+### Transactions and operations
+
+**`LockKeys` serializes a check-then-write.** Two transactions that each count
+rows and then insert under a limit could both pass the check.
+`tx.LockKeys(ctx, golem.MustLockKey("quota", id))` takes ordered advisory
+locks on PostgreSQL that hold until the transaction ends, across replicas.
+Keys taken after a row lock fail at once with `CONFLICT` instead of risking a
+deadlock. On SQLite it only validates the keys. GUIDE.md,
+[Lock keys serialize check-then-write](./GUIDE.md#lock-keys-serialize-check-then-write).
+
+**Serializable transactions, with opt-in retry.** `Transaction` takes options:
+`golem.Isolation(golem.Serializable)` runs the transaction at PostgreSQL's
+serializable level, and `golem.RetryConflicts(n)` runs the callback again, up
+to `n` times in all, after a `CONFLICT`. Without options nothing is replayed,
+as before. A serialization failure or deadlock at commit was reported as
+`P4_RUNTIME_TRANSACTION`; it is now `CONFLICT` under either level. GUIDE.md,
+[Serializable transactions and retry](./GUIDE.md#serializable-transactions-and-retry).
+
+**Go code can own a write without `SystemEscape`.** `golem.Within` granted
+writes only inside a GraphQL custom mutation, so Go code holding a caller
+transaction used `SystemEscape` for writes only an operation should make.
+`DefineOperations` with `golem.TxOperation(ops, "name", Fn)` declares a
+transaction operation, and the generated `Run(ctx, tx, Fn, args)` runs it on
+the caller's transaction with its `Within` grants. The grant ends when the
+operation returns; its writes commit with the transaction. Operations never
+appear in the SDL and work in kernel mode. GUIDE.md,
+[Operations on a transaction](./GUIDE.md#operations-on-a-transaction).
+
+**Operations can count rows the caller cannot read.** Inside a `Within` block
+on a transaction operation, `CanCount(predicate)` widens the rows `Count`
+sees, and `CanAggregate(predicate, fields...)` the rows `Aggregate` sees, with
+only the named fields usable as measures and filters. The widening applies
+only to those two calls, only while the operation runs; row reads, `GroupBy`,
+events, explanations and writes never see it. `MIN` and `MAX` disclose the
+values of a named field. GUIDE.md,
+[Counts and aggregates an operation owns](./GUIDE.md#counts-and-aggregates-an-operation-owns).
+
+### Kernel mode
+
+**golem without GraphQL.** `golem.WithoutGraphQL(schema)` in `DefineSchema`
+makes `golem generate` skip the SDL, gqlgen and every GraphQL file, so an
+application that calls golem only from Go no longer compiles a generated
+GraphQL executor or depends on gqlgen and gqlparser. Callers, transactions,
+hooks, events, the queue, `Mutate` and transaction operations work unchanged.
+`golem.Query` and `golem.ComputedField` are refused with
+`P5_GRAPHQL_DISABLED_EXTENSION`. Switching modes needs no migration. Without
+the declaration, output is byte-identical to before. GUIDE.md,
+[kernel mode](./GUIDE.md#using-golem-from-go-without-graphql-kernel-mode).
+
+### Events and subscriptions
+
+**Delete events reach the subscribers they should.** Filtered subscriptions
+never received deletes, and unfiltered ones only when the read policy was
+local to the row or crossed one relation; other deletes were dropped with no
+signal. A delete is now authorized by evaluating the subscriber's read rule
+over the deleted row's snapshot, with queries for the parents it reaches, to
+true, false or unknown. Allowed deletes are delivered, denied and filtered-out
+ones are not, and when authorization is unknown the subscriber's stream ends
+with `GOLEM_SUBSCRIPTION_RESYNC` instead of losing the delete. A parent
+deleted in the same transaction, as in a cascade, is judged from its own
+snapshot. Read hooks now apply to deletes. GUIDE.md,
+[Who receives a delete](./GUIDE.md#who-receives-a-delete). Breaking: see
+[MIGRATION.md](./MIGRATION.md#events).
+
+**Bulk deletes fit in the outbox.** A delete stored the whole row in the
+1 MiB per-transaction outbox, so deleting 30 rows of 40 KB failed while
+creating them succeeded. The snapshot is now a declared set:
+`golem.Subscriptions[M](golem.DeleteSnapshot[M](fields...))`, by default the key,
+the foreign keys and the bounded scalars. A row whose snapshot still exceeds
+`MutationLimits.MaxDeleteSnapshotBytes` (64 KiB by default) is stored with its
+identity only, and the delete succeeds. The event schema fingerprint changes
+for every subscribable model: drain the outbox before deploying; see
+[MIGRATION.md](./MIGRATION.md#events).
+
+**Models hidden from GraphQL can have events.** `golem.Subscriptions` on a
+model with `GraphQLHidden()` failed with `P7_SUBSCRIPTION_MODEL_HIDDEN`. GraphQL
+still never exposes the model.
+
+**Long-lived subscriptions are re-authorized.** A stream kept its
+authorization from the moment it opened. `EventLimits.RevalidateEvery`
+re-resolves the principal, re-checks the read grant and re-runs read hooks on
+a jittered interval, ending the stream with
+`GOLEM_SUBSCRIPTION_REVALIDATION` or the new `GOLEM_SUBSCRIPTION_FORBIDDEN`.
+`golem.EventRecheck` and `GraphQLConfig.SubscriptionRecheck` add your own
+check. GUIDE.md,
+[Re-checking long-lived streams](./GUIDE.md#re-checking-long-lived-streams).
+
+**Streams can be capped per principal.** `EventLimits.MaxSubscriptionsPerPrincipal`
+with `Config.SubscriptionPrincipalKey` caps the streams one principal holds in
+a process, across Go, WebSocket and SSE, with the new
+`GOLEM_SUBSCRIPTION_LIMIT`. Going over the per-connection WebSocket cap is now
+an error on that operation instead of closing the connection with 4400.
+Breaking: see [MIGRATION.md](./MIGRATION.md#websocket-and-sse).
+
+**GraphQL over Server-Sent Events.** A `POST` whose `Accept` header prefers
+`text/event-stream` was refused with `406 SUBSCRIPTION_TRANSPORT_UNSUPPORTED`.
+It is now served in graphql-sse's distinct-connections mode: a subscription
+sends a `next` frame per event, then `complete`, and a query or mutation one
+`next`. An `Accept` that also takes JSON at equal or higher quality streams
+subscriptions only. `EventLimits.KeepAlive` sets the keep-alive for SSE and
+WebSocket; `WebSocketKeepAlive` remains as a deprecated alias.
+
+**A second process-local publisher is detected.** `events.NewMemoryTransport`
+delivers only to subscribers in the publishing process, and two such
+publishers on one PostgreSQL database each claimed part of the outbox
+silently. `RunEventPublisher` now tries to hold an advisory lock while it runs.
+A publisher that cannot take it reports `events.ObservationTopology` and keeps
+running; with `EventLimits.RequireExclusiveProcessLocalPublisher` it fails
+with `GOLEM_EVENT_CONFIG`. A subscriber in a process with no local publisher
+is reported too. GUIDE.md,
+[Event transports](./GUIDE.md#event-transports).
+
 **Fix: an expired `Recv` context now reports why.** When the context passed to
 `EventStream.Recv` was cancelled or hit its deadline, `Recv` returned
 `GOLEM_SUBSCRIPTION_CANCELLED` with no cause, so a caller could not tell a
