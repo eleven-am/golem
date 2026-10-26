@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	golem "github.com/eleven-am/golem/go/golem"
+	golemruntime "github.com/eleven-am/golem/go/runtime"
 )
 
 type Principal struct {
@@ -78,6 +79,8 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	golem.Within(rules, UpsertInvite).CanUpdateFields(owned, Invites.Status)
 	golem.Within(rules, AcceptInvite).CanUpdateFields(owned, Invites.Status)
 	golem.Within(rules, ReviewInvite).CanCreateFields(owned, Invites.ID, Invites.Owner)
+	golem.Within(rules, RecordInvite).CanCreate(owned)
+	golem.Within(rules, MarkInvite).CanUpdateFields(owned, Invites.Status)
 	if actor.Misconfigured {
 		golem.Within(rules, SearchInvites).CanCreate(owned)
 	}
@@ -191,6 +194,11 @@ func DefineGraphQL(graphql *golem.GraphQLSchema) {
 	golem.Mutation(graphql, "transactionalInvite", TransactionalInvite)
 	golem.Mutation(graphql, "renewInvite", UpsertInvite)
 	golem.Query(graphql, "searchInvites", SearchInvites)
+}
+
+func DefineOperations(operations *golem.Operations) {
+	golem.TxOperation(operations, "recordInvite", RecordInvite)
+	golem.TxOperation(operations, "markInvite", MarkInvite)
 }
 
 var ErrInvalidEmail = errors.New("invite email is invalid")
@@ -309,6 +317,52 @@ func SearchInvites(ctx context.Context, caller *Caller[Principal], arguments Sea
 	return caller.Invites.FindMany(ctx, Invites.Where(Invites.Owner.Eq(arguments.Owner)), Invites.OrderBy(Invites.ID.Asc()), Invites.Take(20), Invites.Select(Invites.ID, Invites.Status))
 }
 
+func RecordInvite(ctx context.Context, tx *CallerTx[Principal], arguments InviteArgs) (string, error) {
+	recordResolver("recordInvite")
+	if err := runTxProbe(ctx, "recordInvite", tx); err != nil {
+		return "", err
+	}
+	email, err := normalizedEmail(arguments.Email)
+	if err != nil {
+		return "", err
+	}
+	created, err := tx.Invites.Create(ctx, inviteInput(arguments, email), Invites.Select(Invites.ID))
+	if err != nil {
+		return "", err
+	}
+	id, _ := golem.Value(created, Invites.ID).Get()
+	return id.String(), nil
+}
+
+func MarkInvite(ctx context.Context, tx *CallerTx[Principal], arguments AcceptArgs) (string, error) {
+	recordResolver("markInvite")
+	if err := runTxProbe(ctx, "markInvite", tx); err != nil {
+		return "", err
+	}
+	updated, err := tx.Invites.Update(ctx, Invites.ByID.Value(arguments.ID), Invites.Update(Invites.Status.Set("marked")), Invites.Select(Invites.Status))
+	if err != nil {
+		return "", err
+	}
+	status, _ := golem.Value(updated, Invites.Status).Get()
+	return status, nil
+}
+
+func RunCustomMutationAsTxOperation(ctx context.Context, tx *CallerTx[Principal], arguments InviteArgs) (string, error) {
+	var inner *golemruntime.CallerTx[Principal, Actor]
+	if tx != nil {
+		inner = tx.runtime
+	}
+	return golemruntime.RunCallerTxOperation(ctx, inner, InviteMember, func(*golemruntime.CallerTx[Principal, Actor]) *Caller[Principal] { return nil }, arguments)
+}
+
+func MutateTxOperation(ctx context.Context, caller *Caller[Principal], arguments InviteArgs) (string, error) {
+	var inner *golemruntime.Caller[Principal, Actor]
+	if caller != nil {
+		inner = caller.runtime
+	}
+	return golemruntime.RunCallerOperation(ctx, inner, RecordInvite, func(*golemruntime.Caller[Principal, Actor]) *CallerTx[Principal] { return nil }, arguments)
+}
+
 func inviteInput(arguments InviteArgs, email string) InviteCreateInput {
 	return Invites.Create(
 		Invites.ID.Create(arguments.ID),
@@ -322,6 +376,14 @@ func inviteInput(arguments InviteArgs, email string) InviteCreateInput {
 type Probe func(ctx context.Context, operation string, caller *Caller[Principal]) error
 
 type TeamHook func(ctx context.Context, executor golem.HookExecutor) error
+
+type TxProbe func(ctx context.Context, operation string, tx *CallerTx[Principal]) error
+
+func SetTxProbe(probe TxProbe) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeTxProbe = probe
+}
 
 func SetTeamHook(hook TeamHook) {
 	probeLock.Lock()
@@ -349,6 +411,7 @@ type Record struct {
 var (
 	probeLock                    sync.Mutex
 	activeProbe                  Probe
+	activeTxProbe                TxProbe
 	activeTeamHook               TeamHook
 	activeTeamReadHook           func(context.Context) error
 	activeInviteHook             func(context.Context) error
@@ -362,6 +425,7 @@ func Reset(probe Probe) {
 	probeLock.Lock()
 	defer probeLock.Unlock()
 	activeProbe = probe
+	activeTxProbe = nil
 	activeTeamHook = nil
 	activeTeamReadHook = nil
 	activeInviteHook = nil
@@ -385,6 +449,16 @@ func runProbe(ctx context.Context, operation string, caller *Caller[Principal]) 
 		return nil
 	}
 	return probe(ctx, operation, caller)
+}
+
+func runTxProbe(ctx context.Context, operation string, tx *CallerTx[Principal]) error {
+	probeLock.Lock()
+	probe := activeTxProbe
+	probeLock.Unlock()
+	if probe == nil {
+		return nil
+	}
+	return probe(ctx, operation, tx)
 }
 
 func recordResolver(name string) {

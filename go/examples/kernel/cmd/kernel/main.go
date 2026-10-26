@@ -205,6 +205,35 @@ func runScenario(ctx context.Context, database *provider.Database) error {
 	if err := expectEvents(ctx, stream, []string{"created " + keptID.String()}); err != nil {
 		return err
 	}
+	if _, err := alice.Notes.Update(ctx, kernel.Notes.ByID.Value(keptID), kernel.Notes.Update(kernel.Notes.Title.Set("outside"))); err == nil {
+		return errors.New("retitle outside the operation was accepted")
+	}
+	var retitled string
+	err = alice.Transaction(ctx, func(transaction *kernel.CallerTx[kernel.Principal]) error {
+		var runErr error
+		retitled, runErr = kernel.Run(ctx, transaction, kernel.RetitleNote, kernel.RetitleNoteArgs{ID: keptID, Title: "retitled"})
+		return runErr
+	})
+	if err != nil || retitled != "retitled" {
+		return fmt.Errorf("Run retitled the note to %q: %v", retitled, err)
+	}
+	err = bob.Transaction(ctx, func(transaction *kernel.CallerTx[kernel.Principal]) error {
+		_, runErr := kernel.Run(ctx, transaction, kernel.RetitleNote, kernel.RetitleNoteArgs{ID: keptID, Title: "bob"})
+		return runErr
+	})
+	if err == nil {
+		return errors.New("bob retitled alice's note")
+	}
+	kept, err := alice.Notes.FindUnique(ctx, kernel.Notes.ByID.Value(keptID))
+	if err != nil {
+		return fmt.Errorf("reread retitled note: %w", err)
+	}
+	if title, _ := golem.Value(kept, kernel.Notes.Title).Get(); title != "retitled" {
+		return fmt.Errorf("retitled note title = %q", title)
+	}
+	if err := expectEvents(ctx, stream, []string{"updated " + keptID.String()}); err != nil {
+		return err
+	}
 	if _, err := alice.Notes.Delete(ctx, kernel.Notes.ByID.Value(keptID)); err != nil {
 		return fmt.Errorf("alice deletes a note: %w", err)
 	}

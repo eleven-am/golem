@@ -73,12 +73,18 @@ var operationScopeOrder atomic.Uint64
 
 type operationScope struct {
 	mu       sync.Mutex
+	hidden   atomic.Bool
 	released atomic.Bool
 	order    uint64
 }
 
+func (scope *operationScope) hide() {
+	scope.hidden.Store(true)
+}
+
 func (scope *operationScope) release() {
 	scope.mu.Lock()
+	scope.hidden.Store(true)
 	scope.released.Store(true)
 	scope.mu.Unlock()
 }
@@ -219,7 +225,7 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 	if !ok {
 		return ir.Policy{}, false
 	}
-	if set.scope != nil && !set.scope.released.Load() {
+	if set.scope != nil && !set.scope.hidden.Load() {
 		if scoped, ok := operations[set.operation]; ok {
 			if set.lease != nil {
 				set.lease.serve(model)
@@ -249,8 +255,13 @@ func (set *Set) PolicyError(model ir.ModelID) error {
 // from the caller's own set, so operations never accumulate grants. After
 // release, the returned set answers exactly as the caller's own set does.
 func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
+	scoped, _, release := set.WithinTransaction(operation)
+	return scoped, release
+}
+
+func (set *Set) WithinTransaction(operation golem.OperationID) (*Set, func(), func()) {
 	if set == nil {
-		return nil, func() {}
+		return nil, func() {}, func() {}
 	}
 	root := set
 	if set.root != nil {
@@ -258,7 +269,7 @@ func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
 	}
 	scope := &operationScope{order: operationScopeOrder.Add(1)}
 	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope}
-	return scoped, scope.release
+	return scoped, scope.hide, scope.release
 }
 
 // Base returns the caller's own set, without any operation's grants.

@@ -398,6 +398,7 @@ golem.(*ApplicationBindings).GenerationDigest func() SchemaDigest
 golem.(*ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(*ApplicationBindings).PolicyInventory func() []ModelID
 golem.(*ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
+golem.(*ApplicationBindings).TxOperation func(any) (OperationID, bool)
 golem.(*ApplicationDescriptors).GenerationDigest func() SchemaDigest
 golem.(*ApplicationDescriptors).Lookup func(ModelID) (ModelMetadata, bool)
 golem.(*ApplicationDescriptors).Models func() []ModelMetadata
@@ -1154,6 +1155,7 @@ golem.(ApplicationBindings).GenerationDigest func() SchemaDigest
 golem.(ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(ApplicationBindings).PolicyInventory func() []ModelID
 golem.(ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
+golem.(ApplicationBindings).TxOperation func(any) (OperationID, bool)
 golem.(ApplicationDescriptors).GenerationDigest func() SchemaDigest
 golem.(ApplicationDescriptors).Lookup func(ModelID) (ModelMetadata, bool)
 golem.(ApplicationDescriptors).Models func() []ModelMetadata
@@ -2377,6 +2379,7 @@ golem.GeneratedTextField func[M any, V ~string](FieldID) TextField[M, V]
 golem.GeneratedToMany func[M any, R any](FieldID, RelationID, ...ModelID) ToMany[M, R]
 golem.GeneratedToOne func[M any, R any](FieldID, RelationID, ...ModelID) ToOne[M, R]
 golem.GeneratedToOneSchemaField func[M any, R any]() ToOneSchemaField[M, R]
+golem.GeneratedTxOperation func[O any](string, O) GeneratedOperation
 golem.GeneratedUniqueSelectorValue func[M any](ModelID, KeyID, ...selectorComponent) UniqueSelectorValue[M]
 golem.GeneratedUpdateInput func[M any](ModelID, ...UpdateValue[M]) UpdateInput[M]
 golem.GeneratedUpdateManyInput func[M any](ModelID, ...UpdateManyValue[M]) UpdateManyInput[M]
@@ -2667,6 +2670,8 @@ golem.OperationID comparable
 golem.OperationID type struct
 golem.OperationRules comparable
 golem.OperationRules[M any] type struct
+golem.Operations comparable
+golem.Operations type struct
 golem.OptimisticConcurrency func[M any](ScalarColumn[M, int64]) ModelOption[M]
 golem.Or func[M any](...Predicate[M]) Predicate[M]
 golem.OrGroup func[M any](GroupPredicate[M], ...GroupPredicate[M]) GroupPredicate[M]
@@ -3255,6 +3260,7 @@ golem.ToOneRelation[M any, R any] type interface {} sealed
 golem.ToOneSchemaField[M any, R any] type struct
 golem.ToOne[M any, R any] type struct
 golem.TransactionOption type interface {} sealed
+golem.TxOperation func[Operation any](*Operations, string, Operation)
 golem.UUID comparable
 golem.UUID type [16]uint8
 golem.Unique func[M any](string, ...Column[M]) ModelOption[M]
@@ -3707,6 +3713,7 @@ observe.OperationMutationCustom const Operation = "mutation.custom"
 observe.OperationMutationDelete const Operation = "mutation.delete"
 observe.OperationMutationDeleteMany const Operation = "mutation.delete_many"
 observe.OperationMutationDisconnect const Operation = "mutation.disconnect"
+observe.OperationMutationOperation const Operation = "mutation.operation"
 observe.OperationMutationSetRelation const Operation = "mutation.set_relation"
 observe.OperationMutationUpdate const Operation = "mutation.update"
 observe.OperationMutationUpdateMany const Operation = "mutation.update_many"
@@ -4411,6 +4418,7 @@ runtime.ReadLimits.MaxStatementBytes field int
 runtime.ReadLimits.MaxStatementParameters field int
 runtime.ReadLimits.MaxTake field int
 runtime.RunCallerOperation func[P any, A any, C any, Args any, R any](context.Context, *Caller[P, A], func(context.Context, C, Args) (R, error), func(*Caller[P, A]) C, Args) (R, error)
+runtime.RunCallerTxOperation func[P any, A any, T any, Args any, R any](context.Context, *CallerTx[P, A], func(context.Context, T, Args) (R, error), func(*CallerTx[P, A]) T, Args) (R, error)
 runtime.RuntimeBuildValidatedEvent func(EventFactoryRegistry, internal/event/typedvalue.ValidatedEvent) (any, error)
 runtime.System comparable
 runtime.SystemAggregate func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)

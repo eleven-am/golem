@@ -683,6 +683,12 @@ func normalizeContract(contract *ContractIR) {
 			normalizeGraphQLType(&operation.Arguments[argumentIndex].Type)
 		}
 	}
+	sort.Slice(contract.TxOperations, func(i, j int) bool {
+		if contract.TxOperations[i].Name != contract.TxOperations[j].Name {
+			return contract.TxOperations[i].Name < contract.TxOperations[j].Name
+		}
+		return contract.TxOperations[i].ExtensionID < contract.TxOperations[j].ExtensionID
+	})
 	sort.Slice(contract.Methods, func(i, j int) bool {
 		left, right := contract.Methods[i], contract.Methods[j]
 		if left.Receiver.PackagePath != right.Receiver.PackagePath {
