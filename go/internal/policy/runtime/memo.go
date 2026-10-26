@@ -99,6 +99,8 @@ func (source *memoSource) Policy(model ir.ModelID) (ir.Policy, bool) {
 	return source.set.Policy(model)
 }
 
+func (source *memoSource) PolicyError(model ir.ModelID) error { return source.set.PolicyError(model) }
+
 func (set *Set) Memoized(key MemoKey, compute func(Source) (ir.Condition, error)) (ir.Condition, bool, error) {
 	if set == nil || set.memo == nil || set.aggregate || key.Kind < MemoRowConstraint || int(key.Kind) > memoKinds {
 		return ir.Condition{}, false, nil

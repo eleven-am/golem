@@ -302,7 +302,7 @@ func (set *Set) PolicyError(model ir.ModelID) error {
 	}
 	if set.aggregate && set.scope != nil && !set.scope.hidden.Load() {
 		if _, ok := entry.resolveAggregates(); !ok {
-			return entry.aggregateErr
+			return fmt.Errorf("%w: %w", ErrPolicyUnavailable, entry.aggregateErr)
 		}
 	}
 	return nil

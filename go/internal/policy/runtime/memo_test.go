@@ -261,3 +261,23 @@ func TestMemoBypassesAggregateViews(t *testing.T) {
 		t.Fatal("an aggregate view answered from the base memo")
 	}
 }
+
+func TestMemoSourceReportsPolicyUnavailable(t *testing.T) {
+	set, user := memoUserSet(t, func(runtimeFixture) func(runtimeActor) (golem.FrozenPolicy, error) {
+		return func(runtimeActor) (golem.FrozenPolicy, error) {
+			return golem.FrozenPolicy{}, errors.New("factory refused")
+		}
+	})
+	var cause error
+	_, _, _ = set.Memoized(MemoKey{Kind: MemoRowConstraint, Model: user, Action: policyir.ActionRead}, func(source Source) (policyir.Condition, error) {
+		reporter, ok := source.(interface{ PolicyError(policyir.ModelID) error })
+		if !ok {
+			t.Fatal("memo source hides the policy error of the set")
+		}
+		cause = reporter.PolicyError(user)
+		return policyir.Condition{}, cause
+	})
+	if !errors.Is(cause, ErrPolicyUnavailable) {
+		t.Fatalf("memo source policy error = %v, want ErrPolicyUnavailable", cause)
+	}
+}
