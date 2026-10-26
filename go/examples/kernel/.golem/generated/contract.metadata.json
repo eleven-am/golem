@@ -1,0 +1,311 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "contract_metadata",
+  "formatVersion": 1,
+  "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
+  "contractFingerprint": "8c18a2d10fae9ce7397c55dbffb9ed47ed634aa1a5ea71c0bced4ac9118642fb",
+  "generationDigest": "8d41644cd789e4f22e351a07ac4d0fef8c3d5bb68bfd58630b51e1e901e82c6b",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p8-go-abi-v7",
+  "payload": {
+    "formatVersion": 6,
+    "graphqlAbiVersion": 5,
+    "models": [
+      {
+        "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+        "graphqlName": "Note",
+        "graphqlPlural": "Notes",
+        "roots": {
+          "findOne": "note",
+          "findMany": "notes",
+          "create": "createNote",
+          "update": "updateNote",
+          "upsert": "upsertNote",
+          "delete": "deleteNote",
+          "updateMany": "updateManyNotes",
+          "deleteMany": "deleteManyNotes",
+          "aggregate": "aggregateNotes",
+          "groupBy": "groupByNotes",
+          "relationGroupBy": "relationGroupByNotes",
+          "events": "noteEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "29ca7a935e081bc0ffb37cb55f461790",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "453f9dc4caf460b7013c30a3e1951fba",
+            "graphqlName": "owner",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "6601b6edc07e62e50e4d54d24a755789",
+            "graphqlName": "title",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "d1b9dd5c5237112d3aa957ea6959c717",
+            "graphqlName": "ownerID",
+            "modes": [
+              "immutable"
+            ]
+          },
+          {
+            "fieldId": "e44637b1c1a39c8e4cf2bbacbe18cb8c",
+            "graphqlName": "archived",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [
+          "d1b9dd5c5237112d3aa957ea6959c717"
+        ],
+        "selectors": [
+          {
+            "keyId": "1ad97cdbc0a22433c437cc20c1f241ea",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "29ca7a935e081bc0ffb37cb55f461790"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "NoteEvent",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt"
+          ],
+          "deleteSnapshotFull": true,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+            "primaryKeyId": "1ad97cdbc0a22433c437cc20c1f241ea",
+            "identityFields": [
+              {
+                "fieldId": "29ca7a935e081bc0ffb37cb55f461790",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "29ca7a935e081bc0ffb37cb55f461790",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "d1b9dd5c5237112d3aa957ea6959c717",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "6601b6edc07e62e50e4d54d24a755789",
+                "type": {
+                  "kind": "string",
+                  "maxLength": 160
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "e44637b1c1a39c8e4cf2bbacbe18cb8c",
+                "type": {
+                  "kind": "bool"
+                },
+                "nullable": false
+              }
+            ],
+            "enums": []
+          },
+          "schemaFingerprint": "2001f509abdf18c051dc88659e1c1656fef2bb79cf7d9534cea036808fe4e2b8"
+        },
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      },
+      {
+        "modelId": "c9781b5c8d81c16f653fcd74ae1a9a32",
+        "graphqlName": "Account",
+        "graphqlPlural": "Accounts",
+        "roots": {
+          "findOne": "account",
+          "findMany": "accounts",
+          "create": "createAccount",
+          "update": "updateAccount",
+          "upsert": "upsertAccount",
+          "delete": "deleteAccount",
+          "updateMany": "updateManyAccounts",
+          "deleteMany": "deleteManyAccounts",
+          "aggregate": "aggregateAccounts",
+          "groupBy": "groupByAccounts",
+          "relationGroupBy": "relationGroupByAccounts",
+          "events": "accountEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "11fe87f589ca008f430b3e9e8f247c56",
+            "graphqlName": "handle",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "944e8156e5f699b0a741216340f849f7",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "e55cd473d372a793e65242fa0e5eecc1",
+            "graphqlName": "notes",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "e87d64db77a27dacac2b0f6cf3990ad3",
+            "kind": "unique",
+            "name": "Handle",
+            "fields": [
+              "11fe87f589ca008f430b3e9e8f247c56"
+            ]
+          },
+          {
+            "keyId": "3587a9b6d7b217ce0c72a68985287ba1",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "944e8156e5f699b0a741216340f849f7"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      }
+    ],
+    "enums": [],
+    "methods": [
+      {
+        "modelId": "c9781b5c8d81c16f653fcd74ae1a9a32",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "name": "Account"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "name": "Note"
+        },
+        "name": "BeforeCreate",
+        "kind": "hook"
+      },
+      {
+        "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "name": "Note"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "name": "Actor"
+        }
+      }
+    ],
+    "customOperations": [
+      {
+        "extensionId": "575d5002f9f5c602587b559b6cd23aee",
+        "operation": "mutation",
+        "name": "archiveNotes",
+        "arguments": [
+          {
+            "name": "title",
+            "type": {
+              "kind": "scalar",
+              "name": "String",
+              "nullable": false
+            }
+          }
+        ],
+        "result": {
+          "kind": "scalar",
+          "name": "BigInt",
+          "nullable": false
+        },
+        "resolver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+          "receiver": {
+            "packagePath": "",
+            "name": ""
+          },
+          "name": "ArchiveNotes",
+          "kind": "custommutation"
+        },
+        "capability": "callerOnly"
+      }
+    ]
+  }
+}

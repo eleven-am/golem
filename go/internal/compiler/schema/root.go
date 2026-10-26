@@ -74,6 +74,7 @@ func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 	seenName := false
 	seenActor := false
 	seenProviders := false
+	seenWithoutGraphQL := false
 	embeddingSpaces := map[string]bool{}
 	models := make(map[string]token.Pos)
 	for _, statement := range function.Body.List {
@@ -177,6 +178,18 @@ func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 				seen[provider] = true
 				root.Providers = append(root.Providers, ir.RawProviderRef{Provider: provider, Ordinal: uint32(len(root.Providers)), Span: sourceSpan(pkg, expression.Pos(), expression.End())})
 			}
+
+		case "WithoutGraphQL":
+			if typeArgument != nil || len(call.Args) != 1 || !isIdent(call.Args[0], parameter) {
+				c.error(pkg, "P1_SCHEMA_WITHOUT_GRAPHQL_CALL", "WithoutGraphQL requires exactly the schema parameter", call)
+				continue
+			}
+			if seenWithoutGraphQL {
+				c.error(pkg, "P1_SCHEMA_WITHOUT_GRAPHQL_DUPLICATE", "WithoutGraphQL may be declared once", call)
+				continue
+			}
+			seenWithoutGraphQL = true
+			root.WithoutGraphQL = true
 
 		case "EmbeddingSpace":
 			if typeArgument != nil || len(call.Args) != 3 || !isIdent(call.Args[0], parameter) {
