@@ -65,6 +65,7 @@ type Session struct {
 func (Session) GolemModel() golem.ModelSpec[Session] {
 	return golem.DefineModel(
 		golem.GraphQL[Session](golem.GraphQLHidden()),
+		golem.Subscriptions[Session](),
 		golem.RelationOptions(Sessions.User).OnDelete(golem.Cascade),
 	)
 }

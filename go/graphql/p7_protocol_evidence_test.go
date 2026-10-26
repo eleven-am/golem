@@ -130,7 +130,7 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 	})
 
 	t.Run("active operations", func(t *testing.T) {
-		server, _ := newProtocolServer(t, events.Limits{MaxSubscriptionsPerConnection: 1})
+		server, stream := newProtocolServer(t, events.Limits{MaxSubscriptionsPerConnection: 1})
 		host := httptest.NewServer(server.Handler())
 		defer host.Close()
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
@@ -145,8 +145,18 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 		payload := json.RawMessage(`{"query":"subscription { ticks }"}`)
 		writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: payload})
 		writeWS(t, connection, wsMessage{ID: "two", Type: "subscribe", Payload: payload})
-		if code := readCloseCode(t, connection); code != 4400 {
-			t.Fatalf("operation-limit close=%d", code)
+		refused := readWS(t, connection)
+		var failures []Error
+		if err := json.Unmarshal(refused.Payload, &failures); err != nil || refused.ID != "two" || refused.Type != "error" || len(failures) != 1 || failures[0].Extensions["code"] != string(events.CodeSubscriptionLimit) {
+			t.Fatalf("operation-limit message=%#v payload=%s err=%v", refused, refused.Payload, err)
+		}
+		writeWS(t, connection, wsMessage{Type: "ping"})
+		if pong := readWS(t, connection); pong.Type != "pong" {
+			t.Fatalf("connection did not survive the operation limit: %#v", pong)
+		}
+		stream.values <- Response{Data: map[string]any{"ticks": int32(3)}}
+		if next := readWS(t, connection); next.ID != "one" || next.Type != "next" || !strings.Contains(string(next.Payload), `"ticks":3`) {
+			t.Fatalf("admitted operation did not survive the limit: %#v", next)
 		}
 	})
 }

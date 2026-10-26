@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
@@ -168,7 +169,7 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	opCtx, observation := observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
-	source, err := subscribeSafely(executor, opCtx, principal, prepared.Operation)
+	source, err := server.subscribe(executor, opCtx, principal, prepared.Operation)
 	if err != nil {
 		finishGraphQLChild(observation, err)
 		refuse(writer, PresentError(opCtx, err, nil, server.config.ReportInternalError))
@@ -192,6 +193,8 @@ func refuseSSE(writer http.ResponseWriter, failures ...Error) {
 			status = http.StatusUnauthorized
 		case "FORBIDDEN":
 			status = http.StatusForbidden
+		case string(events.CodeSubscriptionLimit):
+			status = http.StatusTooManyRequests
 		case "INTERNAL_SERVER_ERROR":
 			status = http.StatusInternalServerError
 		case "SERVICE_UNAVAILABLE":

@@ -36,6 +36,36 @@ func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policy
 	return normalize.Condition(row)
 }
 
+func CallerReach(policies PolicySet, model policyir.ModelID, where *policyir.Condition, maxDepth int) (policyir.Condition, *policyir.Condition, error) {
+	if maxDepth < 0 {
+		return policyir.Condition{}, nil, fail(CodeLimit, model, policyir.FieldID{}, "relation policy depth limit is invalid", nil)
+	}
+	expander := newPolicyExpander(policies, maxDepth)
+	row, err := expander.model(model, 0)
+	if err != nil {
+		return policyir.Condition{}, nil, err
+	}
+	row, err = normalize.Condition(row)
+	if err != nil {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "read row constraint could not be normalized", err)
+	}
+	if where == nil {
+		return row, nil, nil
+	}
+	if where.ModelID() != model {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "caller predicate is rooted at a different model", nil)
+	}
+	expanded, err := expander.condition(*where, 0)
+	if err != nil {
+		return policyir.Condition{}, nil, err
+	}
+	expanded, err = normalize.Condition(expanded)
+	if err != nil {
+		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "caller predicate could not be normalized", err)
+	}
+	return row, &expanded, nil
+}
+
 func ReadLens(policies PolicySet, model policyir.ModelID, maxDepth int) classify.Reach {
 	if maxDepth <= 0 {
 		maxDepth = DefaultLimits().MaxRelationDepth

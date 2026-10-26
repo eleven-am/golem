@@ -316,6 +316,7 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tserver, err := golemgraphql.NewServer(golemGeneratedGraphQLSDL, golemgraphql.Config[P]{\n")
 	body.WriteString("\t\tPrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection, WebSocketInit: config.WebSocketInit, EventLimits: app.runtime.EventLimits(),\n")
 	body.WriteString("\t\tContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable, Observer: app.observer, Provider: app.provider,\n")
+	body.WriteString("\t\tSubscriptionRecheck: config.SubscriptionRecheck,\n")
 	body.WriteString("\t}, executor)\n")
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint(), shutdown: server.Shutdown}, nil\n")

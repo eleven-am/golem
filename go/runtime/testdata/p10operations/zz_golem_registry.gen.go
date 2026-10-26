@@ -72,26 +72,27 @@ func GolemGeneratedApplicationEventFactories() (golemruntime.EventFactoryRegistr
 }
 
 type Config[P any] struct {
-	Database               *provider.Database
-	Embeddings             embedding.Registry
-	Queue                  *golemruntime.QueueConfig
-	ReadLimits             golemruntime.ReadLimits
-	MutationLimits         golemruntime.MutationLimits
-	AnalyticsLimits        golemruntime.AnalyticsLimits
-	EventLimits            events.Limits
-	EventTransport         events.EventTransport
-	Observer               observe.Observer
-	CDCAdapters            []events.CDCAdapter
-	ReportEventOperator    events.OperatorAudit
-	HistoricalEventBundles []golem.SchemaBundle
-	AfterCommitError       func(context.Context, golem.AfterCommitFailure)
-	AuditPrincipal         func(P) string
-	ReportScopedQuery      func(context.Context, golem.ScopedAuditRecord)
-	ResolvePrincipal       func(context.Context, P) (Actor, error)
-	SnapshotPrincipal      func(P) (P, error)
-	SnapshotActor          func(Actor) (Actor, error)
-	PolicyCache            golemruntime.PolicyCacheConfig
-	PolicyCacheKey         func(Actor) (string, bool)
+	Database                 *provider.Database
+	Embeddings               embedding.Registry
+	Queue                    *golemruntime.QueueConfig
+	ReadLimits               golemruntime.ReadLimits
+	MutationLimits           golemruntime.MutationLimits
+	AnalyticsLimits          golemruntime.AnalyticsLimits
+	EventLimits              events.Limits
+	EventTransport           events.EventTransport
+	Observer                 observe.Observer
+	CDCAdapters              []events.CDCAdapter
+	ReportEventOperator      events.OperatorAudit
+	HistoricalEventBundles   []golem.SchemaBundle
+	AfterCommitError         func(context.Context, golem.AfterCommitFailure)
+	AuditPrincipal           func(P) string
+	ReportScopedQuery        func(context.Context, golem.ScopedAuditRecord)
+	ResolvePrincipal         func(context.Context, P) (Actor, error)
+	SnapshotPrincipal        func(P) (P, error)
+	SnapshotActor            func(Actor) (Actor, error)
+	PolicyCache              golemruntime.PolicyCacheConfig
+	PolicyCacheKey           func(Actor) (string, bool)
+	SubscriptionPrincipalKey func(P) (string, bool)
 }
 
 type App[P any] struct {
@@ -530,6 +531,7 @@ func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemr
 	engineConfig.SnapshotActor = config.SnapshotActor
 	engineConfig.PolicyCache = config.PolicyCache
 	engineConfig.PolicyCacheKey = config.PolicyCacheKey
+	engineConfig.SubscriptionPrincipalKey = config.SubscriptionPrincipalKey
 	engine, err := golemruntime.Open(ctx, engineConfig)
 	if err != nil {
 		return nil, err

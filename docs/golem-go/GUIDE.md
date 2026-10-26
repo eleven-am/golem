@@ -254,7 +254,19 @@ runs, the delete fails with `CONFLICT` and nothing changes; retry it. It emits
 a change event for each affected row: a deleted event for every cascaded row and an
 updated event for every cleared reference, in the same transaction as the
 delete. Each subscriber still receives only the events its own read policy
-allows. A delete whose cascade would touch more rows than
+allows. A delete event is judged against the deleted row's stored snapshot
+and, for each related parent its policy reaches, against the state that
+parent had before the transaction. A parent the same transaction also deleted
+is judged from its own delete snapshot. A parent the same transaction created
+or updated, or whose state cannot be established exactly, ends that
+subscriber's stream with `GOLEM_SUBSCRIPTION_RESYNC` instead of guessing;
+reload and subscribe again. A parent changed by a later transaction, before
+the event was delivered, is judged on its state at delivery, as created and
+updated events are; when the event publisher falls behind, that window grows
+with the backlog. A delete delivered from a CDC source has no recorded
+transaction to consult, so a policy whose verdict depends on a related parent
+ends the stream with `GOLEM_SUBSCRIPTION_RESYNC`, while a policy decided by
+the row's own fields still decides it exactly. A delete whose cascade would touch more rows than
 `MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
 
 On PostgreSQL, concurrent writes that touch the same rows do not deadlock. One
