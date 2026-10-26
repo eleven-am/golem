@@ -20,6 +20,7 @@ type writeReachCase struct {
 	policies func(reachHandles) reachPolicies
 	write    func(context.Context, *Caller[testPrincipal, testActor], schematest.Fixture, reachHandles, reachPost) error
 	expect   func(reachPost) writeReachOutcome
+	nested   bool
 }
 
 func writeReachUUID(text string) golem.UUID {
@@ -78,13 +79,16 @@ func updateWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], 
 }
 
 func upsertWrite(ctx context.Context, caller *Caller[testPrincipal, testActor], fixture schematest.Fixture, handles reachHandles, post reachPost) error {
-	create := golem.GeneratedCreateInput[testPost](fixture.Post,
+	values := []golem.CreateValue[testPost]{
 		golem.GeneratedCreateFieldValue(fixture.Post, handles.postID, writeReachUUID(post.id)),
-		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.UUID](fixture.AuthorID), writeReachUUID(*post.author)),
 		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, int64](fixture.PostBigInt), int64(0)),
 		golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.Decimal](fixture.PostDecimal), writeReachDecimal()),
 		golem.GeneratedCreateFieldValue(fixture.Post, handles.title, "allowed-created"),
-	)
+	}
+	if post.author != nil {
+		values = append(values, golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[testPost, golem.UUID](fixture.AuthorID), writeReachUUID(*post.author)))
+	}
+	create := golem.GeneratedCreateInput[testPost](fixture.Post, values...)
 	_, err := CallerUpsert(ctx, caller, handles.posts, writeReachTarget(fixture, post), create, golem.GeneratedUpdateInput[testPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, handles.title, post.title+"-mask")))
 	return err
 }
@@ -145,8 +149,8 @@ func writeReachCases() []writeReachCase {
 			}
 			return writeReachOutcome{code: golem.CodeForbidden, reason: golem.ReasonNotGranted}
 		}},
-		{name: "NestedDisjointDelete", policies: disjointDelete, write: nestedDeleteWrite, expect: readableAndMatching("mask")},
-		{name: "NestedUnconditionalUpdate", policies: unconditionalUpdate, write: nestedUpdateWrite, expect: readable},
+		{name: "NestedDisjointDelete", policies: disjointDelete, write: nestedDeleteWrite, expect: readableAndMatching("mask"), nested: true},
+		{name: "NestedUnconditionalUpdate", policies: unconditionalUpdate, write: nestedUpdateWrite, expect: readable, nested: true},
 		{name: "MissingDeleteGrant", policies: writeReachPostPolicies(readAllowedPrefix, func(reachHandles, *golem.Rules[testPost]) {}), write: deleteWrite, expect: func(reachPost) writeReachOutcome {
 			return writeReachOutcome{code: golem.CodeForbidden, reason: golem.ReasonNotGranted}
 		}},
@@ -232,6 +236,9 @@ func TestExistingRowWritesPlanOverReadReachAcrossProviders(t *testing.T) {
 				t.Run(candidate.name, func(t *testing.T) {
 					for _, post := range reachPosts {
 						post := post
+						if candidate.nested && post.author == nil {
+							continue
+						}
 						t.Run(post.title+"_"+post.id[len(post.id)-2:], func(t *testing.T) {
 							ctx := context.Background()
 							target := open(t)
