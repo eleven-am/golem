@@ -302,8 +302,12 @@ func receiveP7Event(t *testing.T, stream golem.EventStream[p7EventOracleValue]) 
 
 func newP7EventRuntimeFixture(t *testing.T) p7EventRuntimeFixture {
 	t.Helper()
+	return newP7EventRuntimeFixtureWith(t, schematest.NewSubscribedIndexed(t), nil)
+}
+
+func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture, postRead func(golem.TextField[p7EventPost, string]) golem.Predicate[p7EventPost]) p7EventRuntimeFixture {
+	t.Helper()
 	ctx := context.Background()
-	schemaFixture := schematest.NewSubscribedIndexed(t)
 	provider := sqlite.New()
 	database, _, err := provider.Open(ctx, "file:"+t.TempDir()+"/p7-events.db")
 	if err != nil {
@@ -343,7 +347,9 @@ func newP7EventRuntimeFixture(t *testing.T) p7EventRuntimeFixture {
 	})
 	allowPosts := golem.GeneratedPolicyBinding[p7EventActor, p7EventPost](schemaFixture.Post, func(actor p7EventActor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[p7EventPost]()
-		if actor.Allow {
+		if actor.Allow && postRead != nil {
+			rules.CanRead(postRead(golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle)))
+		} else if actor.Allow {
 			rules.CanRead(golem.All[p7EventPost]())
 		}
 		return rules.Freeze(schemaFixture.Post)
@@ -427,7 +433,11 @@ func (fixture p7EventRuntimeFixture) noticeWithDeleteState(t *testing.T, action 
 	if action == golem.EventDeleted {
 		var storedScalars []policyir.FieldID
 		if deleteState == mutationir.DeleteSnapshotStoredScalars {
-			storedScalars = []policyir.FieldID{policyir.FieldID(fixture.schema.PostID), policyir.FieldID(fixture.schema.AuthorID), policyir.FieldID(fixture.schema.PostTitle)}
+			model, _ := fixture.schema.Registry.Model(fixture.schema.Post)
+			_, declared, _ := model.EventSchema()
+			for _, field := range declared {
+				storedScalars = append(storedScalars, policyir.FieldID(field))
+			}
 		}
 		requirement, err = mutationir.NewDeleteFactRequirement(
 			[]policyir.FieldID{policyir.FieldID(fixture.schema.PostID)}, deleteState, storedScalars,

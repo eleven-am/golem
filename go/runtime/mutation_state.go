@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
@@ -53,6 +54,7 @@ type mutationState struct {
 	markIndex  map[semanticMarkIdentity]struct{}
 	after      []mutationAfterCommit
 	invalidate func()
+	observer   events.Observer
 
 	binding    *executionBinding
 	registry   *schema.Registry
@@ -362,6 +364,12 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	if state == nil {
 		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_STATE: transaction state is unavailable")
 	}
+	var oversized *mutationDeleteSnapshotOversize
+	defer func() {
+		if oversized != nil {
+			events.Observe(oversized.observer, ctx, oversized.model, golem.EventDeleted, events.ObservationDeleteSnapshotOversize, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, oversized.limit, 0, int64(oversized.bytes))
+		}
+	}()
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.flushed || state.finished {
@@ -391,9 +399,20 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
+	var dropped *mutationDeleteSnapshotOversize
+	if limit := state.deleteSnapshotLimit(); len(row.DeleteSnapshot) > limit {
+		dropped = &mutationDeleteSnapshotOversize{observer: state.observer, model: golem.ModelID(envelope.ModelID()), limit: limit, bytes: len(row.DeleteSnapshot)}
+		if envelope, err = envelope.WithUnverifiableDeleteSnapshot(); err != nil {
+			return mutationfact.OutboxRow{}, err
+		}
+		if row, err = envelope.OutboxRow(recordedAt); err != nil {
+			return mutationfact.OutboxRow{}, err
+		}
+	}
 	if row.EncodedBytes() > state.limits.outboxBytes-state.bytes {
 		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_LIMIT: outbox bytes exceed %d", state.limits.outboxBytes)
 	}
+	oversized = dropped
 	state.ordinal = ordinal
 	state.bytes += row.EncodedBytes()
 	state.facts = append(state.facts, cloneOutboxRow(row))
@@ -401,6 +420,20 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	state.registry = registry
 	state.dirty = true
 	return cloneOutboxRow(row), nil
+}
+
+type mutationDeleteSnapshotOversize struct {
+	observer events.Observer
+	model    golem.ModelID
+	limit    int
+	bytes    int
+}
+
+func (state *mutationState) deleteSnapshotLimit() int {
+	if state.limits.deleteSnapshotBytes == 0 {
+		return DefaultMutationDeleteSnapshotBytes
+	}
+	return state.limits.deleteSnapshotBytes
 }
 
 // appendOutboxRow is the runtime integration seam for already encoded facts.

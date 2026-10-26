@@ -178,7 +178,15 @@ func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake 
 	return newFixtureWithDeleteAction(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, compilerir.ActionRestrict, compilerir.ModelID(id(1)))
 }
 
+func NewSubscribedIndexedWithFullDeleteSnapshot(t testing.TB) Fixture {
+	return newFixtureWithDeleteSnapshot(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, false, false, false, compilerir.ActionRestrict, compilerir.ModelID(id(1)), true)
+}
+
 func newFixtureWithDeleteAction(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID) Fixture {
+	return newFixtureWithDeleteSnapshot(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, deleteAction, user, false)
+}
+
+func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID, fullPostDeleteSnapshot bool) Fixture {
 	t.Helper()
 	post := compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
@@ -283,7 +291,16 @@ func newFixtureWithDeleteAction(t testing.TB, userMaxTake, postMaxTake uint32, m
 			compilerir.FieldContractIR{FieldID: postNullableText}, compilerir.FieldContractIR{FieldID: postBytes},
 			compilerir.FieldContractIR{FieldID: postJSON}, compilerir.FieldContractIR{FieldID: postList}, compilerir.FieldContractIR{FieldID: postDateTime})
 	}
-	normalizeSubscribedEvents(t, model, &contract)
+	var declared map[compilerir.ModelID][]compilerir.FieldID
+	if fullPostDeleteSnapshot {
+		declared = map[compilerir.ModelID][]compilerir.FieldID{}
+		for _, field := range model.Models[1].Fields {
+			if field.Kind != compilerir.FieldRelation && field.Scalar != nil {
+				declared[post] = append(declared[post], field.ID)
+			}
+		}
+	}
+	normalizeDeclaredSubscribedEvents(t, model, &contract, declared)
 
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
