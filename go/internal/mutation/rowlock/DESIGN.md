@@ -7,8 +7,8 @@ place when the design changes.
 
 On PostgreSQL every transaction keeps one ordered lock ledger (`Ledger`). Every
 row a write reads in order to change it, every foreign-key parent it relies on,
-and every upsert selector guard is locked through the ledger, in one total order,
-before the write's statements run. SQLite runs one writer at a time and takes no
+every upsert selector guard and every application lock key is locked through
+the ledger, in one total order, before the write's statements run. SQLite runs one writer at a time and takes no
 row locks.
 
 ## Why
@@ -36,8 +36,9 @@ timeout behind the victims, so throughput collapsed under contention.
 
 ## Protocol
 
-1. **Order.** A key is `(model ID, encoded primary identity)`; upsert guards sort
-   before every row. `strongestSorted` merges duplicate keys, keeping the
+1. **Order.** A key is `(model ID, encoded primary identity)`; upsert guards
+   (prefix `\x00\x00`) sort first, application lock keys (`\x00\x01`) next,
+   and rows (`\x01`) last. `strongestSorted` merges duplicate keys, keeping the
    stronger mode. `plan` decides, from the keys the transaction already holds,
    which keys still need a lock and whether each may wait.
 2. **One lock statement shape.** Every row lock is
@@ -103,7 +104,20 @@ timeout behind the victims, so throughput collapsed under contention.
    guard is acquired blocking only while the transaction holds no row, and
    otherwise with `pg_try_advisory_xact_lock` (failure is `CONTENTION` →
    `CONFLICT`).
-8. **Savepoints.** `Mark` records the ledger length when a savepoint opens;
+8. **Application lock keys** (`LockKeys` on a transaction, `Session.LockApp`)
+   are transaction advisory locks on the two-int4 key formed from the first 64
+   bits of SHA-256 of the order string, a key space disjoint from the guards'
+   single-bigint keys. Two keys whose digests collide share one advisory lock:
+   that can add a wait, or form a cycle that PostgreSQL detects as a deadlock
+   and that is reported as `CONFLICT`. The keys of one call are sorted,
+   recorded with `Mode=Update`, and taken by `plan`'s rule: blocking with
+   `pg_advisory_xact_lock` while nothing held sorts after the key, otherwise
+   with `pg_try_advisory_xact_lock` (failure is `CONTENTION` → `CONFLICT`). A
+   blocking wait can still deadlock with a wait the ledger does not track, such
+   as a unique-index check on a row another transaction inserted; PostgreSQL
+   aborts one transaction and the lock call reports `CONFLICT`. SQLite
+   validates the keys and takes no lock.
+9. **Savepoints.** `Mark` records the ledger length when a savepoint opens;
    `RollbackTo` removes, or restores the previous mode of, every key acquired
    after it, because PostgreSQL releases those locks on rollback to the
    savepoint.

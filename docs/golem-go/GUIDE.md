@@ -344,6 +344,48 @@ time. Do slow work that doesn't touch the database before you open the
 transaction, and hand background work to the queue, or to a fresh caller after
 commit.
 
+### Lock keys serialize check-then-write
+
+A transaction that counts or reads rows and then writes based on what it saw,
+such as "insert only while fewer than N exist", races another transaction doing
+the same: both read the old state and both write. Take a lock key first:
+
+```go
+err := caller.Transaction(ctx, func(tx *notes.CallerTx[Principal]) error {
+	if err := tx.LockKeys(ctx, golem.MustLockKey("note-quota", authorID.String())); err != nil {
+		return err
+	}
+	count, err := tx.Notes.Count(ctx, notes.Notes.Where(notes.Notes.AuthorID.Eq(authorID)))
+	if err != nil || count >= limit {
+		return err
+	}
+	_, err = tx.Notes.Create(ctx, input)
+	return err
+})
+```
+
+`golem.NewLockKey(namespace, parts...)` builds a key from a non-empty namespace
+and non-empty parts, all valid UTF-8 and at most 256 bytes together;
+`MustLockKey` panics instead of returning the error. `LockKeys` is on both
+`CallerTx` and `SystemTx`, applies no policy, and holds the keys until the
+transaction commits or rolls back. On PostgreSQL it uses transaction advisory
+locks, so it works across replicas; a second transaction locking the same key
+waits until the first finishes. Keys passed in one call are taken in a fixed
+order, so two transactions passing the same keys in different orders do not
+deadlock. On SQLite, where one writer runs at a time, `LockKeys` only validates
+the keys.
+
+Take lock keys first, before any write in the transaction. Taken after an
+update, delete or upsert has locked a row, a key cannot wait: it fails at once
+with `CONFLICT` when another transaction holds it, for the same reason as rows
+written out of order. Taken after a plain create, a key may still wait, and
+that wait can deadlock with another transaction blocked on the row you
+inserted; PostgreSQL aborts one of the two, and if it is yours, `LockKeys`
+returns `CONFLICT`. A cancelled context while waiting also returns `CONFLICT`,
+wrapping the context's error. After a cancelled wait, or a deadlock that
+PostgreSQL resolved against you, the transaction cannot be used any further, so
+return the error from your callback and retry the whole transaction.
+
 ### Mutations return only what you select
 
 This is the API's sharpest edge. A mutation returns a `Row` containing

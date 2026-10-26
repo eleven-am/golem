@@ -62,7 +62,7 @@ func seamCall(expression ast.Expr, handle string) bool {
 	if !ok {
 		return false
 	}
-	if unpack, ok := call.Fun.(*ast.Ident); ok && unpack.Name == "foundRow" && len(call.Args) == 1 {
+	if unpack, ok := call.Fun.(*ast.Ident); ok && (unpack.Name == "foundRow" || unpack.Name == "operationErr") && len(call.Args) == 1 {
 		return seamCall(call.Args[0], handle)
 	}
 	name, ok := call.Fun.(*ast.Ident)
@@ -323,6 +323,18 @@ func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnv
 			}); err != nil {
 				t.Fatal(err)
 			}
+		},
+		"CallerTxLockKeys": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.text(t)
+			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
+				return CallerTxLockKeys(ctx, tx, golem.MustLockKey("wrapper", "caller"))
+			})
+		},
+		"SystemTxLockKeys": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.text(t)
+			inWrapperSystemTransaction(t, fixture, func(ctx context.Context, tx *wrapperSystemTx) error {
+				return SystemTxLockKeys(ctx, tx, golem.MustLockKey("wrapper", "system"))
+			})
 		},
 		"SystemTxEnqueue": func(t *testing.T, environment *transactionWrapperEnvironment) {
 			fixture, jobType := environment.queued(t)
