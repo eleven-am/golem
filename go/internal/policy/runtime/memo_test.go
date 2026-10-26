@@ -243,3 +243,21 @@ func TestMemoIsConcurrencySafe(t *testing.T) {
 		t.Fatalf("memo size %d want %d", size, len(actions))
 	}
 }
+
+func TestMemoBypassesAggregateViews(t *testing.T) {
+	fixture := newRuntimeOperationFixture(t)
+	var calls atomic.Int64
+	key := MemoKey{Kind: MemoRowConstraint, Model: fixture.user, Action: policyir.ActionRead}
+	if _, served, err := fixture.set.Memoized(key, memoRowCompute(fixture.user, policyir.ActionRead, &calls)); !served || err != nil {
+		t.Fatal(err)
+	}
+	view, release := fixture.set.Within(fixture.rename)
+	aggregate := view.AggregateView()
+	release()
+	if _, served, _ := view.Memoized(key, memoRowCompute(fixture.user, policyir.ActionRead, &calls)); !served {
+		t.Fatal("a released scoped view did not answer from the base memo")
+	}
+	if _, served, _ := aggregate.Memoized(key, memoRowCompute(fixture.user, policyir.ActionRead, &calls)); served {
+		t.Fatal("an aggregate view answered from the base memo")
+	}
+}
