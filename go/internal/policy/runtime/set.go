@@ -28,6 +28,7 @@ type Set struct {
 	operation  golem.OperationID
 	scope      *operationScope
 	lease      *Lease
+	memo       *memo
 }
 
 type lazyPolicy struct {
@@ -257,7 +258,7 @@ func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
 		root = set.root
 	}
 	scope := &operationScope{order: operationScopeOrder.Add(1)}
-	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope}
+	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope, memo: root.memo}
 	return scoped, scope.release
 }
 
@@ -298,7 +299,7 @@ func (set *Set) RecordGrant(model ir.ModelID, action ir.Action, field *ir.FieldI
 	}
 	base, operations, ok := entry.resolve()
 	scoped, present := operations[set.operation]
-	if !ok || !present || !grantAddsNothing(scoped, base, action, model, field) {
+	if !ok || !present || !set.grantAddsNothing(scoped, base, action, model, field) {
 		set.lease.used.Store(true)
 	}
 }
@@ -376,7 +377,9 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 			return buildModelPolicy(shared, resolver, providers, model)
 		}}
 	}
-	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}, nil
+	set := &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}
+	set.memo = &memo{owner: set}
+	return set, nil
 }
 
 func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (ir.Policy, map[golem.OperationID]ir.Policy, error) {

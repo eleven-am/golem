@@ -7,6 +7,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/classify"
 	"github.com/eleven-am/golem/go/internal/policy/imply"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
@@ -15,6 +17,56 @@ func WriteReach(policies PolicySet, model policyir.ModelID, condition policyir.C
 		return policyir.Condition{}, fmt.Errorf("write reach requires caller policies")
 	}
 	return readplan.ReachWithin(policies, model, condition, readDepth)
+}
+
+func RowConstraint(policies PolicySet, policy policyir.Policy, action policyir.Action, model policyir.ModelID) (policyir.Condition, error) {
+	return readplan.RowConstraint(policies, policy, action, model)
+}
+
+func FieldCondition(policies PolicySet, policy policyir.Policy, action policyir.Action, model policyir.ModelID, field policyir.FieldID) (policyir.Condition, error) {
+	return readplan.FieldCondition(policies, policy, action, model, field)
+}
+
+func RowReach(policies PolicySet, model policyir.ModelID, action policyir.Action, row policyir.Condition, readDepth int) (policyir.Condition, error) {
+	if policies == nil {
+		return WriteReach(policies, model, row, readDepth)
+	}
+	depth := readplan.ReachDepth(readDepth)
+	key := policyruntime.MemoKey{Kind: policyruntime.MemoWriteRowReach, Model: model, Action: action, Depth: depth}
+	return readplan.Memoize(policies, key, func(source readplan.PolicySet) (policyir.Condition, error) {
+		policy, ok := source.Policy(model)
+		if !ok {
+			return policyir.Condition{}, fmt.Errorf("write reach policy is absent")
+		}
+		row, err := resolve.RowConstraint(policy, action, model)
+		if err != nil {
+			return policyir.Condition{}, err
+		}
+		return readplan.ReachWithin(source, model, row, depth)
+	}, func() (policyir.Condition, error) {
+		return WriteReach(policies, model, row, readDepth)
+	})
+}
+
+func FieldReach(policies PolicySet, model policyir.ModelID, action policyir.Action, field policyir.FieldID, condition policyir.Condition, readDepth int) (policyir.Condition, error) {
+	if policies == nil {
+		return WriteReach(policies, model, condition, readDepth)
+	}
+	depth := readplan.ReachDepth(readDepth)
+	key := policyruntime.MemoKey{Kind: policyruntime.MemoWriteFieldReach, Model: model, Action: action, Field: field, Depth: depth}
+	return readplan.Memoize(policies, key, func(source readplan.PolicySet) (policyir.Condition, error) {
+		policy, ok := source.Policy(model)
+		if !ok {
+			return policyir.Condition{}, fmt.Errorf("write reach policy is absent")
+		}
+		condition, err := resolve.FieldCondition(policy, action, model, field)
+		if err != nil {
+			return policyir.Condition{}, err
+		}
+		return readplan.ReachWithin(source, model, condition, depth)
+	}, func() (policyir.Condition, error) {
+		return WriteReach(policies, model, condition, readDepth)
+	})
 }
 
 func WriteLens(policies PolicySet, model policyir.ModelID, readDepth int) classify.Reach {
@@ -26,6 +78,18 @@ func ExistingConstraint(policies PolicySet, model policyir.ModelID, row policyir
 	if err != nil {
 		return policyir.Condition{}, err
 	}
+	return existingConstraint(policies, model, expanded, fields, readDepth, position)
+}
+
+func ExistingActionConstraint(policies PolicySet, model policyir.ModelID, action policyir.Action, row policyir.Condition, fields []policyir.FieldID, readDepth int, position ...policyir.Condition) (policyir.Condition, error) {
+	expanded, err := RowReach(policies, model, action, row, readDepth)
+	if err != nil {
+		return policyir.Condition{}, err
+	}
+	return existingConstraint(policies, model, expanded, fields, readDepth, position)
+}
+
+func existingConstraint(policies PolicySet, model policyir.ModelID, expanded policyir.Condition, fields []policyir.FieldID, readDepth int, position []policyir.Condition) (policyir.Condition, error) {
 	base, err := conjoin(model, append([]policyir.Condition{expanded}, position...)...)
 	if err != nil {
 		return policyir.Condition{}, err
@@ -98,8 +162,4 @@ func ActionName(action policyir.Action) string {
 
 func failReason(code ErrorCode, reason golem.Reason, request RootRequest, field policyir.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Reason: reason, Operation: request.Operation, Model: request.Model, Field: field, Detail: detail, Cause: cause}
-}
-
-func (request RootRequest) writeReach(condition policyir.Condition) (policyir.Condition, error) {
-	return WriteReach(request.Policies, request.Model, condition, request.ReadRelationDepth)
 }
