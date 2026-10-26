@@ -340,6 +340,7 @@ events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
 events.SuppressionDeletionUnverifiable const SuppressionReason = "deletion-unverifiable"
 events.SuppressionEntityAbsent const SuppressionReason = "entity_absent"
 events.SuppressionFiltered const SuppressionReason = "filtered"
+events.SuppressionPolicyUnavailable const SuppressionReason = "policy_unavailable"
 events.SuppressionReason comparable
 events.SuppressionReason type string
 events.SuppressionUnauthorized const SuppressionReason = "unauthorized"

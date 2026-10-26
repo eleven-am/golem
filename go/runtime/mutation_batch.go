@@ -761,6 +761,9 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 }
 
 func publicBatchPreparationError(operation mutationir.Operation, model golem.ModelID, err error) error {
+	if refused, ok := policyUnavailableOperationError(batchOperationName(operation), model, err); ok {
+		return refused
+	}
 	var planned *mutationplan.Error
 	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, batchOperationName(operation), model, golem.FieldID(planned.Field), "batch mutation is not authorized", err)

@@ -322,7 +322,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		var ok bool
 		policy, ok = policies.Policy(model)
 		if !ok {
-			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", nil)
+			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", policyAbsence(policies, model))
 		}
 		rawRow, err = resolve.RowConstraint(policy, policyir.ActionRead, model)
 	}
@@ -665,7 +665,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 	} else {
 		_, ok := policies.Policy(model)
 		if !ok {
-			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target policy is absent", nil)
+			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target policy is absent", policyAbsence(policies, model))
 		}
 		row, err = newPolicyExpander(policies, limits.MaxRelationDepth).model(model, depth)
 	}
@@ -732,7 +732,7 @@ func classifyCondition(condition policyir.Condition, registry *schema.Registry, 
 		}
 		targetPolicy, ok := policies.Policy(target)
 		if !ok {
-			return fail(CodePolicy, target, field, "relation target policy is absent", nil)
+			return fail(CodePolicy, target, field, "relation target policy is absent", policyAbsence(policies, target))
 		}
 		targetRow, err := expander.model(target, depth+1)
 		if err != nil {
@@ -807,6 +807,13 @@ func logicalNot(model policyir.ModelID, condition policyir.Condition) (policyir.
 	}
 	return normalize.Condition(result)
 }
+func policyAbsence(policies PolicySet, model policyir.ModelID) error {
+	if source, ok := policies.(interface{ PolicyError(policyir.ModelID) error }); ok {
+		return source.PolicyError(model)
+	}
+	return nil
+}
+
 func fail(code ErrorCode, model policyir.ModelID, field policyir.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Model: model, Field: field, Detail: detail, Cause: cause}
 }

@@ -16,9 +16,125 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 )
+
+func TestPolicyCacheKeysAnEntryByTheEpochCurrentAtInsertion(t *testing.T) {
+	cache, err := newPolicyCache(PolicyCacheConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int64
+	cache.now = func() time.Time {
+		if calls.Add(1) == 1 {
+			cache.epoch.Add(1)
+		}
+		return time.Unix(1_700_000_000, 0)
+	}
+	builds := 0
+	build := func() (*policyruntime.Set, error) {
+		builds++
+		return &policyruntime.Set{}, nil
+	}
+	first, err := cache.get("actor", build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.get("actor", build)
+	if err != nil || second != first || builds != 1 {
+		t.Fatalf("an entry was stored under a stale epoch: builds=%d shared=%t err=%v", builds, second == first, err)
+	}
+}
+
+func TestPolicyCacheBuildPanicIsRaisedAndNeverCached(t *testing.T) {
+	cache, err := newPolicyCache(PolicyCacheConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		_, _ = cache.get("actor", func() (*policyruntime.Set, error) {
+			close(entered)
+			<-release
+			panic("policy set build exploded")
+		})
+	}()
+	<-entered
+	type outcome struct {
+		set *policyruntime.Set
+		err error
+	}
+	waiter := make(chan outcome, 1)
+	go func() {
+		set, err := cache.get("actor", func() (*policyruntime.Set, error) { return &policyruntime.Set{}, nil })
+		waiter <- outcome{set: set, err: err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	if value := <-recovered; value != "policy set build exploded" {
+		t.Fatalf("build panic was not re-raised: %v", value)
+	}
+	waited := <-waiter
+	if waited.err == nil && waited.set == nil {
+		t.Fatal("a caller waiting on a panicked build received a nil policy set without an error")
+	}
+	if waited.err != nil && !strings.Contains(waited.err.Error(), "policy set build exploded") {
+		t.Fatalf("waiting caller error=%v", waited.err)
+	}
+	set, err := cache.get("actor", func() (*policyruntime.Set, error) { return &policyruntime.Set{}, nil })
+	if err != nil || set == nil || cache.len() != 1 {
+		t.Fatalf("a panicked build stayed cached: set=%v err=%v entries=%d", set, err, cache.len())
+	}
+}
+
+func TestPolicyCacheFailedPolicyBuildSuppressesEventsAsPolicyUnavailable(t *testing.T) {
+	fixture := newP7EventRuntimeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caller, err := fixture.app.ForPrincipal(ctx, p7EventPrincipal{Subject: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := CallerEvents[p7EventPrincipal, p7EventActor, p7EventPost, p7EventOracleValue](ctx, caller, fixture.descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	select {
+	case <-fixture.transport.subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("model hub did not subscribe to the transport")
+	}
+	users := golem.GeneratedPolicyBinding[p7EventActor, p7EventUser](fixture.schema.User, func(p7EventActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[p7EventUser]()
+		rules.CanRead(golem.All[p7EventUser]())
+		return rules.Freeze(fixture.schema.User)
+	})
+	broken := golem.GeneratedPolicyBinding[p7EventActor, p7EventPost](fixture.schema.Post, func(p7EventActor) (golem.FrozenPolicy, error) {
+		return golem.FrozenPolicy{}, errors.New("post factory refused")
+	})
+	bindings, err := golem.GeneratedApplicationBindings(fixture.schema.Bundle.GenerationDigest(), golem.GeneratedStampedPackageBindings(fixture.schema.Bundle.GenerationDigest(), []golem.PolicyBinding[p7EventActor]{users, broken}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.app.bindings = bindings
+	fixture.app.InvalidatePolicies()
+	fixture.publish(t, fixture.notice(t, golem.EventUpdated, 2300, "visible", false))
+	select {
+	case observation := <-fixture.suppressed:
+		if observation.Reason() != observe.ReasonRevalidation {
+			t.Fatalf("failed policy build suppression reason=%q", observation.Reason())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an event for a model whose policy build failed was not suppressed")
+	}
+}
 
 type policyCacheActor struct {
 	ID    int

@@ -45,7 +45,7 @@ func (expander *policyExpander) model(model policyir.ModelID, depth int) (policy
 	}
 	policy, ok := expander.policies.Policy(model)
 	if !ok {
-		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "relation target policy is absent", nil)
+		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "relation target policy is absent", policyAbsence(expander.policies, model))
 	}
 	row, err := resolve.RowConstraint(policy, policyir.ActionRead, model)
 	if err != nil {

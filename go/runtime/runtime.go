@@ -544,8 +544,8 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}
 	if _, ok := caller.policies.Policy(bound.ModelID()); !ok {
-		if cause := caller.policies.PolicyError(bound.ModelID()); cause != nil {
-			return PreparedRead{}, golem.RuntimeReadError(golem.CodeUnauthenticated, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "principal policy could not be established", cause)
+		if refused, ok := policyUnavailableReadError(operationName(request.Operation()), request.ModelID(), caller.policies.PolicyError(bound.ModelID())); ok {
+			return PreparedRead{}, refused
 		}
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read is not permitted", fmt.Errorf("model policy is absent"))
 	}
@@ -1430,6 +1430,9 @@ func enforceDecodedResultLimit(operation golem.ReadOperation, planned readplan.P
 }
 
 func publicPlanError(prepared PreparedRead, cause error) error {
+	if refused, ok := policyUnavailableReadError(operationName(prepared.Operation()), prepared.ModelID(), cause); ok {
+		return refused
+	}
 	var failure *readplan.Error
 	if errors.As(cause, &failure) && (failure.Code == readplan.CodeField || failure.Code == readplan.CodePolicy) {
 		return golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(failure.Field), "read is not permitted", cause)

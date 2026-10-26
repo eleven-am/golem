@@ -180,6 +180,9 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 		planned, err = analytics.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
 	}
 	if err != nil {
+		if refused, ok := policyUnavailableReadError("analytics", descriptor, err); ok {
+			return preparedAnalyticsStatement{}, refused
+		}
 		var fieldFailure *analytics.FieldAuthorizationError
 		if errors.As(err, &fieldFailure) {
 			return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, fieldFailure.FieldID(), fmt.Sprintf("analytics field %q is not permitted", fieldFailure.LogicalName()), err)

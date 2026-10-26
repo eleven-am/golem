@@ -688,6 +688,9 @@ func verifyScalarMutationProjectionImage(planned readplan.Plan, source scalarMut
 }
 
 func publicMutationPreparationError(operation mutationir.Operation, model golem.ModelID, err error) error {
+	if refused, ok := policyUnavailableOperationError(scalarMutationOperationName(operation), model, err); ok {
+		return refused
+	}
 	var planned *mutationplan.Error
 	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID(planned.Field), "mutation is not authorized", err)

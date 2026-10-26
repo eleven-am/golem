@@ -40,6 +40,13 @@ func (failure *Error) Error() string {
 
 func (failure *Error) Unwrap() error { return failure.Cause }
 
+func PolicyAbsence(policies PolicySet, model policyir.ModelID) error {
+	if source, ok := policies.(interface{ PolicyError(policyir.ModelID) error }); ok {
+		return source.PolicyError(model)
+	}
+	return nil
+}
+
 func fail(code ErrorCode, request RootRequest, field policyir.FieldID, detail string, cause error) error {
 	return &Error{Code: code, Operation: request.Operation, Model: request.Model, Field: field, Detail: detail, Cause: cause}
 }

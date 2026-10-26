@@ -48,7 +48,7 @@ func (entry *lazyPolicy) resolve() (ir.Policy, map[golem.OperationID]ir.Policy, 
 			if recovered := recover(); recovered != nil {
 				entry.policy, entry.operations = ir.Policy{}, nil
 				entry.panicked = recoveredPolicyPanic{value: recovered}
-				entry.err = fmt.Errorf("P2_RUNTIME_FACTORY: policy factory panicked")
+				entry.err = fmt.Errorf("P2_RUNTIME_FACTORY: policy factory panicked: %v", recovered)
 			}
 			entry.build = nil
 		}()
@@ -66,6 +66,8 @@ func (entry *lazyPolicy) resolve() (ir.Policy, map[golem.OperationID]ir.Policy, 
 // ErrOperationEnded refuses a commit whose write used Within grants after the
 // operation that owned those grants ended.
 var ErrOperationEnded = errors.New("P5_CUSTOM_OPERATION: the operation that authorised this write has ended")
+
+var ErrPolicyUnavailable = errors.New("P2_RUNTIME_POLICY_UNAVAILABLE: principal policy could not be established")
 
 var operationScopeOrder atomic.Uint64
 
@@ -239,7 +241,7 @@ func (set *Set) PolicyError(model ir.ModelID) error {
 	if _, _, ok := entry.resolve(); ok {
 		return nil
 	}
-	return entry.err
+	return fmt.Errorf("%w: %w", ErrPolicyUnavailable, entry.err)
 }
 
 // Within returns the policy set of one running custom mutation: the caller's

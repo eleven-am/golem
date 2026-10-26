@@ -31,7 +31,7 @@ func BuildRoot(request RootRequest) (mutationir.Plan, error) {
 		var ok bool
 		policy, ok = request.Policies.Policy(request.Model)
 		if !ok {
-			return mutationir.Plan{}, fail(CodePolicy, request, policyir.FieldID{}, "caller policy is absent for model", nil)
+			return mutationir.Plan{}, fail(CodePolicy, request, policyir.FieldID{}, "caller policy is absent for model", PolicyAbsence(request.Policies, request.Model))
 		}
 	}
 

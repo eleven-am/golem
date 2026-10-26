@@ -111,7 +111,7 @@ func TestLazyBuildFactoryPanicIsRaisedOnceAndRefusesAfter(t *testing.T) {
 			t.Fatalf("later caller panic=%v ok=%t", value, ok)
 		}
 	}
-	if err := runtimePolicyError(t, fixture.set, fixture.post); err == nil || !strings.Contains(err.Error(), "panicked") {
+	if err := runtimePolicyError(t, fixture.set, fixture.post); err == nil || !strings.Contains(err.Error(), "panicked") || !strings.Contains(err.Error(), "post factory exploded") || !errors.Is(err, ErrPolicyUnavailable) {
 		t.Fatalf("recorded panic error=%v", err)
 	}
 	if fixture.postCalls.Load() != 1 {

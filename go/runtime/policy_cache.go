@@ -3,6 +3,7 @@ package runtime
 import (
 	"container/list"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -10,8 +11,25 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 )
+
+const policyUnavailableMessage = "principal policy could not be established"
+
+func policyUnavailableReadError(operation string, model golem.ModelID, cause error) (error, bool) {
+	if !errors.Is(cause, policyruntime.ErrPolicyUnavailable) {
+		return nil, false
+	}
+	return golem.RuntimeReadError(golem.CodeUnauthenticated, operation, model, golem.FieldID{}, policyUnavailableMessage, cause), true
+}
+
+func policyUnavailableOperationError(operation string, model golem.ModelID, cause error) (error, bool) {
+	if !errors.Is(cause, policyruntime.ErrPolicyUnavailable) {
+		return nil, false
+	}
+	return golem.RuntimeOperationError(golem.CodeUnauthenticated, operation, model, golem.FieldID{}, policyUnavailableMessage, cause), true
+}
 
 type PolicyCacheConfig struct {
 	Disabled  bool
@@ -57,22 +75,35 @@ func newPolicyCache(config PolicyCacheConfig) (*policyCache, error) {
 }
 
 func (cache *policyCache) get(key string, build func() (*policyruntime.Set, error)) (*policyruntime.Set, error) {
-	key = string(binary.BigEndian.AppendUint64(nil, cache.epoch.Load())) + key
 	entry := cache.entry(key)
+	var panicked any
 	entry.once.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicked = recovered
+				entry.set, entry.err = nil, fmt.Errorf("P2_RUNTIME_FACTORY: policy set build panicked: %v", recovered)
+			}
+		}()
 		entry.set, entry.err = build()
+		if entry.set == nil && entry.err == nil {
+			entry.err = fmt.Errorf("P2_RUNTIME_FACTORY: policy set build returned no set")
+		}
 	})
 	if entry.err != nil {
 		cache.remove(entry)
+		if panicked != nil {
+			panic(panicked)
+		}
 		return nil, entry.err
 	}
 	return entry.set, nil
 }
 
-func (cache *policyCache) entry(key string) *policyCacheEntry {
+func (cache *policyCache) entry(actorKey string) *policyCacheEntry {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	now := cache.now()
+	key := string(binary.BigEndian.AppendUint64(nil, cache.epoch.Load())) + actorKey
 	if element, ok := cache.entries[key]; ok {
 		entry := element.Value.(*policyCacheEntry)
 		if cache.ttl <= 0 || now.Sub(entry.created) < cache.ttl {
