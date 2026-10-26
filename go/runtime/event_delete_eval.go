@@ -59,6 +59,7 @@ type deleteProbe struct {
 }
 
 type deleteFactCheck struct {
+	event    string
 	target   policyir.ModelID
 	identity []byte
 	depth    int
@@ -69,6 +70,8 @@ type deleteFactCheck struct {
 }
 
 type deleteEvaluation struct {
+	event      string
+	self       *deleteFactCheck
 	causation  string
 	generation golem.SchemaDigest
 	maxDepth   int
@@ -245,7 +248,7 @@ func (app *App[P, A]) eventDeleteFilter(ctx context.Context, caller *Caller[P, A
 func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact mutationfact.Envelope, identity mutationdecode.Identity) (*deleteEvaluator, error) {
 	causation := fact.CausationID()
 	shared := &deleteEvaluation{
-		causation: golem.UUID(causation).String(), generation: fact.Generation(),
+		event: golem.UUID(fact.EventID()).String(), causation: golem.UUID(causation).String(), generation: fact.Generation(),
 		maxDepth: app.readLimits.plan.MaxRelationDepth, providers: app.providers,
 		forward: func(owner policyir.ModelID, field policyir.FieldID, relation policyir.RelationID) (deleteForwardHop, bool) {
 			endpoint, ok := app.registry.ForwardToOneRelation(golem.ModelID(owner), golem.RelationID(relation))
@@ -404,6 +407,7 @@ func (evaluator *deleteEvaluator) collectAt(condition policyir.Condition, positi
 			return
 		}
 		evaluator.register(parent)
+		evaluator.registerSelf()
 		check := evaluator.registerHopCheck(target, correlation)
 		if child != nil {
 			for _, model := range deleteRelationTargets(*child) {
@@ -477,6 +481,19 @@ func (evaluator *deleteEvaluator) hopCheckKey(target policyir.ModelID, correlati
 		return target, identity, true
 	}
 	return target, nil, true
+}
+
+func (evaluator *deleteEvaluator) registerSelf() {
+	shared := evaluator.shared
+	if shared.self != nil {
+		return
+	}
+	shared.self = &deleteFactCheck{event: shared.event}
+	shared.checkOrder = append(shared.checkOrder, shared.self)
+}
+
+func (shared *deleteEvaluation) outboxSourced() bool {
+	return shared.self != nil && shared.self.answered && shared.self.present
 }
 
 func (evaluator *deleteEvaluator) registerHopCheck(target policyir.ModelID, correlation []mutationdecode.IdentityComponent) *deleteFactCheck {
@@ -659,6 +676,9 @@ func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positiv
 		}
 		return deleteTruthOf(value)
 	}
+	if !evaluator.shared.outboxSourced() {
+		return deleteUnknown
+	}
 	parentProbe, matchProbe, ok := evaluator.relationProbesFor(condition, correlation)
 	if !ok {
 		return deleteUnknown
@@ -780,7 +800,7 @@ func (app *App[P, A]) runDeleteFactChecks(ctx context.Context, caller *Caller[P,
 		check.rows = found[index]
 		check.present = len(check.rows) != 0
 		check.answered = true
-		if check.identity != nil && len(check.rows) == 1 && check.rows[0].Action == "deleted" {
+		if check.event == "" && check.identity != nil && len(check.rows) == 1 && check.rows[0].Action == "deleted" {
 			if node, ok := shared.snapshot(shared, check.target, check.rows[0], check.depth); ok {
 				check.node = node
 			}
@@ -806,10 +826,14 @@ func (app *App[P, A]) deleteFactCheckStatement(causation string, checks []*delet
 	}
 	parts := make([]string, len(checks))
 	for index, check := range checks {
-		model := fmt.Sprintf("%x", check.target[:])
-		where := `"causation_id" = ` + mark(causation) + ` AND "model_id" = ` + mark(model)
+		where := `"causation_id" = ` + mark(causation)
 		limit := 1
-		if check.identity != nil {
+		if check.event != "" {
+			where += ` AND "event_id" = ` + mark(check.event)
+		} else {
+			where += ` AND "model_id" = ` + mark(fmt.Sprintf("%x", check.target[:]))
+		}
+		if check.event == "" && check.identity != nil {
 			where += ` AND ("before_identity" = ` + mark(check.identity) + ` OR "after_identity" = ` + mark(check.identity) + `)`
 			limit = 2
 		}

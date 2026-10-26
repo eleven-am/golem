@@ -367,6 +367,7 @@ func (fixture deleteEvalFixture) publishDelete(t *testing.T, model golem.ModelID
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixture.storeRows(t, []mutationfact.OutboxRow{outbox})
 	envelope, err := eventcodec.EncodeStoredRow(outbox, fixture.app.eventSchemas, eventcodec.Limits{})
 	if err != nil {
 		t.Fatal(err)
