@@ -298,6 +298,9 @@ func renderSemanticCandidates[P, A any](app *App[P, A], prepared PreparedRead, p
 	if !prepared.system {
 		policy, present := prepared.policies.Policy(planned.ModelID())
 		if !present {
+			if refused, ok := policyUnavailableReadError(operationName(prepared.Operation()), prepared.ModelID(), prepared.policies.PolicyError(planned.ModelID())); ok {
+				return renderedSemanticCandidates{}, refused
+			}
 			return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read is not permitted", nil)
 		}
 		reach := readplan.ReadLens(prepared.policies, planned.ModelID(), app.readLimits.plan.MaxRelationDepth)

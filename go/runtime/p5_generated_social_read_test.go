@@ -467,6 +467,23 @@ func TestActiveGeneratedSocialGraphQLMatchesGeneratedGoCallerAndInvisibleUnique(
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := caller.Posts.FindMany(context.Background(), p5social.Posts.Take(1)); err != nil {
+				t.Fatal(err)
+			}
+			if cached := p5social.PolicyProbe(); len(cached) != 0 {
+				t.Fatalf("an equal actor rebuilt cached policies %v", cached)
+			}
+			h.app.InvalidatePolicies()
+			caller, err = h.app.ForPrincipal(context.Background(), principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := caller.Users.FindMany(context.Background(), p5social.Users.Take(1)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := caller.Tags.FindMany(context.Background(), p5social.Tags.Take(1)); err != nil {
+				t.Fatal(err)
+			}
 			rows, err := caller.Posts.FindMany(context.Background(), p5social.Posts.OrderBy(p5social.Posts.Title.Asc(), p5social.Posts.ID.Asc()), p5social.Posts.Take(10), p5social.Posts.Select(p5social.Posts.ID, p5social.Posts.Title))
 			if err != nil {
 				t.Fatal(err)

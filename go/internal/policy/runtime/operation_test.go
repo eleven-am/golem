@@ -225,8 +225,11 @@ func TestBuildRejectsWithinGrantForUnregisteredResolverNamingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Build(BuildRequest[runtimeActor]{Bindings: bindings, Registry: registry, Provider: policyir.ProviderSQLite, Capabilities: runtimeProof(t, registry, policyir.ProviderSQLite, allRuntimeCapabilities...)})
-	if err == nil || !strings.Contains(err.Error(), "runtimeRenameOperation") {
+	set, err := Build(BuildRequest[runtimeActor]{Bindings: bindings, Registry: registry, Provider: policyir.ProviderSQLite, Capabilities: runtimeProof(t, registry, policyir.ProviderSQLite, allRuntimeCapabilities...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimePolicyError(t, set, policyir.ModelID(fixture.user)); err == nil || !strings.Contains(err.Error(), "runtimeRenameOperation") {
 		t.Fatalf("unregistered Within error=%v", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
@@ -106,7 +107,10 @@ func TestForPrincipalSnapshotsMutableActorOnceForPoliciesHooksAndConcurrentReads
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshots.Load() != 1 || stable.Load() == source {
+	if _, ok := caller.policies.Policy(policyir.ModelID(fixture.User)); !ok {
+		t.Fatal("user policy was not established")
+	}
+	if snapshots.Load() != 1 || stable.Load() == nil || stable.Load() == source {
 		t.Fatalf("snapshot calls=%d stable=%p source=%p", snapshots.Load(), stable.Load(), source)
 	}
 

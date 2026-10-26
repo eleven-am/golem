@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	policynormalize "github.com/eleven-am/golem/go/internal/policy/normalize"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	policyresolve "github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -207,6 +209,9 @@ func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 	model := readRequest.ModelID()
 	policy, present := initial.policies.Policy(policyir.ModelID(model))
 	if !present {
+		if refused, ok := policyUnavailableReadError("events", model, initial.policies.PolicyError(policyir.ModelID(model))); ok {
+			return nil, refused
+		}
 		return nil, golem.RuntimeReadError(golem.CodeForbidden, "events", model, golem.FieldID{}, "read is not permitted", nil)
 	}
 	rowConstraint, err := policyresolve.RowConstraint(policy, policyir.ActionRead, policyir.ModelID(model))
@@ -463,6 +468,9 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 	if err != nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 	}
+	if fresh.policies.PolicyError(policyir.ModelID(state.model)) != nil {
+		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+	}
 	fact := envelope.Fact()
 	identity, ok := fact.AfterIdentity()
 	if envelope.Action() == golem.EventDeleted {
@@ -479,6 +487,9 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 	switch envelope.Action() {
 	case golem.EventCreated, golem.EventUpdated:
 		row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
+		if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
+			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+		}
 		if readErr != nil {
 			return subscription.Evaluation[any]{}, readErr
 		}

@@ -22,6 +22,7 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/generate/pipeline"
 	"github.com/eleven-am/golem/go/internal/physical"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/eleven-am/golem/go/internal/testenv"
@@ -607,13 +608,32 @@ func TestMutateRefusesAFunctionThatIsNotACustomMutationBeforeRunningAcrossProvid
 
 func TestWithinNamingANonMutationResolverFailsThePolicyBuildAcrossProviders(t *testing.T) {
 	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
-		_, err := fixture.app.ForPrincipal(context.Background(), p10operations.Principal{ID: "alpha", Valid: true, Misconfigured: true})
-		if err == nil {
-			t.Fatal("a policy scoping a grant to a query resolver was accepted")
+		caller, err := fixture.app.ForPrincipal(context.Background(), p10operations.Principal{ID: "alpha", Valid: true, Misconfigured: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := caller.Teams.FindMany(context.Background()); err != nil {
+			t.Fatalf("a misconfigured Invite policy refused another model: %v", err)
+		}
+		_, err = caller.Invites.FindMany(context.Background())
+		var public *golem.Error
+		if !errors.As(err, &public) || public.Code != golem.CodeUnauthenticated {
+			t.Fatalf("a policy scoping a grant to a query resolver was accepted: %v", err)
 		}
 		cause := errors.Unwrap(err)
 		if cause == nil || !strings.Contains(cause.Error(), "SearchInvites") || !strings.Contains(cause.Error(), "custom mutation") {
 			t.Fatalf("policy build error does not name the resolver: %v (cause %v)", err, cause)
+		}
+		ctx := context.Background()
+		refusals := map[string]error{}
+		_, refusals["count"] = caller.Invites.Count(ctx)
+		_, refusals["aggregate"] = caller.Invites.Aggregate(ctx, p10operations.Invites.Aggregate(p10operations.Invites.AggregateSelect(p10operations.Invites.CountAll())))
+		refusals["create"] = fixture.genericCreate(ctx, caller, p10OperationID(t, 900))
+		_, refusals["deleteMany"] = caller.Invites.DeleteMany(ctx, golem.All[p10operations.Invite]())
+		for name, refused := range refusals {
+			if !errors.As(refused, &public) || public.Code != golem.CodeUnauthenticated || !strings.Contains(refused.Error(), "principal policy could not be established") || !errors.Is(refused, policyruntime.ErrPolicyUnavailable) {
+				t.Fatalf("%s refusal for a failed policy build = %v", name, refused)
+			}
 		}
 	})
 }

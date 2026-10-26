@@ -179,6 +179,8 @@ func (adapter unifiedEventObserver) ObserveEvent(_ context.Context, event events
 		reason = observe.ReasonEntityAbsent
 	case events.SuppressionCorrelatedGolemWrite:
 		reason = observe.ReasonCorrelatedGolemWrite
+	case events.SuppressionPolicyUnavailable:
+		reason = observe.ReasonRevalidation
 	}
 	internalvalue.Emit(adapter.observer, internalvalue.Value{
 		KindValue:           string(kind),

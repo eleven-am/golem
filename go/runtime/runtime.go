@@ -1,6 +1,6 @@
 // Package runtime is the public application-runtime boundary used by generated
 // Golem application packages. It owns immutable schema/provider state and
-// creates a fresh actor policy set for every caller execution.
+// resolves the actor for every caller execution.
 package runtime
 
 import (
@@ -75,11 +75,13 @@ type Config[P, A any] struct {
 	SnapshotActor func(A) (A, error)
 	// Queue enables the durable job queue. When omitted, no job storage is
 	// created and every queue entry point refuses with CodeConfigInvalid.
-	Queue *QueueConfig
+	Queue          *QueueConfig
+	PolicyCache    PolicyCacheConfig
+	PolicyCacheKey func(A) (string, bool)
 }
 
-// App contains immutable process-wide metadata only. No actor, policy set,
-// loader, request context, or decoded row is retained here.
+// App contains immutable process-wide metadata and the actor-keyed policy
+// cache. No loader, request context, or decoded row is retained here.
 type App[P, A any] struct {
 	databaseHandle            *providerapi.Database
 	database                  *sqlx.DB
@@ -91,6 +93,8 @@ type App[P, A any] struct {
 	descriptors               golem.ApplicationDescriptors
 	resolvePrincipal          func(context.Context, P) (A, error)
 	snapshotActor             func(A) (A, error)
+	policyCache               *policyCache
+	policyCacheKey            func(A) (string, bool)
 	readLimits                normalizedReadLimits
 	mutationLimits            normalizedMutationLimits
 	analyticsLimits           normalizedAnalyticsLimits
@@ -134,8 +138,9 @@ type App[P, A any] struct {
 	queueRunning              atomic.Bool
 }
 
-// Caller is one principal-bound execution. Its policy set and identity are not
-// shared with another Caller, even when the principals compare equal.
+// Caller is one principal-bound execution. Its identity is not shared with
+// another Caller; callers whose actors share a policy cache key share one
+// immutable policy set.
 type Caller[P, A any] struct {
 	app       *App[P, A]
 	policies  *policyruntime.Set
@@ -223,6 +228,10 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if config.ResolvePrincipal == nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: principal resolver is required")
 	}
+	cache, err := newPolicyCache(config.PolicyCache)
+	if err != nil {
+		return nil, err
+	}
 	readLimits, err := normalizeReadLimits(config.ReadLimits)
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: invalid read limits: %w", err)
@@ -303,7 +312,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonSchemaDrift
 		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
 	}
-	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
+	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, policyCache: cache, policyCacheKey: config.PolicyCacheKey, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	providerhandle.AttachMaintenanceObserver((*providerhandle.Database)(databaseHandle), config.Observer)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
@@ -449,15 +458,15 @@ func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], ha
 	return nil
 }
 
-// ForPrincipal resolves the principal and builds every model policy exactly
-// once for this fresh execution. Resolution or policy failure is never treated
+// ForPrincipal resolves the principal on every call and reuses the cached
+// policy set for an equal actor. Resolution or policy failure is never treated
 // as system access.
 func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P, A], error) {
 	actor, err := app.resolveActor(ctx, principal)
 	if err != nil {
 		return nil, err
 	}
-	policies, err := policyruntime.Build(policyruntime.BuildRequest[A]{Bindings: app.bindings, Actor: actor, Registry: app.registry, Provider: app.provider, Capabilities: app.capabilities})
+	policies, err := app.policySet(actor)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal policy could not be established", err)
 	}
@@ -470,6 +479,27 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 		auditID = app.auditPrincipal(principal)
 	}
 	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database), auditID: auditID, principal: principal}, nil
+}
+
+func (app *App[P, A]) policySet(actor A) (*policyruntime.Set, error) {
+	build := func() (*policyruntime.Set, error) {
+		return policyruntime.Build(policyruntime.BuildRequest[A]{Bindings: app.bindings, Actor: actor, Registry: app.registry, Provider: app.provider, Capabilities: app.capabilities})
+	}
+	if app.policyCache == nil {
+		return build()
+	}
+	key, ok := policyCacheKey(actor, app.snapshotActor, app.policyCacheKey)
+	if !ok {
+		return build()
+	}
+	return app.policyCache.get(key, build)
+}
+
+func (app *App[P, A]) InvalidatePolicies() {
+	if app == nil || app.policyCache == nil {
+		return
+	}
+	app.policyCache.invalidate()
 }
 
 // AuthenticatePrincipal resolves and snapshots the principal exactly as
@@ -514,6 +544,9 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}
 	if _, ok := caller.policies.Policy(bound.ModelID()); !ok {
+		if refused, ok := policyUnavailableReadError(operationName(request.Operation()), request.ModelID(), caller.policies.PolicyError(bound.ModelID())); ok {
+			return PreparedRead{}, refused
+		}
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read is not permitted", fmt.Errorf("model policy is absent"))
 	}
 	if _, err := caller.executor.queryerFor(caller.app.database); err != nil {
@@ -1397,6 +1430,9 @@ func enforceDecodedResultLimit(operation golem.ReadOperation, planned readplan.P
 }
 
 func publicPlanError(prepared PreparedRead, cause error) error {
+	if refused, ok := policyUnavailableReadError(operationName(prepared.Operation()), prepared.ModelID(), cause); ok {
+		return refused
+	}
 	var failure *readplan.Error
 	if errors.As(cause, &failure) && (failure.Code == readplan.CodeField || failure.Code == readplan.CodePolicy) {
 		return golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(failure.Field), "read is not permitted", cause)

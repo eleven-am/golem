@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-type benchPolicyPrincipal struct{}
-type benchPolicyActor struct{}
+type benchPolicyPrincipal struct{ ID int }
+type benchPolicyActor struct{ ID int }
 type benchPolicyUser struct{}
 type benchPolicyPost struct{}
 
@@ -90,8 +91,8 @@ func newBenchPolicyFixture(b *testing.B, branches int) *benchPolicyFixture {
 	}
 	app, err := Open(ctx, Config[benchPolicyPrincipal, benchPolicyActor]{
 		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
-		ResolvePrincipal: func(context.Context, benchPolicyPrincipal) (benchPolicyActor, error) {
-			return benchPolicyActor{}, nil
+		ResolvePrincipal: func(_ context.Context, principal benchPolicyPrincipal) (benchPolicyActor, error) {
+			return benchPolicyActor{ID: principal.ID}, nil
 		},
 	})
 	if err != nil {
@@ -181,10 +182,25 @@ func BenchmarkFindFirst(b *testing.B) {
 }
 
 func BenchmarkForPrincipal(b *testing.B) {
-	fixture := newBenchPolicyFixture(b, 4)
-	b.ReportAllocs()
-	for b.Loop() {
-		fixture.caller(b)
+	for _, mode := range []string{"cold", "warm"} {
+		b.Run(mode, func(b *testing.B) {
+			fixture := newBenchPolicyFixture(b, 4)
+			post := policyir.ModelID(fixture.schema.Post)
+			principal := benchPolicyPrincipal{}
+			b.ReportAllocs()
+			for b.Loop() {
+				if mode == "cold" {
+					principal.ID++
+				}
+				caller, err := fixture.app.ForPrincipal(context.Background(), principal)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, ok := caller.policies.Policy(post); !ok {
+					b.Fatal("post policy is absent")
+				}
+			}
+		})
 	}
 }
 

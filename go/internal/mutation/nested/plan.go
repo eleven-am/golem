@@ -332,7 +332,7 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 	}
 	policy, ok := builder.request.Policies.Policy(node.Model)
 	if !ok {
-		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested model policy is absent", nil)
+		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested model policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, node.Model))
 	}
 	action := actionFor(node.Operation)
 	var row policyir.Condition
@@ -429,7 +429,7 @@ func (builder *builder) decorateOwnedFields(node mutationir.NodeInput, fields []
 	}
 	policy, ok := builder.request.Policies.Policy(node.Model)
 	if !ok {
-		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), relationField, "runtime-owned field policy is absent", nil)
+		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), relationField, "runtime-owned field policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, node.Model))
 	}
 	for _, field := range fields {
 		condition, conditionErr := resolve.FieldCondition(policy, action, node.Model, field)
@@ -512,7 +512,7 @@ func (builder *builder) classifyOne(condition policyir.Condition, use classify.U
 	}
 	policy, ok := builder.request.Policies.Policy(condition.ModelID())
 	if !ok {
-		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position model policy is absent", nil)
+		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position model policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, condition.ModelID()))
 	}
 	row, err := resolve.RowConstraint(policy, selectingAction, condition.ModelID())
 	if err != nil {

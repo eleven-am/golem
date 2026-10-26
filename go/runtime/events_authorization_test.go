@@ -76,6 +76,7 @@ type p7EventRuntimeFixture struct {
 	suppressed chan observe.Observation
 	resolved   chan bool
 	resolves   *atomic.Int64
+	builds     *atomic.Int64
 }
 
 func TestSQLiteFreshSubscriptionAuthorizationDeleteAndDuplicateOracle(t *testing.T) {
@@ -340,12 +341,14 @@ func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture
 	}
 	allow := &atomic.Bool{}
 	allow.Store(true)
+	builds := &atomic.Int64{}
 	allowUsers := golem.GeneratedPolicyBinding[p7EventActor, p7EventUser](schemaFixture.User, func(p7EventActor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[p7EventUser]()
 		rules.CanRead(golem.All[p7EventUser]())
 		return rules.Freeze(schemaFixture.User)
 	})
 	allowPosts := golem.GeneratedPolicyBinding[p7EventActor, p7EventPost](schemaFixture.Post, func(actor p7EventActor) (golem.FrozenPolicy, error) {
+		builds.Add(1)
 		rules := golem.NewRules[p7EventPost]()
 		if actor.Allow && postRead != nil {
 			rules.CanRead(postRead(schemaFixture))
@@ -398,7 +401,7 @@ func newP7EventRuntimeFixtureWith(t *testing.T, schemaFixture schematest.Fixture
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p7EventRuntimeFixture{app: app, transport: transport, schema: schemaFixture, descriptor: postDescriptor, title: golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle), digest: digest, allow: allow, suppressed: suppressed, resolved: resolved, resolves: resolves}
+	return p7EventRuntimeFixture{app: app, transport: transport, schema: schemaFixture, descriptor: postDescriptor, title: golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle), digest: digest, allow: allow, suppressed: suppressed, resolved: resolved, resolves: resolves, builds: builds}
 }
 
 func p7OracleID(id uint16) golem.EventID {
