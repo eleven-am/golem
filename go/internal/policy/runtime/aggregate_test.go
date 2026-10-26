@@ -167,6 +167,36 @@ func TestAggregatePolicyIsBuiltOnlyWhenAnAggregateViewAsksForIt(t *testing.T) {
 	}
 }
 
+func TestBaseDenialDoesNotNarrowAnAggregateGrant(t *testing.T) {
+	registry, fixture := runtimeSchemaFixture(t)
+	handle := golem.GeneratedTextField[runtimeUser, string](fixture.userHandle)
+	binding := golem.GeneratedPolicyBinding[runtimeActor, runtimeUser](fixture.user, func(runtimeActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[runtimeUser]()
+		rules.CanRead(golem.All[runtimeUser]())
+		rules.CannotRead(handle.Eq("deleted"))
+		golem.Within(rules, runtimeCountOperation).CanCount(golem.All[runtimeUser]())
+		return rules.Freeze(fixture.user)
+	})
+	bindings, err := golem.GeneratedApplicationOperations(runtimeBindings(t, fixture.generation, binding), golem.GeneratedTxOperation("count", runtimeCountOperation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := Build(BuildRequest[runtimeActor]{Bindings: bindings, Registry: registry, Provider: policyir.ProviderSQLite, Capabilities: runtimeProof(t, registry, policyir.ProviderSQLite, allRuntimeCapabilities...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := policyir.ModelID(fixture.user)
+	if truth, constant := runtimeReadConditions(t, set, user)[0].Constant(); constant && truth {
+		t.Fatal("the base denial did not narrow the caller's own reads")
+	}
+	operation, _ := bindings.TxOperation(runtimeCountOperation)
+	scoped, _, release := set.WithinTransaction(operation)
+	defer release()
+	if truth, constant := runtimeReadConditions(t, scoped.AggregateView(), user)[0].Constant(); !constant || !truth {
+		t.Fatal("a base Cannot rule narrowed an aggregate grant; the exclusion belongs in the grant predicate")
+	}
+}
+
 func TestBuildRejectsAggregateGrantsNamingAnythingButATransactionOperation(t *testing.T) {
 	registry, fixture := runtimeSchemaFixture(t)
 	handle := golem.GeneratedTextField[runtimeUser, string](fixture.userHandle)

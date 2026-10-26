@@ -848,9 +848,8 @@ func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descript
 	return executeCount(ctx, system.app, prepared)
 }
 
-// preparedReadStatement is the single authorized render boundary shared by a
-// production Caller read and its explicit query-plan explanation. It retains
-// typed authority and the exact rendered statement, but is never public.
+// preparedReadStatement retains typed authority and the exact rendered
+// statement, but is never public.
 type preparedReadStatement struct {
 	prepared  PreparedRead
 	plan      readplan.Plan
