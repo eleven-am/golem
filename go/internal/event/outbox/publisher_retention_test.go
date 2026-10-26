@@ -26,6 +26,10 @@ func (coordinator *retentionCountingCoordinator) Claim(ctx context.Context, _ ev
 	}
 }
 
+func (*retentionCountingCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (coordinator *retentionCountingCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
 	coordinator.passes.Add(1)
 	return eventprovider.RetentionResult{}, nil

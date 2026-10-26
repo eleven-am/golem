@@ -231,6 +231,8 @@ func mapEventObservation(kind events.ObservationKind) (observe.Kind, observe.Ope
 		return observe.KindSubscription, observe.OperationSubscriptionSuppression, observe.PhaseSuppress
 	case events.ObservationOverflow:
 		return observe.KindSubscription, observe.OperationSubscriptionOverflow, observe.PhaseOverflow
+	case events.ObservationTopology:
+		return observe.KindEvent, observe.OperationEventTopology, observe.PhaseVerify
 	case events.ObservationCancellation, events.ObservationLifecycleFailure:
 		return observe.KindSubscription, observe.OperationSubscriptionCancellation, observe.PhaseCancel
 	case events.ObservationCDCReceive:

@@ -14,19 +14,23 @@ import (
 
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
 var eventNamespacePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 type eventCoordinator struct {
-	database            *sqlx.DB
-	namespace           physical.PhysicalName
-	legacyProbeComplete atomic.Bool
-	claimIndexAdmitted  bool
-	claimIndexMutex     sync.Mutex
-	claimIndexOID       atomic.Uint32
+	database             *sqlx.DB
+	namespace            physical.PhysicalName
+	legacyProbeComplete  atomic.Bool
+	claimIndexAdmitted   bool
+	claimIndexMutex      sync.Mutex
+	claimIndexOID        atomic.Uint32
+	publisherConfigMutex sync.Mutex
+	publisherConfig      *pgx.ConnConfig
 }
 
 type postgresqlEventQueryExecer interface {
@@ -120,6 +124,82 @@ func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error
 		}
 	}
 	return nil
+}
+
+func (coordinator *eventCoordinator) HoldExclusivePublisher(ctx context.Context) (func(), <-chan struct{}, bool, error) {
+	config, err := coordinator.publisherConnectionConfig(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	connection, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: open a dedicated connection for the process-local publisher lock: %w", err)
+	}
+	closeConnection := func() {
+		closeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = connection.Close(closeContext)
+	}
+	key := queueAdvisoryKey("golem_process_local_publisher\x00" + string(coordinator.namespace))
+	var held bool
+	if err := connection.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&held); err != nil {
+		closeConnection()
+		return nil, nil, false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: take the process-local publisher lock: %w", err)
+	}
+	if !held {
+		closeConnection()
+		return nil, nil, false, nil
+	}
+	watchContext, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
+	lost := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		for {
+			if err := connection.PgConn().WaitForNotification(watchContext); err != nil {
+				break
+			}
+		}
+		if watchContext.Err() == nil {
+			close(lost)
+		}
+	}()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			stopWatching()
+			<-watched
+			if !connection.IsClosed() {
+				unlockContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				_, _ = connection.Exec(unlockContext, `SELECT pg_advisory_unlock($1)`, key)
+				cancel()
+			}
+			closeConnection()
+		})
+	}
+	return release, lost, true, nil
+}
+
+func (coordinator *eventCoordinator) publisherConnectionConfig(ctx context.Context) (*pgx.ConnConfig, error) {
+	coordinator.publisherConfigMutex.Lock()
+	defer coordinator.publisherConfigMutex.Unlock()
+	if coordinator.publisherConfig == nil {
+		connection, err := coordinator.database.Connx(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: read the connection configuration for the process-local publisher lock: %w", err)
+		}
+		_ = connection.Raw(func(driverConnection any) error {
+			if native, ok := driverConnection.(*stdlib.Conn); ok {
+				coordinator.publisherConfig = native.Conn().Config().Copy()
+			}
+			return nil
+		})
+		_ = connection.Close()
+		if coordinator.publisherConfig == nil {
+			return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: the database driver cannot open a dedicated connection for the process-local publisher lock")
+		}
+	}
+	return coordinator.publisherConfig.Copy(), nil
 }
 
 func (coordinator *eventCoordinator) verifyClaimIndex(ctx context.Context, queryer sqlx.QueryerContext) error {

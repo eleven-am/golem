@@ -146,6 +146,7 @@ const (
 	OperationEventRetention            Operation = "event.retention"
 	OperationEventTransportReceive     Operation = "event.transport_receive"
 	OperationEventTransportReconnect   Operation = "event.transport_reconnect"
+	OperationEventTopology             Operation = "event.topology"
 	OperationSubscriptionMembership    Operation = "subscription.membership"
 	OperationSubscriptionEvaluation    Operation = "subscription.evaluation"
 	OperationSubscriptionDelivery      Operation = "subscription.delivery"
@@ -294,7 +295,7 @@ func validOperation(value Operation) bool {
 		OperationEventPublisherClaim, OperationEventPublisherAttempt, OperationEventPublisherAcknowledge,
 		OperationEventPublisherRetry, OperationEventPublisherBlock, OperationEventRetention,
 		OperationEventDepthPending, OperationEventDepthBlocked, OperationEventDepthRetired,
-		OperationEventTransportReceive, OperationEventTransportReconnect, OperationSubscriptionMembership,
+		OperationEventTransportReceive, OperationEventTransportReconnect, OperationEventTopology, OperationSubscriptionMembership,
 		OperationSubscriptionEvaluation, OperationSubscriptionDelivery, OperationSubscriptionSuppression,
 		OperationSubscriptionOverflow, OperationSubscriptionCancellation, OperationCDCReceive,
 		OperationCDCAcknowledge, OperationMigrationInspect, OperationShutdownHTTP,

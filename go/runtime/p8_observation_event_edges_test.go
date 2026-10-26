@@ -71,6 +71,10 @@ func (*p8CoverageCoordinator) Inspect(context.Context, string) (eventprovider.De
 }
 func (*p8CoverageCoordinator) Resume(context.Context, string) (bool, error) { return false, nil }
 func (*p8CoverageCoordinator) Retire(context.Context, string) (bool, error) { return false, nil }
+func (*p8CoverageCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (coordinator *p8CoverageCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
 	return coordinator.retained, nil
 }

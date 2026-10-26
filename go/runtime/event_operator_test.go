@@ -117,6 +117,10 @@ func (coordinator *operatorTestCoordinator) Resume(context.Context, string) (boo
 func (coordinator *operatorTestCoordinator) Retire(context.Context, string) (bool, error) {
 	return coordinator.retireChanged, coordinator.retireErr
 }
+func (*operatorTestCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (coordinator *operatorTestCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
 	return coordinator.retention, coordinator.retentionErr
 }

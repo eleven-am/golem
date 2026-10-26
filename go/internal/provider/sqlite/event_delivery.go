@@ -118,6 +118,10 @@ func sqliteOutboxDeliveryClaimMatches(table, definition string) bool {
 	return err == nil && reflect.DeepEqual(expected, actual)
 }
 
+func (*eventCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
 	snapshot, err := coordinator.claim(ctx, options, false)
 	return snapshot.Leases, err
