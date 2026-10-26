@@ -77,7 +77,7 @@ func TestP11AggregateFixtureRegeneratesByteIdentically(t *testing.T) {
 type p11Fixture struct {
 	app       *p11aggregates.App[p11aggregates.Principal]
 	artifacts [3]golem.UUID
-	collect   [3]golem.UUID
+	collect   [4]golem.UUID
 }
 
 type p11CallerTx = p11aggregates.CallerTx[p11aggregates.Principal]
@@ -138,6 +138,8 @@ func newP11Fixture(t *testing.T, profile p5ExtensionProviderProfile) *p11Fixture
 	fixture := &p11Fixture{app: application}
 	for index := range fixture.artifacts {
 		fixture.artifacts[index] = p10OperationID(t, 10+index)
+	}
+	for index := range fixture.collect {
 		fixture.collect[index] = p10OperationID(t, 20+index)
 	}
 	fixture.seed(t)
@@ -164,8 +166,11 @@ func (fixture *p11Fixture) seed(t *testing.T) {
 		must(err)
 	}
 	C := p11aggregates.Collections
-	for index, owner := range []string{"bob", "bob", "carol"} {
-		_, err := system.Collections.Create(ctx, C.Create(C.ID.Create(fixture.collect[index]), C.ArtifactID.Create(fixture.artifacts[index]), C.Owner.Create(owner), C.Name.Create("collection")))
+	for index, collection := range []struct {
+		artifact int
+		owner    string
+	}{{0, "bob"}, {1, "bob"}, {2, "carol"}, {0, "mia"}} {
+		_, err := system.Collections.Create(ctx, C.Create(C.ID.Create(fixture.collect[index]), C.ArtifactID.Create(fixture.artifacts[collection.artifact]), C.Owner.Create(collection.owner), C.Name.Create("collection")))
 		must(err)
 	}
 	D := p11aggregates.Documents
@@ -544,6 +549,71 @@ func TestAggregateGrantsNamingAnythingButATxOperationFailThePolicyBuildAcrossPro
 			if cause == nil || !strings.Contains(cause.Error(), "transaction operation") {
 				t.Fatalf("policy build error does not explain the refusal: %v (cause %v)", err, cause)
 			}
+		}
+	})
+}
+
+func TestScopedAggregateGrantsNeverWidenWritesLinksOrRelationReadsAcrossProviders(t *testing.T) {
+	forEachP11AggregateProfile(t, func(t *testing.T, fixture *p11Fixture) {
+		ctx := context.Background()
+		S, A := p11aggregates.Assets, p11aggregates.Artifacts
+		ran := map[string]bool{}
+		p11aggregates.SetProbe(func(ctx context.Context, operation string, tx *p11CallerTx) error {
+			ran[operation] = true
+			switch operation {
+			case "commitAssetBudget":
+				total := S.Size.Sum()
+				groups, err := tx.Assets.RelationGroupBy(ctx, S.RelationGroupBy(S.RelationGroupDimensions(S.ArtifactTitle), S.RelationGroupMeasures(total)))
+				if err != nil || len(groups) != 1 {
+					t.Errorf("relationGroupBy inside Run = %d groups, %v; want the caller's 1", len(groups), err)
+				} else if sum, _ := golem.RelationGroupValue(groups[0], total).Get(); sum.String() != "100" {
+					t.Errorf("relationGroupBy inside Run summed %s; want the caller's 100", sum)
+				}
+				artifacts, err := tx.Artifacts.FindMany(ctx, A.Where(A.ID.Eq(fixture.artifacts[0])), A.Select(A.ID, A.Assets.Count()))
+				if err != nil || len(artifacts) != 1 {
+					t.Errorf("relation-count include inside Run = %d, %v", len(artifacts), err)
+				} else if counted, _ := golem.RelationCount(artifacts[0], A.Assets.ToMany).Get(); counted != 1 {
+					t.Errorf("relation-count include inside Run counted %d assets; want the caller's 1", counted)
+				}
+				updated, err := tx.Assets.UpdateMany(ctx, S.ArtifactID.Eq(fixture.artifacts[0]), S.UpdateMany(S.Label.Set("bumped")))
+				p11Expect(t, "UpdateMany inside Run", updated, err, 1)
+				if _, err := tx.Assets.Delete(ctx, S.ByID.Value(p10OperationID(t, 41))); err == nil {
+					t.Error("Delete inside Run removed a row visible only through the aggregate grant")
+				}
+			case "checkDocumentCapacity":
+				D, C := p11aggregates.Documents, p11aggregates.Collections
+				if _, err := tx.Documents.Create(ctx, D.Create(D.ID.Create(p10OperationID(t, 90)), D.Owner.Create("mia"), D.Title.Create("own"), D.Collection.Connect(C.ByID.Value(fixture.collect[3])))); err != nil {
+					t.Errorf("connect to the caller's own collection inside Run: %v", err)
+				}
+				if _, err := tx.Documents.Create(ctx, D.Create(D.ID.Create(p10OperationID(t, 91)), D.Owner.Create("mia"), D.Title.Create("linked"), D.Collection.Connect(C.ByID.Value(fixture.collect[0])))); err == nil {
+					t.Error("connect inside Run reached a collection visible only through the aggregate grant")
+				}
+				if _, err := tx.Documents.Create(ctx, D.Create(D.ID.Create(p10OperationID(t, 92)), D.Owner.Create("mia"), D.Title.Create("keyed"), D.CollectionID.Create(fixture.collect[0]))); err == nil {
+					t.Error("a foreign key inside Run reached a collection visible only through the aggregate grant")
+				}
+			}
+			return nil
+		})
+		run := func(caller *p11aggregates.Caller[p11aggregates.Principal], body func(*p11CallerTx) error) {
+			_ = caller.Transaction(ctx, body)
+		}
+		run(fixture.caller(t, p11aggregates.Principal{ID: "alice"}), func(tx *p11CallerTx) error {
+			_, err := p11aggregates.Run(ctx, tx, p11aggregates.CommitAssetBudget, p11aggregates.BudgetArgs{ArtifactID: fixture.artifacts[0]})
+			return err
+		})
+		run(fixture.caller(t, p11aggregates.Principal{ID: "mia"}), func(tx *p11CallerTx) error {
+			_, err := p11aggregates.Run(ctx, tx, p11aggregates.CheckDocumentCapacity, struct{}{})
+			return err
+		})
+		if !ran["commitAssetBudget"] || !ran["checkDocumentCapacity"] {
+			t.Fatalf("the probe ran inside %v", ran)
+		}
+		row, err := fixture.app.System().Assets.FindUnique(ctx, S.ByID.Value(p10OperationID(t, 41)), S.Select(S.Label))
+		if err != nil {
+			t.Fatalf("the asset outside the caller's policy was removed: %v", err)
+		}
+		if label, _ := golem.Value(row, S.Label).Get(); label != "draft" {
+			t.Fatalf("a write inside Run changed a row outside the caller's policy: label %q", label)
 		}
 	})
 }

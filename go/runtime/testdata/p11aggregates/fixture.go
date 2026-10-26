@@ -94,7 +94,14 @@ type DocumentChange struct {
 }
 
 func (Asset) GolemModel() golem.ModelSpec[Asset] {
-	return golem.DefineModel(golem.Subscriptions[Asset]())
+	return golem.DefineModel(
+		golem.Subscriptions[Asset](),
+		golem.Analytics[Asset](
+			golem.AnalyticsRelationDimensions(
+				golem.NamedRelationDimension("artifactTitle", golem.Via(Assets.Artifact, golem.DimensionField(Artifacts.Title))),
+			),
+		),
+	)
 }
 
 func DefineSchema(schema *golem.Schema) {
@@ -128,6 +135,7 @@ func (Collection) DefinePolicy(rules *golem.Rules[Collection], actor Actor) {
 
 func (Document) DefinePolicy(rules *golem.Rules[Document], actor Actor) {
 	rules.CanRead(Documents.Owner.Eq(actor.ID))
+	rules.CanCreate(Documents.Owner.Eq(actor.ID))
 	managed := Documents.Collection.Is(Collections.Artifact.Is(Artifacts.Manager.Eq(actor.ID)))
 	golem.Within(rules, CheckDocumentCapacity).CanCount(managed)
 	golem.Within(rules, CountManagedDocuments).CanCount(managed)
@@ -135,6 +143,8 @@ func (Document) DefinePolicy(rules *golem.Rules[Document], actor Actor) {
 
 func (Asset) DefinePolicy(rules *golem.Rules[Asset], actor Actor) {
 	rules.CanRead(Assets.Owner.Eq(actor.ID))
+	rules.CanUpdate(Assets.Owner.Eq(actor.ID))
+	rules.CanDelete(Assets.Owner.Eq(actor.ID))
 	golem.Within(rules, CommitAssetBudget).CanAggregate(Assets.Artifact.Is(Artifacts.Owner.Eq(actor.ID)), Assets.Size, Assets.ArtifactID)
 }
 

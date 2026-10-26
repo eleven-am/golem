@@ -271,7 +271,10 @@ aggregate grants on the target model, so a grant on `Collections` widens a
 
 The grant never applies to `FindMany`, `FindFirst`, `FindUnique`, includes,
 `GroupBy` (group keys are values), events, query-plan explanations, writes or
-link checks, inside the operation or out. Outside `Run`, and once the operation
+link checks, inside the operation or out. An `Explain` call made inside `Run`
+describes the caller's own, narrower statement, not the widened count. A base
+`Cannot*` rule does not narrow an aggregate grant; put the exclusion in the
+grant predicate. Outside `Run`, and once the operation
 returns, counts are exactly the caller's own. `CanCount` and `CanAggregate`
 must name a generated transaction operation: naming a custom mutation or any
 other function fails the policy build. The safety rests on the operation's code
