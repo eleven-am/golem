@@ -29,6 +29,7 @@ type Set struct {
 	scope      *operationScope
 	lease      *Lease
 	aggregate  bool
+	memo       *memo
 }
 
 type builtPolicy struct {
@@ -335,7 +336,7 @@ func (set *Set) WithinTransaction(operation golem.OperationID) (*Set, func(), fu
 		root = set.root
 	}
 	scope := &operationScope{order: operationScopeOrder.Add(1)}
-	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope}
+	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope, memo: root.memo}
 	return scoped, scope.hide, scope.release
 }
 
@@ -376,7 +377,7 @@ func (set *Set) RecordGrant(model ir.ModelID, action ir.Action, field *ir.FieldI
 	}
 	base, operations, ok := entry.resolve()
 	scoped, present := operations[set.operation]
-	if !ok || !present || !grantAddsNothing(scoped, base, action, model, field) {
+	if !ok || !present || !set.grantAddsNothing(scoped, base, action, model, field) {
 		set.lease.used.Store(true)
 	}
 }
@@ -459,7 +460,9 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 			},
 		}
 	}
-	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}, nil
+	set := &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}
+	set.memo = &memo{owner: set}
+	return set, nil
 }
 
 func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (builtPolicy, error) {

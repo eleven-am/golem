@@ -215,13 +215,13 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 	if request.Stance == mutationir.Caller {
 		action := actionFor(operation)
 		var err error
-		row, err = resolve.RowConstraint(policy, action, request.Model)
+		row, err = RowConstraint(request.Policies, policy, action, request.Model)
 		if err != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "row constraint could not be resolved", err)
 		}
 		RecordGrant(request.Policies, request.Model, action, nil)
 		granted := row
-		row, err = request.writeReach(row)
+		row, err = RowReach(request.Policies, request.Model, action, row, request.ReadRelationDepth)
 		if err != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "row constraint read reach could not be resolved", err)
 		}
@@ -239,7 +239,7 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 			node.RowPostcondition = &row
 		}
 		for _, field := range authoredFields {
-			condition, err := resolve.FieldCondition(policy, action, request.Model, field)
+			condition, err := FieldCondition(request.Policies, policy, action, request.Model, field)
 			if err != nil {
 				return mutationir.NodeInput{}, fail(CodePolicy, request, field, "field condition could not be resolved", err)
 			}
@@ -250,7 +250,7 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 					return mutationir.NodeInput{}, failReason(CodePolicy, golem.ReasonNotGranted, request, field, "create field has no grant", gateErr)
 				}
 			}
-			condition, err = request.writeReach(condition)
+			condition, err = FieldReach(request.Policies, request.Model, action, field, condition, request.ReadRelationDepth)
 			if err != nil {
 				return mutationir.NodeInput{}, fail(CodePolicy, request, field, "field condition read reach could not be resolved", err)
 			}
@@ -357,7 +357,7 @@ func concurrencyHookMutableFields(request RootRequest) []policyir.FieldID {
 }
 
 func selectExisting(request RootRequest, policy policyir.Policy, action policyir.Action) (*mutationir.SelectionRequirement, []policyir.FieldID, error) {
-	row, err := resolve.RowConstraint(policy, action, request.Model)
+	row, err := RowConstraint(request.Policies, policy, action, request.Model)
 	if err != nil {
 		return nil, nil, fail(CodePolicy, request, policyir.FieldID{}, "selecting constraint could not be resolved", err)
 	}
@@ -390,7 +390,7 @@ func selectExisting(request RootRequest, policy policyir.Policy, action policyir
 	if err != nil {
 		return nil, nil, fail(CodeRequest, request, policyir.FieldID{}, "relation-traversing mutation positions are not in the root-scalar planner", err)
 	}
-	complete, err := ExistingConstraint(request.Policies, request.Model, row, fields, request.ReadRelationDepth, conditions...)
+	complete, err := ExistingActionConstraint(request.Policies, request.Model, action, row, fields, request.ReadRelationDepth, conditions...)
 	if err != nil {
 		return nil, nil, fail(CodePolicy, request, policyir.FieldID{}, "complete selecting constraint could not be constructed", err)
 	}

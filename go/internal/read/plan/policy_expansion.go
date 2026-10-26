@@ -6,6 +6,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 )
 
 // policyExpander closes every relation hop over the target model's read
@@ -29,7 +30,7 @@ func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policy
 	if maxDepth <= 0 {
 		maxDepth = DefaultLimits().MaxRelationDepth
 	}
-	row, err := newPolicyExpander(policies, maxDepth).model(model, 0)
+	row, err := newPolicyExpander(policies, maxDepth).entry(model, 0)
 	if err != nil {
 		return policyir.Condition{}, err
 	}
@@ -88,6 +89,16 @@ func ReachWithin(policies PolicySet, model policyir.ModelID, condition policyir.
 }
 
 func ReadFieldReach(policies PolicySet, model policyir.ModelID, field policyir.FieldID, maxDepth int) (policyir.Condition, error) {
+	maxDepth = ReachDepth(maxDepth)
+	key := policyruntime.MemoKey{Kind: policyruntime.MemoReadFieldReach, Model: model, Field: field, Depth: maxDepth}
+	return Memoize(policies, key, func(source PolicySet) (policyir.Condition, error) {
+		return readFieldReach(source, model, field, maxDepth)
+	}, func() (policyir.Condition, error) {
+		return readFieldReach(policies, model, field, maxDepth)
+	})
+}
+
+func readFieldReach(policies PolicySet, model policyir.ModelID, field policyir.FieldID, maxDepth int) (policyir.Condition, error) {
 	if policies == nil {
 		return policyir.Condition{}, fail(CodePolicy, model, field, "read field policy is unavailable", nil)
 	}
