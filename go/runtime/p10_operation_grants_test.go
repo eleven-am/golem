@@ -607,9 +607,17 @@ func TestMutateRefusesAFunctionThatIsNotACustomMutationBeforeRunningAcrossProvid
 
 func TestWithinNamingANonMutationResolverFailsThePolicyBuildAcrossProviders(t *testing.T) {
 	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
-		_, err := fixture.app.ForPrincipal(context.Background(), p10operations.Principal{ID: "alpha", Valid: true, Misconfigured: true})
-		if err == nil {
-			t.Fatal("a policy scoping a grant to a query resolver was accepted")
+		caller, err := fixture.app.ForPrincipal(context.Background(), p10operations.Principal{ID: "alpha", Valid: true, Misconfigured: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := caller.Teams.FindMany(context.Background()); err != nil {
+			t.Fatalf("a misconfigured Invite policy refused another model: %v", err)
+		}
+		_, err = caller.Invites.FindMany(context.Background())
+		var public *golem.Error
+		if !errors.As(err, &public) || public.Code != golem.CodeUnauthenticated {
+			t.Fatalf("a policy scoping a grant to a query resolver was accepted: %v", err)
 		}
 		cause := errors.Unwrap(err)
 		if cause == nil || !strings.Contains(cause.Error(), "SearchInvites") || !strings.Contains(cause.Error(), "custom mutation") {

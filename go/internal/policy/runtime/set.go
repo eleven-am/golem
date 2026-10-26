@@ -23,12 +23,44 @@ import (
 type Set struct {
 	generation golem.SchemaDigest
 	provider   ir.Provider
-	policies   map[ir.ModelID]ir.Policy
-	operations map[golem.OperationID]map[ir.ModelID]ir.Policy
+	policies   map[ir.ModelID]*lazyPolicy
 	root       *Set
-	scoped     map[ir.ModelID]ir.Policy
+	operation  golem.OperationID
 	scope      *operationScope
 	lease      *Lease
+}
+
+type lazyPolicy struct {
+	once       sync.Once
+	build      func() (ir.Policy, map[golem.OperationID]ir.Policy, error)
+	policy     ir.Policy
+	operations map[golem.OperationID]ir.Policy
+	err        error
+	panicked   any
+	raised     atomic.Bool
+}
+
+type recoveredPolicyPanic struct{ value any }
+
+func (entry *lazyPolicy) resolve() (ir.Policy, map[golem.OperationID]ir.Policy, bool) {
+	entry.once.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				entry.policy, entry.operations = ir.Policy{}, nil
+				entry.panicked = recoveredPolicyPanic{value: recovered}
+				entry.err = fmt.Errorf("P2_RUNTIME_FACTORY: policy factory panicked")
+			}
+			entry.build = nil
+		}()
+		entry.policy, entry.operations, entry.err = entry.build()
+	})
+	if entry.panicked != nil && entry.raised.CompareAndSwap(false, true) {
+		panic(entry.panicked.(recoveredPolicyPanic).value)
+	}
+	if entry.err != nil {
+		return ir.Policy{}, nil, false
+	}
+	return entry.policy, entry.operations, true
 }
 
 // ErrOperationEnded refuses a commit whose write used Within grants after the
@@ -177,16 +209,37 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 	if set == nil {
 		return ir.Policy{}, false
 	}
-	if set.scoped != nil && !set.scope.released.Load() {
-		if policy, ok := set.scoped[model]; ok {
+	entry, ok := set.policies[model]
+	if !ok {
+		return ir.Policy{}, false
+	}
+	policy, operations, ok := entry.resolve()
+	if !ok {
+		return ir.Policy{}, false
+	}
+	if set.scope != nil && !set.scope.released.Load() {
+		if scoped, ok := operations[set.operation]; ok {
 			if set.lease != nil {
 				set.lease.serve(model)
 			}
-			return policy, true
+			return scoped, true
 		}
 	}
-	policy, ok := set.policies[model]
-	return policy, ok
+	return policy, true
+}
+
+func (set *Set) PolicyError(model ir.ModelID) error {
+	if set == nil {
+		return nil
+	}
+	entry, ok := set.policies[model]
+	if !ok {
+		return nil
+	}
+	if _, _, ok := entry.resolve(); ok {
+		return nil
+	}
+	return entry.err
 }
 
 // Within returns the policy set of one running custom mutation: the caller's
@@ -202,7 +255,7 @@ func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
 		root = set.root
 	}
 	scope := &operationScope{order: operationScopeOrder.Add(1)}
-	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, scoped: root.operations[operation], scope: scope}
+	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, operation: operation, scope: scope}
 	return scoped, scope.release
 }
 
@@ -218,7 +271,7 @@ func (set *Set) Base() *Set {
 // planned through it used the operation's grants. A set carrying no grants
 // is returned unchanged with a nil lease.
 func (set *Set) Lease() (*Set, *Lease) {
-	if set == nil || set.scoped == nil {
+	if set == nil || set.scope == nil {
 		return set, nil
 	}
 	lease := &Lease{scope: set.scope}
@@ -236,7 +289,14 @@ func (set *Set) RecordGrant(model ir.ModelID, action ir.Action, field *ir.FieldI
 	if set == nil || set.lease == nil || !set.lease.wasServed(model) {
 		return
 	}
-	if !grantAddsNothing(set.scoped[model], set.policies[model], action, model, field) {
+	entry, ok := set.policies[model]
+	if !ok {
+		set.lease.used.Store(true)
+		return
+	}
+	base, operations, ok := entry.resolve()
+	scoped, present := operations[set.operation]
+	if !ok || !present || !grantAddsNothing(scoped, base, action, model, field) {
 		set.lease.used.Store(true)
 	}
 }
@@ -271,7 +331,7 @@ func (set *Set) CurrentLease() *Lease {
 // WithLease returns a view recording into lease when lease belongs to this
 // set's operation, and the set unchanged otherwise.
 func (set *Set) WithLease(lease *Lease) *Set {
-	if set == nil || lease == nil || set.scoped == nil || set.scope != lease.scope {
+	if set == nil || lease == nil || set.scope == nil || set.scope != lease.scope {
 		return set
 	}
 	view := *set
@@ -298,69 +358,72 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 	if request.Capabilities.Provider() != request.Provider || request.Capabilities.SchemaFingerprint() != fingerprint {
 		return nil, fmt.Errorf("P2_RUNTIME_CAPABILITY: runtime proof does not match provider and schema")
 	}
-	generated, err := golem.BuildGeneratedPolicySet(request.Bindings, request.Actor)
+	models, err := golem.ValidateGeneratedPolicyBindings(request.Bindings)
 	if err != nil {
 		return nil, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
-	}
-	if generated.GenerationDigest() != request.Registry.GenerationDigest() {
-		return nil, fmt.Errorf("P2_RUNTIME_GENERATION: generated set and schema generation digests differ")
 	}
 	resolver := policysql.SchemaResolver(request.Registry)
 	providers := resolver.Providers()
 	if !providers.Valid() || !providers.Contains(request.Provider) {
 		return nil, fmt.Errorf("P2_RUNTIME_PROVIDER: provider is not declared by the schema")
 	}
-	policies, err := buildPolicies(request, resolver, providers, generated.Policies())
-	if err != nil {
-		return nil, err
+	shared := &request
+	policies := make(map[ir.ModelID]*lazyPolicy, len(models))
+	for _, model := range models {
+		policies[ir.ModelID(model)] = &lazyPolicy{build: func() (ir.Policy, map[golem.OperationID]ir.Policy, error) {
+			return buildModelPolicy(shared, resolver, providers, model)
+		}}
 	}
-	operations := make(map[golem.OperationID]map[ir.ModelID]ir.Policy)
-	for _, operation := range generated.Operations() {
-		scoped, scopedErr := buildPolicies(request, resolver, providers, generated.OperationPolicies(operation))
+	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}, nil
+}
+
+func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (ir.Policy, map[golem.OperationID]ir.Policy, error) {
+	frozen, frozenOperations, err := golem.BuildGeneratedModelPolicy(request.Bindings, model, request.Actor)
+	if err != nil {
+		return ir.Policy{}, nil, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
+	}
+	policy, err := buildPolicy(request, resolver, providers, model, frozen)
+	if err != nil {
+		return ir.Policy{}, nil, err
+	}
+	operations := make(map[golem.OperationID]ir.Policy, len(frozenOperations))
+	for operation, scopedFrozen := range frozenOperations {
+		scoped, scopedErr := buildPolicy(request, resolver, providers, model, scopedFrozen)
 		if scopedErr != nil {
-			return nil, scopedErr
-		}
-		for model := range scoped {
-			if _, present := policies[model]; !present {
-				return nil, fmt.Errorf("P2_RUNTIME_POLICY: operation grants for model %x have no caller policy", model)
-			}
+			return ir.Policy{}, nil, scopedErr
 		}
 		operations[operation] = scoped
 	}
-	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies, operations: operations}, nil
+	return policy, operations, nil
 }
 
-func buildPolicies[A any](request BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, frozenPolicies []golem.FrozenPolicy) (map[ir.ModelID]ir.Policy, error) {
-	policies := make(map[ir.ModelID]ir.Policy)
-	for index, frozen := range frozenPolicies {
-		bound, bindErr := bind.Policy(frozen, request.Registry, providers)
-		if bindErr != nil {
-			return nil, fmt.Errorf("P2_RUNTIME_BIND: policy %d: %w", index, bindErr)
-		}
-		normalized, normalizeErr := normalize.Policy(bound)
-		if normalizeErr != nil {
-			return nil, fmt.Errorf("P2_RUNTIME_NORMALIZE: policy %d: %w", index, normalizeErr)
-		}
-		if _, duplicate := policies[normalized.ModelID()]; duplicate {
-			return nil, fmt.Errorf("P2_RUNTIME_POLICY: duplicate model %x", normalized.ModelID())
-		}
-		for _, rule := range normalized.Rules() {
-			condition, ok := rule.Condition()
-			if !ok {
-				continue
-			}
-			for _, requirement := range condition.Requirements() {
-				if requirement.Providers().Contains(request.Provider) && (!resolver.Capability(request.Provider, requirement.Capability()) || !request.Capabilities.Has(requirement.Capability())) {
-					return nil, fmt.Errorf("P2_RUNTIME_CAPABILITY: policy %d rule %d requires capability %d", index, rule.Position(), requirement.Capability())
-				}
-			}
-			if err := requireConditionAgreement(condition, providers); err != nil {
-				return nil, fmt.Errorf("P2_RUNTIME_AGREEMENT: policy %d rule %d: %w", index, rule.Position(), err)
-			}
-		}
-		policies[normalized.ModelID()] = normalized
+func buildPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID, frozen golem.FrozenPolicy) (ir.Policy, error) {
+	bound, bindErr := bind.Policy(frozen, request.Registry, providers)
+	if bindErr != nil {
+		return ir.Policy{}, fmt.Errorf("P2_RUNTIME_BIND: model %x: %w", model, bindErr)
 	}
-	return policies, nil
+	normalized, normalizeErr := normalize.Policy(bound)
+	if normalizeErr != nil {
+		return ir.Policy{}, fmt.Errorf("P2_RUNTIME_NORMALIZE: model %x: %w", model, normalizeErr)
+	}
+	if normalized.ModelID() != ir.ModelID(model) {
+		return ir.Policy{}, fmt.Errorf("P2_RUNTIME_POLICY: model %x policy is bound to %x", model, normalized.ModelID())
+	}
+	for _, rule := range normalized.Rules() {
+		condition, ok := rule.Condition()
+		if !ok {
+			continue
+		}
+		for _, requirement := range condition.Requirements() {
+			if requirement.Providers().Contains(request.Provider) && (!resolver.Capability(request.Provider, requirement.Capability()) || !request.Capabilities.Has(requirement.Capability())) {
+				return ir.Policy{}, fmt.Errorf("P2_RUNTIME_CAPABILITY: model %x rule %d requires capability %d", model, rule.Position(), requirement.Capability())
+			}
+		}
+		if err := requireConditionAgreement(condition, providers); err != nil {
+			return ir.Policy{}, fmt.Errorf("P2_RUNTIME_AGREEMENT: model %x rule %d: %w", model, rule.Position(), err)
+		}
+	}
+	return normalized, nil
 }
 
 func requireConditionAgreement(condition ir.Condition, providers ir.ProviderSet) error {

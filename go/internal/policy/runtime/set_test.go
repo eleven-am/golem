@@ -153,12 +153,15 @@ func TestBuildValidatesPolicyCapabilitiesAndFactoryExactlyOnceOnFailure(t *testi
 	})
 	bindings := runtimeBindings(t, fixture.generation, binding)
 	proof := runtimeProof(t, registry, policyir.ProviderPostgreSQL)
-	_, err := Build(BuildRequest[runtimeActor]{Bindings: bindings, Actor: runtimeActor{Name: "ada"}, Registry: registry, Provider: policyir.ProviderPostgreSQL, Capabilities: proof})
-	if err == nil || !strings.Contains(err.Error(), "P2_RUNTIME_CAPABILITY") || !strings.Contains(err.Error(), "requires capability 1") {
+	refused, err := Build(BuildRequest[runtimeActor]{Bindings: bindings, Actor: runtimeActor{Name: "ada"}, Registry: registry, Provider: policyir.ProviderPostgreSQL, Capabilities: proof})
+	if err != nil || calls.Load() != 0 {
+		t.Fatalf("lazy build ran a factory or failed early: calls=%d error=%v", calls.Load(), err)
+	}
+	if err := runtimePolicyError(t, refused, policyir.ModelID(fixture.user)); err == nil || !strings.Contains(err.Error(), "P2_RUNTIME_CAPABILITY") || !strings.Contains(err.Error(), "requires capability 1") {
 		t.Fatalf("missing binary-text capability error=%v", err)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("factory calls=%d want exactly one", calls.Load())
+	if _, ok := refused.Policy(policyir.ModelID(fixture.user)); ok || calls.Load() != 1 {
+		t.Fatalf("refused policy granted or factory calls=%d want exactly one", calls.Load())
 	}
 
 	calls.Store(0)
@@ -181,8 +184,11 @@ func TestBuildValidatesPolicyCapabilitiesAndFactoryExactlyOnceOnFailure(t *testi
 	})
 	withoutBindings := runtimeBindings(t, withoutFixture.generation, withoutBinding)
 	fullProof := runtimeProof(t, withoutRegistry, policyir.ProviderPostgreSQL, allRuntimeCapabilities...)
-	_, err = Build(BuildRequest[runtimeActor]{Bindings: withoutBindings, Actor: runtimeActor{Name: "ada"}, Registry: withoutRegistry, Provider: policyir.ProviderPostgreSQL, Capabilities: fullProof})
-	if err == nil || !strings.Contains(err.Error(), "P2_RUNTIME_CAPABILITY") {
+	withoutSet, err := Build(BuildRequest[runtimeActor]{Bindings: withoutBindings, Actor: runtimeActor{Name: "ada"}, Registry: withoutRegistry, Provider: policyir.ProviderPostgreSQL, Capabilities: fullProof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtimePolicyError(t, withoutSet, policyir.ModelID(withoutFixture.user)); err == nil || !strings.Contains(err.Error(), "P2_RUNTIME_CAPABILITY") {
 		t.Fatalf("missing registry capability error=%v", err)
 	}
 	if calls.Load() != 1 {
@@ -219,6 +225,14 @@ func TestBuildFailsClosedForNilRegistryAndPolicyLookupIsDetached(t *testing.T) {
 	if _, ok := set.Policy(policyir.ModelID{0xff}); ok {
 		t.Fatal("unknown model returned a policy")
 	}
+}
+
+func runtimePolicyError(t *testing.T, set *Set, model policyir.ModelID) error {
+	t.Helper()
+	if _, ok := set.policies[model]; !ok {
+		t.Fatalf("model %x has no policy entry", model)
+	}
+	return set.PolicyError(model)
 }
 
 var allRuntimeCapabilities = []policyir.Capability{

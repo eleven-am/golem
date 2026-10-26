@@ -180,7 +180,7 @@ func TestQueryPlanAuthorizationHooksAndExecutionPreparationAreOneBoundary(t *tes
 	if report.Operation() != queryplan.OperationFindMany || report.Provider() != golem.SQLite || report.RootModelID() != fixture.users.Metadata().ModelID() {
 		t.Fatalf("report header=%q/%q/%x", report.Operation(), report.Provider(), report.RootModelID())
 	}
-	if fixture.beforeCalls.Load() != 1 || fixture.afterCalls.Load() != 0 || fixture.policyBuilds.Load() != 2 {
+	if fixture.beforeCalls.Load() != 1 || fixture.afterCalls.Load() != 0 || fixture.policyBuilds.Load() != 1 {
 		t.Fatalf("hook/policy counts before=%d after=%d policies=%d", fixture.beforeCalls.Load(), fixture.afterCalls.Load(), fixture.policyBuilds.Load())
 	}
 	statements := fixture.trace.snapshot()
@@ -199,7 +199,7 @@ func TestQueryPlanAuthorizationHooksAndExecutionPreparationAreOneBoundary(t *tes
 	if len(executed) != 1 || executed[0] != explainedSQL {
 		t.Fatalf("shared prepare/render drifted:\nexplain=%q\nexecute=%q", explainedSQL, executed)
 	}
-	if fixture.beforeCalls.Load() != 2 || fixture.afterCalls.Load() != 1 || fixture.policyBuilds.Load() != 2 {
+	if fixture.beforeCalls.Load() != 2 || fixture.afterCalls.Load() != 1 || fixture.policyBuilds.Load() != 1 {
 		t.Fatalf("post-execution hook/policy counts before=%d after=%d policies=%d", fixture.beforeCalls.Load(), fixture.afterCalls.Load(), fixture.policyBuilds.Load())
 	}
 	values := recorder.snapshot()
