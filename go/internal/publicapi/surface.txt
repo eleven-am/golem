@@ -219,7 +219,7 @@ events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
 events.Limits comparable
 events.Limits type struct
-events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery}
+events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
 events.Limits.ClaimRows field int
 events.Limits.ConnectionInitBytes field int
 events.Limits.ConnectionInitTimeout field time.Duration
@@ -231,6 +231,7 @@ events.Limits.MaxEncodedEventBytes field int
 events.Limits.MaxSubscriptionsPerConnection field int
 events.Limits.PublishTimeout field time.Duration
 events.Limits.PublisherConcurrency field int
+events.Limits.RequireExclusiveProcessLocalPublisher field bool
 events.Limits.RetentionAge field time.Duration
 events.Limits.RetentionDeleteRows field int
 events.Limits.RetentionEvery field time.Duration
@@ -279,6 +280,7 @@ events.ObservationPublisherClaim const ObservationKind = "publisher_claim"
 events.ObservationPublisherRetry const ObservationKind = "publisher_retry"
 events.ObservationRetention const ObservationKind = "retention"
 events.ObservationSuppression const ObservationKind = "suppression"
+events.ObservationTopology const ObservationKind = "topology"
 events.ObservationTransportReceive const ObservationKind = "transport_receive"
 events.ObservationTransportReconnect const ObservationKind = "transport_reconnect"
 events.Observe func(Observer, context.Context, golem.ModelID, golem.EventAction, ObservationKind, Outcome, SuppressionReason, int, int, int, time.Duration, int64)
@@ -3619,6 +3621,7 @@ observe.OperationEventPublisherBlock const Operation = "event.publisher_block"
 observe.OperationEventPublisherClaim const Operation = "event.publisher_claim"
 observe.OperationEventPublisherRetry const Operation = "event.publisher_retry"
 observe.OperationEventRetention const Operation = "event.retention"
+observe.OperationEventTopology const Operation = "event.topology"
 observe.OperationEventTransportReceive const Operation = "event.transport_receive"
 observe.OperationEventTransportReconnect const Operation = "event.transport_reconnect"
 observe.OperationGraphQLBatchedComputed const Operation = "graphql.batched_computed"

@@ -51,7 +51,7 @@
     {"kind": "hook", "operations": ["hook.find_one", "hook.find_first", "hook.find_many", "hook.create", "hook.update", "hook.delete", "hook.update_many", "hook.delete_many"]},
     {"kind": "relation_load", "operations": ["relation.load"]},
     {"kind": "migration", "operations": ["migration.inspect"]},
-    {"kind": "event", "operations": ["event.publisher_claim", "event.publisher_attempt", "event.publisher_acknowledge", "event.publisher_retry", "event.publisher_block", "event.depth_pending", "event.depth_blocked", "event.depth_retired", "event.retention", "event.transport_receive", "event.transport_reconnect"]},
+    {"kind": "event", "operations": ["event.publisher_claim", "event.publisher_attempt", "event.publisher_acknowledge", "event.publisher_retry", "event.publisher_block", "event.depth_pending", "event.depth_blocked", "event.depth_retired", "event.retention", "event.transport_receive", "event.transport_reconnect", "event.topology"]},
     {"kind": "subscription", "operations": ["subscription.membership", "subscription.evaluation", "subscription.delivery", "subscription.suppression", "subscription.overflow", "subscription.cancellation"]},
     {"kind": "cdc", "operations": ["cdc.receive", "cdc.acknowledge"]},
     {"kind": "shutdown", "operations": ["shutdown.http", "shutdown.publisher"]},

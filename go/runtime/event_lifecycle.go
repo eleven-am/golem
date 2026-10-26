@@ -106,6 +106,7 @@ func (app *App[P, A]) initializeEventRuntime(adapters []events.CDCAdapter, audit
 	}
 
 	app.eventPublisher = publisher
+	app.eventDelivery = coordinator
 	app.eventOperator = operator
 	app.eventAdapters = append([]events.CDCAdapter(nil), adapters...)
 	app.eventCDCWorkers = workers
@@ -169,8 +170,9 @@ func (app *App[P, A]) EventOperator() events.Operator {
 }
 
 type eventRunResult struct {
-	cdc bool
-	err error
+	cdc      bool
+	topology bool
+	err      error
 }
 
 // RunEventPublisher owns the durable outbox publisher and every configured CDC
@@ -200,16 +202,27 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) (resultErr error) {
 		return nil
 	}
 
+	guard, err := app.startProcessLocalPublisherGuard(ctx)
+	if err != nil {
+		return err
+	}
+
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	count := 1 + len(app.eventCDCWorkers)
+	if guard != nil {
+		count++
+	}
 	results := make(chan eventRunResult, count)
-	runEventComponent(runContext, results, false, app.eventPublisher.Run)
+	runEventComponent(runContext, results, eventRunResult{}, app.eventPublisher.Run)
 	for _, worker := range app.eventCDCWorkers {
 		owned := worker
-		runEventComponent(runContext, results, true, func(componentContext context.Context) error {
+		runEventComponent(runContext, results, eventRunResult{cdc: true}, func(componentContext context.Context) error {
 			return owned.adapter.Run(componentContext, owned.emitter)
 		})
+	}
+	if guard != nil {
+		runEventComponent(runContext, results, eventRunResult{topology: true}, guard.run)
 	}
 
 	select {
@@ -229,7 +242,9 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) (resultErr error) {
 		remaining := count - 1
 		remaining = waitEventComponents(results, remaining, app.eventLimits.ShutdownGrace)
 		var runErr error
-		if result.cdc {
+		if result.topology && result.err != nil {
+			runErr = result.err
+		} else if result.cdc {
 			runErr = events.Failure(events.CodeCDCUnavailable)
 		} else {
 			runErr = events.Failure(events.CodeEventSourceClosed)
@@ -252,9 +267,9 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) (resultErr error) {
 	}
 }
 
-func runEventComponent(ctx context.Context, results chan<- eventRunResult, cdc bool, run func(context.Context) error) {
+func runEventComponent(ctx context.Context, results chan<- eventRunResult, component eventRunResult, run func(context.Context) error) {
 	go func() {
-		result := eventRunResult{cdc: cdc}
+		result := component
 		defer func() {
 			if recover() != nil {
 				result.err = events.Failure(events.CodeEventSourceClosed)

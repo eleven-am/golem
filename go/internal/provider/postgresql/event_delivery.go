@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -120,6 +122,65 @@ func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error
 		}
 	}
 	return nil
+}
+
+func (coordinator *eventCoordinator) HoldExclusivePublisher(ctx context.Context) (func(), <-chan struct{}, bool, error) {
+	connection, err := coordinator.database.Connx(ctx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: reserve a connection for the process-local publisher lock: %w", err)
+	}
+	key := queueAdvisoryKey("golem_process_local_publisher\x00" + string(coordinator.namespace))
+	var held bool
+	if err := connection.GetContext(ctx, &held, `SELECT pg_try_advisory_lock($1)`, key); err != nil {
+		discardPinnedConnection(connection)
+		return nil, nil, false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: take the process-local publisher lock: %w", err)
+	}
+	if !held {
+		_ = connection.Close()
+		return nil, nil, false, nil
+	}
+	watchContext, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
+	lost := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		_ = connection.Raw(func(driverConnection any) error {
+			native, ok := driverConnection.(*stdlib.Conn)
+			if !ok {
+				<-watchContext.Done()
+				return nil
+			}
+			for {
+				if err := native.Conn().PgConn().WaitForNotification(watchContext); err != nil {
+					return nil
+				}
+			}
+		})
+		if watchContext.Err() == nil {
+			close(lost)
+		}
+	}()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			stopWatching()
+			<-watched
+			unlockContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			var unlocked bool
+			if err := connection.GetContext(unlockContext, &unlocked, `SELECT pg_advisory_unlock($1)`, key); err != nil || !unlocked {
+				discardPinnedConnection(connection)
+				return
+			}
+			_ = connection.Close()
+		})
+	}
+	return release, lost, true, nil
+}
+
+func discardPinnedConnection(connection *sqlx.Conn) {
+	_ = connection.Raw(func(any) error { return driver.ErrBadConn })
+	_ = connection.Close()
 }
 
 func (coordinator *eventCoordinator) verifyClaimIndex(ctx context.Context, queryer sqlx.QueryerContext) error {

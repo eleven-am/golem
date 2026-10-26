@@ -86,6 +86,10 @@ func (*publisherTestCoordinator) Inspect(context.Context, string) (eventprovider
 }
 func (*publisherTestCoordinator) Resume(context.Context, string) (bool, error) { return false, nil }
 func (*publisherTestCoordinator) Retire(context.Context, string) (bool, error) { return false, nil }
+func (*publisherTestCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (*publisherTestCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
 	return eventprovider.RetentionResult{}, nil
 }
@@ -143,6 +147,10 @@ func (coordinator *transientAcknowledgeCoordinator) Claim(ctx context.Context, _
 
 func (coordinator *transientAcknowledgeCoordinator) Acknowledge(context.Context, string, string) (bool, error) {
 	return false, errors.New("temporary acknowledgement outage")
+}
+
+func (*retentionFailureCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
 }
 
 func (*retentionFailureCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {

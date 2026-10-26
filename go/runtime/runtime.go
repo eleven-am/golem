@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	fulltextruntime "github.com/eleven-am/golem/go/internal/fulltext/runtime"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -109,6 +110,8 @@ type App[P, A any] struct {
 	eventModels               []golem.ModelID
 	eventTransportABI         events.TransportCapabilities
 	eventRunning              atomic.Bool
+	eventDelivery             eventprovider.Coordinator
+	eventTopologyReported     atomic.Bool
 	snapshotPrincipal         func(P) (P, error)
 	eventMu                   sync.Mutex
 	eventHubs                 map[golem.ModelID]*subscription.ModelHub[any]

@@ -128,6 +128,7 @@ type Coordinator interface {
 	Resume(context.Context, string) (bool, error)
 	Retire(context.Context, string) (bool, error)
 	RunRetention(context.Context, RetentionPolicy) (RetentionResult, error)
+	HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error)
 }
 
 func ValidateClaim(options ClaimOptions) error {

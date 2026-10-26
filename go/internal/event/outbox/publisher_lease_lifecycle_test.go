@@ -165,6 +165,10 @@ func (*leaseStoreCoordinator) Inspect(context.Context, string) (eventprovider.De
 }
 func (*leaseStoreCoordinator) Resume(context.Context, string) (bool, error) { return false, nil }
 func (*leaseStoreCoordinator) Retire(context.Context, string) (bool, error) { return false, nil }
+func (*leaseStoreCoordinator) HoldExclusivePublisher(context.Context) (func(), <-chan struct{}, bool, error) {
+	return func() {}, nil, true, nil
+}
+
 func (*leaseStoreCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
 	return eventprovider.RetentionResult{}, nil
 }

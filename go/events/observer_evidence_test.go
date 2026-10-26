@@ -22,6 +22,7 @@ func TestObserverShapeContainsOnlyClosedSafeLabels(t *testing.T) {
 		ObservationTransportReceive, ObservationTransportReconnect, ObservationHubMembership,
 		ObservationEvaluation, ObservationDelivery, ObservationSuppression, ObservationOverflow,
 		ObservationCancellation, ObservationCDCReceive, ObservationCDCAck, ObservationLifecycleFailure,
+		ObservationTopology,
 	}
 	outcomes := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeSuppressed, OutcomeCancelled}
 	reasons := []SuppressionReason{"", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable, SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite}

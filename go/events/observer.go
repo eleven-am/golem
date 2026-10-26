@@ -33,6 +33,7 @@ const (
 	ObservationCDCReceive         ObservationKind = "cdc_receive"
 	ObservationCDCAck             ObservationKind = "cdc_ack"
 	ObservationLifecycleFailure   ObservationKind = "lifecycle_failure"
+	ObservationTopology           ObservationKind = "topology"
 )
 
 const (
@@ -98,7 +99,8 @@ func validObservationKind(kind ObservationKind) bool {
 		ObservationDepthPending, ObservationDepthBlocked, ObservationDepthRetired,
 		ObservationTransportReceive, ObservationTransportReconnect, ObservationHubMembership,
 		ObservationEvaluation, ObservationDelivery, ObservationSuppression, ObservationOverflow,
-		ObservationCancellation, ObservationCDCReceive, ObservationCDCAck, ObservationLifecycleFailure:
+		ObservationCancellation, ObservationCDCReceive, ObservationCDCAck, ObservationLifecycleFailure,
+		ObservationTopology:
 		return true
 	default:
 		return false

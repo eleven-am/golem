@@ -238,6 +238,7 @@ func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 	if err != nil {
 		return nil, err
 	}
+	caller.app.reportSubscriberWithoutPublisher(ctx)
 	return &callerEventStream[E]{stream: stream}, nil
 }
 

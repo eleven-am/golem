@@ -13,26 +13,27 @@ import (
 const RetentionDisabled = time.Duration(-1)
 
 type Limits struct {
-	ClaimRows                     int
-	PublisherConcurrency          int
-	LeaseDuration                 time.Duration
-	PublishTimeout                time.Duration
-	RetryBase                     time.Duration
-	RetryCap                      time.Duration
-	MaxEncodedEventBytes          int
-	MaxEncodedBatchBytes          int
-	SubscriberQueue               int
-	HubInputQueue                 int
-	EvaluationConcurrency         int
-	MaxSubscriptionsPerConnection int
-	ConnectionInitBytes           int
-	ConnectionInitTimeout         time.Duration
-	WebSocketKeepAlive            time.Duration
-	WebSocketPongTimeout          time.Duration
-	ShutdownGrace                 time.Duration
-	RetentionDeleteRows           int
-	RetentionAge                  time.Duration
-	RetentionEvery                time.Duration
+	ClaimRows                             int
+	PublisherConcurrency                  int
+	LeaseDuration                         time.Duration
+	PublishTimeout                        time.Duration
+	RetryBase                             time.Duration
+	RetryCap                              time.Duration
+	MaxEncodedEventBytes                  int
+	MaxEncodedBatchBytes                  int
+	SubscriberQueue                       int
+	HubInputQueue                         int
+	EvaluationConcurrency                 int
+	MaxSubscriptionsPerConnection         int
+	ConnectionInitBytes                   int
+	ConnectionInitTimeout                 time.Duration
+	WebSocketKeepAlive                    time.Duration
+	WebSocketPongTimeout                  time.Duration
+	ShutdownGrace                         time.Duration
+	RetentionDeleteRows                   int
+	RetentionAge                          time.Duration
+	RetentionEvery                        time.Duration
+	RequireExclusiveProcessLocalPublisher bool
 }
 
 var defaultLimits = Limits{
