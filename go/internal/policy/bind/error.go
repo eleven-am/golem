@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -31,6 +32,7 @@ const (
 // human-readable Detail string.
 type Error struct {
 	Code         ErrorCode
+	Reason       golem.Reason
 	Path         string
 	Detail       string
 	RulePosition uint32
@@ -47,6 +49,9 @@ func (failure *Error) Error() string {
 		return ""
 	}
 	result := string(failure.Code)
+	if failure.Reason != "" {
+		result += " reason=" + string(failure.Reason)
+	}
 	if failure.HasRule {
 		result += fmt.Sprintf(" rule=%d", failure.RulePosition)
 	}

@@ -25,3 +25,7 @@ func TestP8CustomMutationTransactionParity(t *testing.T) {
 func TestP8MutationDenialAndProviderFailureRollbackParity(t *testing.T) {
 	p8oracle.RunExternalScenario(t, externalMutationOracle, "denial-provider-failure")
 }
+
+func TestSubMicrosecondDatetimeWritesTruncateAndFiltersAreExact(t *testing.T) {
+	p8oracle.RunExternalScenario(t, externalMutationOracle, "datetime-precision")
+}

@@ -12,6 +12,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	"github.com/eleven-am/golem/go/internal/temporal"
 )
 
 // mutationRuntimeValues freezes application-produced values once for one
@@ -159,7 +160,7 @@ func (values *mutationRuntimeValues) uuid(model policyir.ModelID, field policyir
 }
 
 func (values *mutationRuntimeValues) nowValue(typ compilerir.LogicalTypeIR) (policyir.Value, error) {
-	now := truncateRuntimeTime(values.now, temporalPrecision(typ))
+	now := temporal.Truncate(values.now, temporal.Precision(typ))
 	switch typ.Kind {
 	case compilerir.TypeDate:
 		return policyir.NewDateValue(int16(now.Year()), uint8(now.Month()), uint8(now.Day()))
@@ -171,25 +172,6 @@ func (values *mutationRuntimeValues) nowValue(typ compilerir.LogicalTypeIR) (pol
 	default:
 		return policyir.Value{}, fmt.Errorf("now value has unsupported logical type %q", typ.Kind)
 	}
-}
-
-func temporalPrecision(typ compilerir.LogicalTypeIR) uint16 {
-	if typ.Kind == compilerir.TypeDate {
-		return 0
-	}
-	if typ.Precision == nil || *typ.Precision > 6 {
-		return 6
-	}
-	return *typ.Precision
-}
-
-func truncateRuntimeTime(value time.Time, precision uint16) time.Time {
-	quantum := int64(1)
-	for index := precision; index < 9; index++ {
-		quantum *= 10
-	}
-	nanos := int64(value.Nanosecond())
-	return time.Unix(value.Unix(), nanos/quantum*quantum).UTC()
 }
 
 func formatUUID(value [16]byte) string {

@@ -782,8 +782,8 @@ func validateFrozenOperand(operand frozenOperand) error {
 				return freezeFailure(FreezeInvalidValue, "time operand is outside [00:00:00, 24:00:00)")
 			}
 		case FrozenValueDateTime:
-			if value.nanosecond >= 1_000_000_000 || value.nanosecond%1_000 != 0 {
-				return freezeFailure(FreezeInvalidValue, "datetime must have exact microsecond precision")
+			if value.nanosecond >= 1_000_000_000 {
+				return freezeFailure(FreezeInvalidValue, "datetime nanosecond is outside one second")
 			}
 		case FrozenValueJSON:
 			if _, ok := copyJSONValue(publicJSONValue(value.json)); !ok {
