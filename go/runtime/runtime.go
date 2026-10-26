@@ -540,6 +540,9 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "read", request.ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
 	bound, err := readbind.Request(request, caller.app.registry, caller.app.providers)
+	if refused, ok := publicBindReasonError(caller.app.registry, operationName(request.Operation()), request.ModelID(), err); ok {
+		return PreparedRead{}, refused
+	}
 	if err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}
@@ -560,6 +563,9 @@ func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRea
 		return PreparedRead{}, fmt.Errorf("P3_RUNTIME_SYSTEM: system capability is unavailable")
 	}
 	bound, err := readbind.Request(request, system.app.registry, system.app.providers)
+	if refused, ok := publicBindReasonError(system.app.registry, operationName(request.Operation()), request.ModelID(), err); ok {
+		return PreparedRead{}, refused
+	}
 	if err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}

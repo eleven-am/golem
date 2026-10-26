@@ -236,6 +236,9 @@ func scopedError(model golem.ModelID, cause error) error {
 	if limited, ok := publicLimitError("scoped", model, cause); ok {
 		return limited
 	}
+	if refused, ok := publicScopedValueError(model, cause); ok {
+		return refused
+	}
 	return golem.RuntimeReadError(readFaultCode(cause), "scoped", model, golem.FieldID{}, "scoped query could not be executed", cause)
 }
 

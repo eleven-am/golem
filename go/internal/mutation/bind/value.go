@@ -15,6 +15,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	"github.com/eleven-am/golem/go/internal/temporal"
 )
 
 const golemPackagePath = "github.com/eleven-am/golem/go/golem"
@@ -160,7 +161,7 @@ func bindLogicalValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.Ty
 		if !ok {
 			return result, wrongGoType(raw, "golem.Time")
 		}
-		result, err = policyir.NewTimeValue(clock.Microseconds())
+		result, err = policyir.NewTimeValue(temporal.TruncateMicroseconds(clock.Microseconds(), temporal.Precision(logical)))
 	case compilerir.TypeDateTime:
 		instant, ok := raw.(time.Time)
 		if !ok {
@@ -170,6 +171,7 @@ func bindLogicalValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.Ty
 		if instant.Year() < 1 || instant.Year() > 9999 {
 			return result, valueFailure(golem.ReasonValueRange, 0, fmt.Errorf("datetime is outside the portable year range 0001-9999"))
 		}
+		instant = temporal.Truncate(instant, temporal.Precision(logical))
 		result, err = policyir.NewDateTimeValue(instant.Unix(), uint32(instant.Nanosecond()))
 	case compilerir.TypeEnum:
 		if value.Kind() != reflect.String || logical.EnumID == nil {

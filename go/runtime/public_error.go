@@ -8,10 +8,13 @@ import (
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
+	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	scoped "github.com/eleven-am/golem/go/internal/scoped"
 )
 
 type mutationLimitError struct {
@@ -106,6 +109,41 @@ func publicValueError(operation string, model golem.ModelID, err error) (error, 
 		subject = bound.ModelName + "." + bound.FieldName
 	}
 	return golem.RuntimeOperationErrorWithReason(golem.CodeBadUserInput, value.Reason, operation, model, bound.Field, reasonMessage(value.Reason, subject, int(value.Maximum)), err), true
+}
+
+func publicBindReasonError(registry *schema.Registry, operation string, model golem.ModelID, err error) (error, bool) {
+	var bound *policybind.Error
+	if !errors.As(err, &bound) || bound.Reason == "" {
+		return nil, false
+	}
+	field := golem.FieldID(bound.FieldID)
+	return golem.RuntimeOperationErrorWithReason(golem.CodeBadUserInput, bound.Reason, operation, model, field, reasonMessage(bound.Reason, fieldSubject(registry, golem.ModelID(bound.ModelID), field), 0), err), true
+}
+
+func publicScopedValueError(model golem.ModelID, err error) (error, bool) {
+	var value *scoped.ValueError
+	if !errors.As(err, &value) {
+		return nil, false
+	}
+	subject := value.FieldName
+	if value.ModelName != "" {
+		subject = value.ModelName + "." + value.FieldName
+	}
+	return golem.RuntimeOperationErrorWithReason(golem.CodeBadUserInput, value.Reason, "scoped", model, value.Field, reasonMessage(value.Reason, subject, 0), err), true
+}
+
+func fieldSubject(registry *schema.Registry, model golem.ModelID, field golem.FieldID) string {
+	if registry == nil {
+		return "field"
+	}
+	fact, ok := registry.Field(model, field)
+	if !ok {
+		return "field"
+	}
+	if declaration, ok := registry.Model(model); ok {
+		return declaration.LogicalName() + "." + fact.LogicalName()
+	}
+	return fact.LogicalName()
 }
 
 func rebasePublicError(public *golem.Error, operation string, model golem.ModelID, message string, cause error) error {

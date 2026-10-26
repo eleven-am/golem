@@ -60,6 +60,18 @@ func (failure *AuthorizationError) Error() string {
 
 func (failure *AuthorizationError) Unwrap() error { return failure.Cause }
 
+type ValueError struct {
+	Reason    golem.Reason
+	Model     golem.ModelID
+	Field     golem.FieldID
+	ModelName string
+	FieldName string
+}
+
+func (failure *ValueError) Error() string {
+	return "P6_SCOPED_VALUE: " + string(failure.Reason) + ": " + failure.ModelName + "." + failure.FieldName
+}
+
 func (plan Plan) Request() golem.FrozenScopedQuery { return plan.request }
 
 func Caller(request golem.FrozenScopedQuery, registry *schema.Registry, providers policyir.ProviderSet, policies PolicySet, limits readplan.Limits) (Plan, error) {
@@ -145,6 +157,13 @@ func build(request golem.FrozenScopedQuery, registry *schema.Registry, providers
 	if having, present := request.Having(); present {
 		if err := walkPredicate(having, collect, true); err != nil {
 			return Plan{}, err
+		}
+	}
+	for _, predicate := range []func() (golem.FrozenScopedPredicate, bool){request.Where, request.Having} {
+		if value, present := predicate(); present {
+			if err := refuseSubMicrosecond(value, registry); err != nil {
+				return Plan{}, err
+			}
 		}
 	}
 	constraints := map[uint32]policyir.Condition{}
@@ -314,6 +333,32 @@ func walkPredicateExpressions(value golem.FrozenScopedPredicate, visit func(gole
 	for _, child := range value.Children {
 		walkPredicateExpressions(child, visit)
 	}
+}
+
+func refuseSubMicrosecond(value golem.FrozenScopedPredicate, registry *schema.Registry) error {
+	for _, child := range value.Children {
+		if err := refuseSubMicrosecond(child, registry); err != nil {
+			return err
+		}
+	}
+	expression := value.Expression
+	if expression.Kind != golem.ScopedExpressionField && expression.Kind != golem.ScopedExpressionMinimum && expression.Kind != golem.ScopedExpressionMaximum {
+		return nil
+	}
+	field, ok := registry.Field(expression.Model, expression.Field)
+	if !ok || field.LogicalType().Kind != compilerir.TypeDateTime {
+		return nil
+	}
+	for _, raw := range value.Values {
+		if instant, ok := raw.(time.Time); ok && instant.Nanosecond()%1_000 != 0 {
+			failure := &ValueError{Reason: golem.ReasonValuePrecision, Model: expression.Model, Field: expression.Field, FieldName: field.LogicalName()}
+			if model, ok := registry.Model(expression.Model); ok {
+				failure.ModelName = model.LogicalName()
+			}
+			return failure
+		}
+	}
+	return nil
 }
 
 func scopedConstraints(value golem.FrozenScopedPredicate, registry *schema.Registry) (map[uint32]policyir.Condition, error) {

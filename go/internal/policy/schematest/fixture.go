@@ -35,6 +35,8 @@ type Fixture struct {
 	PostJSON         golem.FieldID
 	PostList         golem.FieldID
 	PostDateTime     golem.FieldID
+	PostAt           golem.FieldID
+	PostStamps       golem.FieldID
 	PostAuthorName   golem.FieldID
 	UserPosts        golem.FieldID
 	PostAuthor       golem.FieldID
