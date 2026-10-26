@@ -165,6 +165,7 @@ type Server[P any] struct {
 	lifecycle           context.Context
 	cancel              context.CancelFunc
 	connections         sync.WaitGroup
+	rechecks            sync.WaitGroup
 	lifecycleMu         sync.Mutex
 	shuttingDown        bool
 }

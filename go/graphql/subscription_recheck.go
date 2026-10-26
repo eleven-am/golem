@@ -29,6 +29,9 @@ func validateSubscriptionRecheck[P any](recheck SubscriptionRecheck[P]) error {
 	if (recheck.Check == nil) != (recheck.Interval == 0) {
 		return fmt.Errorf("GraphQL SubscriptionRecheck requires both Interval and Check, or neither")
 	}
+	if recheck.Interval != 0 && recheck.Interval < events.MinimumRecheckInterval {
+		return fmt.Errorf("GraphQL SubscriptionRecheck.Interval must be at least %s, got %s", events.MinimumRecheckInterval, recheck.Interval)
+	}
 	return nil
 }
 
@@ -45,11 +48,17 @@ func (server *Server[P]) subscribe(executor SubscriptionExecutor[P], ctx context
 	failed, markFail := context.WithCancel(context.Background())
 	stream := &recheckedResponseStream{source: source, cancel: cancel, failed: failed, markFail: markFail}
 	report := server.config.ReportInternalError
-	go stream.watch(checkContext, recheck.Interval, func(ctx context.Context) error {
-		return runSubscriptionCheck(ctx, report, func(ctx context.Context) error {
-			return recheck.Check(ctx, principal, operation)
+	stopLifecycle := context.AfterFunc(server.lifecycle, cancel)
+	server.rechecks.Add(1)
+	go func() {
+		defer server.rechecks.Done()
+		defer stopLifecycle()
+		stream.watch(checkContext, recheck.Interval, func(ctx context.Context) error {
+			return runSubscriptionCheck(ctx, report, func(ctx context.Context) error {
+				return recheck.Check(ctx, principal, operation)
+			})
 		})
-	})
+	}()
 	return stream, nil
 }
 
@@ -77,7 +86,7 @@ func runSubscriptionCheck(ctx context.Context, report func(context.Context, erro
 	defer func() {
 		if recover() != nil {
 			report(ctx, errors.New("GraphQL subscription recheck panicked"))
-			err = events.Failure(events.CodeSubscriptionForbidden)
+			err = events.Failure(events.CodeSubscriptionSourceClosed)
 		}
 	}()
 	return check(ctx)
@@ -89,7 +98,7 @@ func subscriptionRecheckCode(err error) events.ErrorCode {
 		return events.CodeSubscriptionForbidden
 	}
 	switch code {
-	case events.CodeSubscriptionForbidden, events.CodeSubscriptionRevalidation, events.CodeSubscriptionResync:
+	case events.CodeSubscriptionForbidden, events.CodeSubscriptionRevalidation, events.CodeSubscriptionResync, events.CodeSubscriptionSourceClosed:
 		return code
 	default:
 		return events.CodeSubscriptionForbidden

@@ -25,7 +25,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const recheckInterval = 50 * time.Millisecond
+const recheckInterval = events.MinimumRecheckInterval
 
 type recheckAccess struct {
 	mu     sync.Mutex
@@ -368,7 +368,7 @@ func TestSubscriptionRecheckEndsARevokedShareOnEveryTransport(t *testing.T) {
 	if sse.response.StatusCode != http.StatusOK {
 		t.Fatalf("SSE status=%d", sse.response.StatusCode)
 	}
-	time.Sleep(3 * recheckInterval)
+	time.Sleep(recheckInterval)
 	if _, err := alice.Posts.Update(ctx, social.Posts.ByID.Value(post), social.Posts.Update(social.Posts.Published.Set(false))); err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestSubscriptionRecheckEndsARevokedShareOnEveryTransport(t *testing.T) {
 	awaitStreamCode(t, ctx, goStream, events.CodeSubscriptionForbidden)
 	awaitWSOperationError(t, connection, "shared", events.CodeSubscriptionForbidden)
 	sse.awaitTerminal(t, events.CodeSubscriptionForbidden)
-	if elapsed := time.Since(revoked); elapsed > 2*time.Second {
+	if elapsed := time.Since(revoked); elapsed > 3*recheckInterval {
 		t.Fatalf("revocation took %s to end every stream", elapsed)
 	}
 	assertWSPing(t, connection)
@@ -416,7 +416,7 @@ func TestSubscriptionRevalidationEndsConstantFalseAndRevokedPrincipals(t *testin
 	if sse.response.StatusCode != http.StatusOK {
 		t.Fatalf("SSE status=%d", sse.response.StatusCode)
 	}
-	time.Sleep(3 * recheckInterval)
+	time.Sleep(recheckInterval)
 	quiet, stop := context.WithTimeout(ctx, 2*recheckInterval)
 	if _, err := sessions.Recv(quiet); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("an authorized stream ended during revalidation: %v", err)
@@ -482,10 +482,31 @@ func TestSubscriptionPrincipalCapSpansGoAndGraphQL(t *testing.T) {
 	awaitWSNext(t, connection, "freed", next.String())
 }
 
+func TestOpenRefusesAPrincipalCapWithoutAPrincipalKey(t *testing.T) {
+	transport, err := events.NewMemoryTransport(events.MemoryLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = social.Open(context.Background(), social.Config[social.Principal]{
+		Database: openDeleteEventsSQLite(t), EventTransport: transport,
+		EventLimits:         events.Limits{MaxSubscriptionsPerPrincipal: 2},
+		ResolvePrincipal:    (&recheckAccess{banned: map[golem.UUID]bool{}, broken: map[golem.UUID]bool{}}).resolve,
+		SnapshotPrincipal:   func(principal social.Principal) (social.Principal, error) { return principal, nil },
+		SnapshotActor:       func(actor social.Actor) (social.Actor, error) { return actor, nil },
+		AuditPrincipal:      principalAuditID,
+		ReportScopedQuery:   func(context.Context, golem.ScopedAuditRecord) {},
+		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
+		AfterCommitError:    func(context.Context, golem.AfterCommitFailure) {},
+	})
+	if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig {
+		t.Fatalf("an unkeyed principal cap opened: %v", err)
+	}
+}
+
 func TestSubscriptionRecheckLeavesNoGoroutinesBehind(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	world := openRecheckWorld(t, ctx, openDeleteEventsSQLite(t), events.Limits{RevalidateEvery: 5 * time.Millisecond, MaxSubscriptionsPerPrincipal: 64})
+	world := openRecheckWorld(t, ctx, openDeleteEventsSQLite(t), events.Limits{RevalidateEvery: recheckInterval, MaxSubscriptionsPerPrincipal: 64})
 	_, frank := world.user(t, ctx, "66000000-0000-0000-0000-000000000006", "frank")
 	anchor, err := frank.Posts.Events(ctx)
 	if err != nil {
@@ -496,7 +517,7 @@ func TestSubscriptionRecheckLeavesNoGoroutinesBehind(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	streams := make([]golem.EventStream[social.PostEvent], 0, 16)
 	for range 16 {
-		stream, err := frank.Posts.Events(ctx, golem.EventRecheck[social.Post](5*time.Millisecond, func(context.Context) error { return nil }))
+		stream, err := frank.Posts.Events(ctx, golem.EventRecheck[social.Post](recheckInterval, func(context.Context) error { return nil }))
 		if err != nil {
 			t.Fatal(err)
 		}

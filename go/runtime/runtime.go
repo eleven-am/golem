@@ -358,6 +358,9 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 	if err != nil {
 		return events.Limits{}, err
 	}
+	if limits.MaxSubscriptionsPerPrincipal > 0 && config.SubscriptionPrincipalKey == nil {
+		return events.Limits{}, events.Failf(events.CodeEventConfig, "MaxSubscriptionsPerPrincipal (%d) requires SubscriptionPrincipalKey", limits.MaxSubscriptionsPerPrincipal)
+	}
 	if config.EventTransport != nil {
 		capabilities, topologyErr := validateEventTransportTopology(providerIdentity, config.EventTransport)
 		if topologyErr != nil {

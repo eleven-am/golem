@@ -257,6 +257,7 @@ events.MemoryLimits comparable
 events.MemoryLimits type struct
 events.MemoryLimits unkeyed literal {Buffer}
 events.MemoryLimits.Buffer field int
+events.MinimumRecheckInterval const time.Duration = 1000000000
 events.NewMemoryTransport func(MemoryLimits) (EventTransport, error)
 events.NewRetentionPolicy func(time.Time, int) (RetentionPolicy, error)
 events.NewRetentionResult func(int, int) RetentionResult

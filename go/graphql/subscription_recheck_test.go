@@ -74,10 +74,16 @@ func (grants *recheckGrants) check(_ context.Context, principal int, operation O
 
 const recheckSchema = `type Query { viewer: Int! } type Subscription { ticks(room: Int!): Int! }`
 
-func newRecheckServer(t *testing.T, interval time.Duration) (*Server[int], *recheckExecutor, *recheckGrants) {
+func newRecheckServer(t *testing.T) (*Server[int], *recheckExecutor, *recheckGrants) {
+	t.Helper()
+	grants := &recheckGrants{revoked: map[string]error{}}
+	server, executor := newRecheckServerWith(t, grants.check)
+	return server, executor, grants
+}
+
+func newRecheckServerWith(t *testing.T, check func(context.Context, int, Operation) error) (*Server[int], *recheckExecutor) {
 	t.Helper()
 	executor := &recheckExecutor{streams: map[string]*sseTestStream{}}
-	grants := &recheckGrants{revoked: map[string]error{}}
 	server, err := NewServer(recheckSchema, Config[int]{
 		PrincipalFromContext: func(ctx context.Context) (int, bool) {
 			if value, ok := ctx.Value(sseAuthKey{}).(int); ok {
@@ -90,18 +96,28 @@ func newRecheckServer(t *testing.T, interval time.Duration) (*Server[int], *rech
 			return context.WithValue(ctx, wsAuthKey{}, 41), nil
 		},
 		ReportInternalError: func(context.Context, error) {},
-		SubscriptionRecheck: SubscriptionRecheck[int]{Interval: interval, Check: grants.check},
+		SubscriptionRecheck: SubscriptionRecheck[int]{Interval: events.MinimumRecheckInterval, Check: check},
 	}, executor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server, executor, grants
+	return server, executor
+}
+
+func recheckHost(t *testing.T, server *Server[int]) *httptest.Server {
+	t.Helper()
+	host := httptest.NewServer(server.Handler())
+	t.Cleanup(host.Close)
+	return host
 }
 
 func dialRecheck(t *testing.T, server *Server[int]) *websocket.Conn {
 	t.Helper()
-	host := httptest.NewServer(server.Handler())
-	t.Cleanup(host.Close)
+	return dialRecheckHost(t, recheckHost(t, server))
+}
+
+func dialRecheckHost(t *testing.T, host *httptest.Server) *websocket.Conn {
+	t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {
@@ -113,6 +129,16 @@ func dialRecheck(t *testing.T, server *Server[int]) *websocket.Conn {
 		t.Fatalf("ack=%#v", ack)
 	}
 	return connection
+}
+
+func readWSWithin(t *testing.T, connection *websocket.Conn, within time.Duration) wsMessage {
+	t.Helper()
+	_ = connection.SetReadDeadline(time.Now().Add(within))
+	var message wsMessage
+	if err := connection.ReadJSON(&message); err != nil {
+		t.Fatal(err)
+	}
+	return message
 }
 
 func roomSubscription(room string) json.RawMessage {
@@ -130,13 +156,13 @@ func operationErrorCode(t *testing.T, message wsMessage) string {
 }
 
 func TestWebSocketSubscriptionRecheckEndsOnlyTheRevokedOperation(t *testing.T) {
-	server, executor, grants := newRecheckServer(t, 40*time.Millisecond)
+	server, executor, grants := newRecheckServer(t)
 	connection := dialRecheck(t, server)
 	writeWS(t, connection, wsMessage{ID: "revoked", Type: "subscribe", Payload: roomSubscription("1")})
 	writeWS(t, connection, wsMessage{ID: "kept", Type: "subscribe", Payload: roomSubscription("2")})
 	revokedStream, keptStream := executor.stream(t, "1"), executor.stream(t, "2")
 	grants.revoke("1", errors.New("share revoked"))
-	message := readWS(t, connection)
+	message := readWSWithin(t, connection, 5*time.Second)
 	if message.ID != "revoked" || message.Type != "error" || operationErrorCode(t, message) != string(events.CodeSubscriptionForbidden) {
 		t.Fatalf("revoked operation message=%#v payload=%s", message, message.Payload)
 	}
@@ -157,19 +183,19 @@ func TestWebSocketSubscriptionRecheckEndsOnlyTheRevokedOperation(t *testing.T) {
 }
 
 func TestWebSocketSubscriptionRecheckKeepsAWhitelistedCode(t *testing.T) {
-	server, executor, grants := newRecheckServer(t, 40*time.Millisecond)
+	server, executor, grants := newRecheckServer(t)
 	connection := dialRecheck(t, server)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: roomSubscription("1")})
 	executor.stream(t, "1")
 	grants.revoke("1", events.Failure(events.CodeSubscriptionRevalidation))
-	message := readWS(t, connection)
+	message := readWSWithin(t, connection, 5*time.Second)
 	if message.ID != "one" || message.Type != "error" || operationErrorCode(t, message) != string(events.CodeSubscriptionRevalidation) {
 		t.Fatalf("message=%#v payload=%s", message, message.Payload)
 	}
 }
 
 func TestSSESubscriptionRecheckSendsAFinalErrorThenCompletes(t *testing.T) {
-	server, executor, grants := newRecheckServer(t, 40*time.Millisecond)
+	server, executor, grants := newRecheckServer(t)
 	host := httptest.NewServer(sseAuthenticated(server.Handler()))
 	t.Cleanup(host.Close)
 	connection := openSSE(t, context.Background(), host.URL, string(roomSubscription("3")), true)
@@ -193,24 +219,24 @@ func TestSSESubscriptionRecheckSendsAFinalErrorThenCompletes(t *testing.T) {
 }
 
 func TestSubscriptionRecheckGoroutineEndsWithTheOperation(t *testing.T) {
-	server, executor, _ := newRecheckServer(t, 10*time.Millisecond)
+	server, executor, _ := newRecheckServer(t)
+	host := recheckHost(t, server)
 	baseline := runtime.NumGoroutine()
-	connection := dialRecheck(t, server)
+	connection := dialRecheckHost(t, host)
 	for _, room := range []string{"1", "2", "3"} {
 		writeWS(t, connection, wsMessage{ID: "op" + room, Type: "subscribe", Payload: roomSubscription(room)})
 		executor.stream(t, room)
 	}
-	time.Sleep(50 * time.Millisecond)
 	for _, room := range []string{"1", "2", "3"} {
 		writeWS(t, connection, wsMessage{ID: "op" + room, Type: "complete"})
 		<-executor.stream(t, room).closed
 	}
 	_ = connection.Close()
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if count := runtime.NumGoroutine(); count > baseline+2 {
+	if count := runtime.NumGoroutine(); count > baseline {
 		t.Fatalf("goroutines=%d after every operation ended; baseline=%d", count, baseline)
 	}
 }
@@ -220,6 +246,8 @@ func TestSubscriptionRecheckConfigIsComplete(t *testing.T) {
 		"interval without check": {Interval: time.Second},
 		"check without interval": {Check: func(context.Context, int, Operation) error { return nil }},
 		"negative interval":      {Interval: -time.Second, Check: func(context.Context, int, Operation) error { return nil }},
+		"nanosecond interval":    {Interval: time.Nanosecond, Check: func(context.Context, int, Operation) error { return nil }},
+		"below the minimum":      {Interval: events.MinimumRecheckInterval - time.Millisecond, Check: func(context.Context, int, Operation) error { return nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewServer(recheckSchema, Config[int]{
@@ -244,5 +272,52 @@ func TestSSESubscriptionLimitIsTooManyRequests(t *testing.T) {
 	}
 	if connection.response.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(body), `"code":"GOLEM_SUBSCRIPTION_LIMIT"`) {
 		t.Fatalf("status=%d body=%s", connection.response.StatusCode, body)
+	}
+}
+
+func TestSubscriptionRecheckPanicIsAnInternalFault(t *testing.T) {
+	server, executor := newRecheckServerWith(t, func(context.Context, int, Operation) error { panic("check exploded") })
+	connection := dialRecheck(t, server)
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: roomSubscription("1")})
+	executor.stream(t, "1")
+	message := readWSWithin(t, connection, 5*time.Second)
+	if message.ID != "one" || message.Type != "error" || operationErrorCode(t, message) != string(events.CodeSubscriptionSourceClosed) {
+		t.Fatalf("message=%#v payload=%s", message, message.Payload)
+	}
+}
+
+func TestShutdownWaitsForARunningSubscriptionRecheck(t *testing.T) {
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	var once sync.Once
+	server, executor := newRecheckServerWith(t, func(ctx context.Context, _ int, _ Operation) error {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return nil
+		}
+		close(started)
+		<-ctx.Done()
+		time.Sleep(100 * time.Millisecond)
+		close(finished)
+		return ctx.Err()
+	})
+	connection := dialRecheck(t, server)
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: roomSubscription("1")})
+	executor.stream(t, "1")
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the recheck never ran")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Shutdown returned while a subscription recheck was still running")
 	}
 }

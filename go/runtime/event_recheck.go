@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/eleven-am/golem/go/events"
@@ -70,11 +71,33 @@ func (app *App[P, A]) revalidateEventSubscription(ctx context.Context, state *ca
 	if truth, constant := constraint.Constant(); constant && !truth {
 		return events.Failure(events.CodeSubscriptionForbidden)
 	}
-	if _, _, err := app.eventHookedRead(ctx, fresh, state); err != nil {
-		if code, _ := events.CodeOf(err); code == events.CodeSubscriptionRevalidation {
-			return events.Failure(events.CodeSubscriptionForbidden)
+	return app.recheckReadHooks(ctx, fresh, state)
+}
+
+func (app *App[P, A]) recheckReadHooks(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P]) error {
+	envelope, err := golem.RuntimeReadHookRequestFromFrozen(state.readRequest)
+	if err != nil {
+		return events.Failure(events.CodeSubscriptionSourceClosed)
+	}
+	prepareFailed := false
+	transformed, err := invokeReadBeforeHooks(golem.RuntimeContextWithActor(ctx, caller.actor), app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
+		if value.Request().ModelID() != state.model || value.Request().Operation() != golem.ReadFindMany {
+			return fmt.Errorf("event read hook changed operation identity")
 		}
-		return err
+		if _, prepareErr := caller.Prepare(value.Request()); prepareErr != nil {
+			prepareFailed = true
+			return prepareErr
+		}
+		return nil
+	})
+	if err != nil {
+		if prepareFailed {
+			return events.Failure(events.CodeSubscriptionRevalidation)
+		}
+		return events.Failure(events.CodeSubscriptionForbidden)
+	}
+	if _, err := caller.Prepare(transformed.Request()); err != nil {
+		return events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	return nil
 }

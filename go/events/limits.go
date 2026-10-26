@@ -12,6 +12,8 @@ import (
 // negative duration Limits accepts.
 const RetentionDisabled = time.Duration(-1)
 
+const MinimumRecheckInterval = time.Second
+
 type Limits struct {
 	ClaimRows                             int
 	PublisherConcurrency                  int
@@ -146,6 +148,9 @@ func NormalizeLimits(input Limits) (Limits, error) {
 	}
 	if output.MaxEncodedBatchBytes < output.MaxEncodedEventBytes {
 		return Limits{}, Failf(CodeEventConfig, "MaxEncodedBatchBytes (%d) must not be below MaxEncodedEventBytes (%d)", output.MaxEncodedBatchBytes, output.MaxEncodedEventBytes)
+	}
+	if output.RevalidateEvery != 0 && output.RevalidateEvery < MinimumRecheckInterval {
+		return Limits{}, Failf(CodeEventConfig, "RevalidateEvery must be at least %s or 0, got %s", MinimumRecheckInterval, output.RevalidateEvery)
 	}
 	if output.RetentionAge < time.Hour {
 		return Limits{}, Failf(CodeEventConfig, "RetentionAge must be at least 1h, got %s", output.RetentionAge)

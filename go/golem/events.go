@@ -115,6 +115,8 @@ func EventSelect[M any](fields ...Field[M]) EventOption[M] {
 	return eventOption[M]{node: eventOptionNode[M]{kind: eventOptionSelect, fields: identities}}
 }
 
+const minimumEventRecheckInterval = time.Second
+
 func EventRecheck[M any](interval time.Duration, check func(context.Context) error) EventOption[M] {
 	return eventOption[M]{node: eventOptionNode[M]{kind: eventOptionRecheck, interval: interval, check: check}}
 }
@@ -192,8 +194,8 @@ func RuntimeFreezeEventOptions[M any](descriptor ModelDescriptor[M], options ...
 			if result.recheck != nil {
 				return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: recheck is declared more than once")
 			}
-			if node.check == nil || node.interval <= 0 {
-				return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: recheck requires a check and a positive interval")
+			if node.check == nil || node.interval < minimumEventRecheckInterval {
+				return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: recheck requires a check and an interval of at least %s, got %s", minimumEventRecheckInterval, node.interval)
 			}
 			result.interval, result.recheck = node.interval, node.check
 		default:

@@ -560,7 +560,11 @@ func (server *Server[P]) Shutdown(ctx context.Context) (resultErr error) {
 	}
 	server.lifecycleMu.Unlock()
 	done := make(chan struct{})
-	go func() { server.connections.Wait(); close(done) }()
+	go func() {
+		server.connections.Wait()
+		server.rechecks.Wait()
+		close(done)
+	}()
 	deadlineCtx := ctx
 	var cancel context.CancelFunc
 	if _, present := ctx.Deadline(); !present {
