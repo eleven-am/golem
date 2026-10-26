@@ -350,7 +350,8 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	fmt.Fprintf(source, "\tResolvePrincipal func(%s.Context, P) (%s, error)\n", contextAlias, actorType)
 	source.WriteString("\tSnapshotPrincipal func(P) (P, error)\n")
 	fmt.Fprintf(source, "\tSnapshotActor func(%s) (%s, error)\n", actorType, actorType)
-	fmt.Fprintf(source, "\tPolicyCache %s.PolicyCacheConfig\n\tPolicyCacheKey func(%s) (string, bool)\n}\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tPolicyCache %s.PolicyCacheConfig\n\tPolicyCacheKey func(%s) (string, bool)\n", runtimeAlias, actorType)
+	source.WriteString("\tSubscriptionPrincipalKey func(P) (string, bool)\n}\n")
 	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s]; observer %s.Observer; provider %s.Provider }\n", runtimeAlias, actorType, observeAlias, golemAlias)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
@@ -487,6 +488,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	source.WriteString("\tengineConfig.AfterCommitError = config.AfterCommitError\n\tengineConfig.AuditPrincipal = config.AuditPrincipal\n\tengineConfig.ReportScopedQuery = config.ReportScopedQuery\n")
 	source.WriteString("\tengineConfig.ResolvePrincipal = config.ResolvePrincipal\n\tengineConfig.SnapshotPrincipal = config.SnapshotPrincipal\n\tengineConfig.SnapshotActor = config.SnapshotActor\n")
 	source.WriteString("\tengineConfig.PolicyCache = config.PolicyCache\n\tengineConfig.PolicyCacheKey = config.PolicyCacheKey\n")
+	source.WriteString("\tengineConfig.SubscriptionPrincipalKey = config.SubscriptionPrincipalKey\n")
 	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, engineConfig)\n", runtimeAlias)
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine, observer: config.Observer, provider: config.Database.Provider()}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)

@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
@@ -123,6 +124,12 @@ type Config[P any] struct {
 	Observer             observe.Observer
 	Provider             golem.Provider
 	WebSocketInit        func(context.Context, json.RawMessage) (context.Context, error)
+	SubscriptionRecheck  SubscriptionRecheck[P]
+}
+
+type SubscriptionRecheck[P any] struct {
+	Interval time.Duration
+	Check    func(context.Context, P, Operation) error
 }
 
 type Operation struct {
@@ -178,6 +185,9 @@ func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Serv
 	}
 	eventLimits, err := events.NormalizeLimits(config.EventLimits)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateSubscriptionRecheck(config.SubscriptionRecheck); err != nil {
 		return nil, err
 	}
 	schema, err := validator.LoadSchema(validator.Prelude, &ast.Source{Name: "golem.graphql", Input: sdl})

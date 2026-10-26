@@ -33,6 +33,7 @@ func WriteServer(body *bytes.Buffer) {
 	body.WriteString("\tIntrospection bool\n")
 	body.WriteString("\tWebSocketInit func(context.Context, json.RawMessage) (context.Context, error)\n")
 	body.WriteString("\tReportInternalError func(context.Context, error)\n")
+	body.WriteString("\tSubscriptionRecheck golemgraphql.SubscriptionRecheck[P]\n")
 	body.WriteString("}\n\n")
 	body.WriteString("type GraphQLServer struct {\n")
 	body.WriteString("\thandler http.Handler\n")

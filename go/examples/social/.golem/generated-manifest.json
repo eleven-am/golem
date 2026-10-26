@@ -104,7 +104,7 @@
     {
       "path": "social/zz_golem_graphql.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "852ddf8cee8a51190007c84637d96582c5439bc959602b115180b426606af633",
+      "contentSha256": "983768e5639bb34e58d425c983becfae4a1cc293ba96b1dfbff770a34154241c",
       "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
       "generationDigest": "0d122e4fb2bb4582c8563eb0e9a4b43b9ac04f59f97aa871a2ec394b0d28b55a",
       "generatorVersion": "p1-v1",
@@ -131,7 +131,7 @@
     {
       "path": "social/zz_golem_registry.gen.go",
       "kind": "registry_go",
-      "contentSha256": "c350e2e4db20638ab6901ef6255665f58e13ca029d7adacdc8ae263278211bd6",
+      "contentSha256": "7e1482b507b98ff5a93b5f714f7b666e498313627922797dea0df9c85d82542d",
       "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
       "generationDigest": "0d122e4fb2bb4582c8563eb0e9a4b43b9ac04f59f97aa871a2ec394b0d28b55a",
       "generatorVersion": "p1-v1",

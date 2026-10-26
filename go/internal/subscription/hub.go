@@ -72,15 +72,16 @@ type hubRun[T any] struct {
 }
 
 type member[T any] struct {
-	id    uint64
-	runID uint64
-	key   SubscriberKey
-	queue chan T
-	done  chan struct{}
-	once  sync.Once
-	err   error
-	state any
-	drop  func(any)
+	id      uint64
+	runID   uint64
+	key     SubscriberKey
+	queue   chan T
+	done    chan struct{}
+	once    sync.Once
+	err     error
+	state   any
+	drop    func(any)
+	cancels []context.CancelFunc
 }
 
 type Stream[T any] struct {
@@ -453,6 +454,10 @@ func (hub *ModelHub[T]) removeLocked(item *member[T], failure error) func() {
 		item.err = failure
 		state, drop := item.state, item.drop
 		item.state, item.drop = nil, nil
+		for _, cancel := range item.cancels {
+			cancel()
+		}
+		item.cancels = nil
 		if drop != nil {
 			cleanup = func() { drop(state) }
 		}
@@ -601,7 +606,7 @@ func normalizedEvaluationCode(err error) events.ErrorCode {
 		return events.CodeSubscriptionSourceClosed
 	}
 	switch code {
-	case events.CodeSubscriptionRevalidation, events.CodeSubscriptionCancelled, events.CodeSubscriptionSourceClosed, events.CodeSubscriptionResync:
+	case events.CodeSubscriptionRevalidation, events.CodeSubscriptionCancelled, events.CodeSubscriptionSourceClosed, events.CodeSubscriptionResync, events.CodeSubscriptionForbidden:
 		return code
 	default:
 		return events.CodeSubscriptionSourceClosed

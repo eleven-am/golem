@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
@@ -167,8 +168,8 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				return
 			}
 			if full {
-				state.close(4400, "subscription limit exceeded")
-				return
+				state.operationError(message.ID, PresentError(state.ctx, events.Failure(events.CodeSubscriptionLimit), nil, nil))
+				continue
 			}
 			requestValue, decodeErr := decodeWSRequest(message.Payload, server.limits.MaxVariableBytes)
 			if decodeErr != nil {
@@ -284,7 +285,7 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 }
 
 func (state *wsConnection[P]) subscribe(executor SubscriptionExecutor[P], ctx context.Context, operation Operation) (ResponseStream, error) {
-	return subscribeSafely(executor, ctx, state.principal, operation)
+	return state.server.subscribe(executor, ctx, state.principal, operation)
 }
 
 func (state *wsConnection[P]) attachStream(id string, instance *atomic.Bool, stream ResponseStream) bool {

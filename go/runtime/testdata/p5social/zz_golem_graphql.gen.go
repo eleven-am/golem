@@ -92,6 +92,7 @@ type GraphQLConfig[P any] struct {
 	Introspection        bool
 	WebSocketInit        func(context.Context, json.RawMessage) (context.Context, error)
 	ReportInternalError  func(context.Context, error)
+	SubscriptionRecheck  golemgraphql.SubscriptionRecheck[P]
 }
 
 type GraphQLServer struct {
@@ -204,6 +205,7 @@ func (app *App[P]) GraphQL(config GraphQLConfig[P]) (*GraphQLServer, error) {
 	server, err := golemgraphql.NewServer(golemGeneratedGraphQLSDL, golemgraphql.Config[P]{
 		PrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection, WebSocketInit: config.WebSocketInit, EventLimits: app.runtime.EventLimits(),
 		ContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable, Observer: app.observer, Provider: app.provider,
+		SubscriptionRecheck: config.SubscriptionRecheck,
 	}, executor)
 	if err != nil {
 		return nil, err

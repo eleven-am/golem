@@ -80,12 +80,15 @@ type eventOptionKind uint8
 const (
 	eventOptionWhere eventOptionKind = iota + 1
 	eventOptionSelect
+	eventOptionRecheck
 )
 
 type eventOptionNode[M any] struct {
 	kind      eventOptionKind
 	predicate Predicate[M]
 	fields    []FieldID
+	interval  time.Duration
+	check     func(context.Context) error
 }
 
 type eventOption[M any] struct{ node eventOptionNode[M] }
@@ -112,6 +115,10 @@ func EventSelect[M any](fields ...Field[M]) EventOption[M] {
 	return eventOption[M]{node: eventOptionNode[M]{kind: eventOptionSelect, fields: identities}}
 }
 
+func EventRecheck[M any](interval time.Duration, check func(context.Context) error) EventOption[M] {
+	return eventOption[M]{node: eventOptionNode[M]{kind: eventOptionRecheck, interval: interval, check: check}}
+}
+
 // FrozenEventRequest is the representation-opaque, owned event request used by
 // later P7 runtime layers. It deliberately exposes no transport or publisher
 // capability.
@@ -119,6 +126,8 @@ type FrozenEventRequest struct {
 	model     ModelID
 	where     *FrozenPredicate
 	selection []FieldID
+	interval  time.Duration
+	recheck   func(context.Context) error
 }
 
 func RuntimeFreezeEventOptions[M any](descriptor ModelDescriptor[M], options ...EventOption[M]) (FrozenEventRequest, error) {
@@ -179,6 +188,14 @@ func RuntimeFreezeEventOptions[M any](descriptor ModelDescriptor[M], options ...
 				seen[field] = true
 			}
 			result.selection = append([]FieldID(nil), node.fields...)
+		case eventOptionRecheck:
+			if result.recheck != nil {
+				return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: recheck is declared more than once")
+			}
+			if node.check == nil || node.interval <= 0 {
+				return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: recheck requires a check and a positive interval")
+			}
+			result.interval, result.recheck = node.interval, node.check
 		default:
 			return FrozenEventRequest{}, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: option %d has an unknown kind", index)
 		}
@@ -228,6 +245,9 @@ func (request FrozenEventRequest) Where() (FrozenPredicate, bool) {
 }
 func (request FrozenEventRequest) Selection() []FieldID {
 	return append([]FieldID(nil), request.selection...)
+}
+func (request FrozenEventRequest) Recheck() (time.Duration, func(context.Context) error, bool) {
+	return request.interval, request.recheck, request.recheck != nil
 }
 
 // EventStream delivers one subscriber's change events in order. It never skips

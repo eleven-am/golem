@@ -170,7 +170,7 @@ func CallerFrozenEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], 
 	if err != nil {
 		return nil, err
 	}
-	return CallerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected)
+	return callerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected, frozenEventRecheck(request))
 }
 
 // CallerFrozenReadEvents is the full-selection P5/P7 handoff used by the
@@ -183,6 +183,10 @@ func CallerFrozenEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], 
 // existing operation encoder, and closes it before the next frame; computed
 // loaders never live in this hub or across events.
 func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], readRequest golem.FrozenReadRequest, entitySelected bool) (golem.EventStream[E], error) {
+	return callerFrozenReadEvents[P, A, E](ctx, caller, readRequest, entitySelected, eventRecheck{})
+}
+
+func callerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, A], readRequest golem.FrozenReadRequest, entitySelected bool, recheck eventRecheck) (golem.EventStream[E], error) {
 	if ctx == nil || caller == nil || caller.app == nil || caller.execution == 0 || readRequest.ModelID() == (golem.ModelID{}) || readRequest.Operation() != golem.ReadFindMany {
 		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: caller execution or frozen event read is unavailable")
 	}
@@ -239,14 +243,21 @@ func CallerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 		context: ctx, principal: principal, model: model, readRequest: readRequest,
 		originalWhere: originalWhere, metadata: metadata, entitySelected: entitySelected,
 	}
+	release, err := caller.app.reserveSubscription(principal)
+	if err != nil {
+		return nil, err
+	}
 	hub, err := caller.app.eventHub(model)
 	if err != nil {
+		release()
 		return nil, err
 	}
-	stream, err := hub.SubscribeWithState(ctx, key, state, nil)
+	stream, err := hub.SubscribeWithState(ctx, key, state, func(any) { release() })
 	if err != nil {
+		release()
 		return nil, err
 	}
+	caller.app.startEventRecheck(stream, state, recheck)
 	caller.app.reportSubscriberWithoutPublisher(ctx)
 	return &callerEventStream[E]{stream: stream}, nil
 }

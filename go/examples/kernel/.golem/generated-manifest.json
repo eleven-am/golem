@@ -86,7 +86,7 @@
     {
       "path": "kernel/zz_golem_registry.gen.go",
       "kind": "registry_go",
-      "contentSha256": "6a3a23c606943cbb28559e66052741a642998a287e8804c3bfa7fd89f4995b87",
+      "contentSha256": "bbf8123b384ec032ccbc044c5c73b405febac486d938696f1578f2f1a6eac211",
       "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
       "generationDigest": "8d41644cd789e4f22e351a07ac4d0fef8c3d5bb68bfd58630b51e1e901e82c6b",
       "generatorVersion": "p1-v1",

@@ -35,6 +35,8 @@ type Limits struct {
 	RetentionAge                          time.Duration
 	RetentionEvery                        time.Duration
 	RequireExclusiveProcessLocalPublisher bool
+	RevalidateEvery                       time.Duration
+	MaxSubscriptionsPerPrincipal          int
 }
 
 var defaultLimits = Limits{
@@ -55,6 +57,7 @@ var maximumLimits = Limits{
 	MaxSubscriptionsPerConnection: 256, ConnectionInitBytes: 1 << 20,
 	ConnectionInitTimeout: time.Minute, KeepAlive: 5 * time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
 	RetentionDeleteRows: 4096, RetentionAge: 10 * 365 * 24 * time.Hour, RetentionEvery: 24 * time.Hour,
+	RevalidateEvery: 24 * time.Hour, MaxSubscriptionsPerPrincipal: 1 << 16,
 }
 
 // RetentionEnabled reports whether the publisher deletes delivered outbox rows
@@ -90,6 +93,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"MaxSubscriptionsPerConnection", &output.MaxSubscriptionsPerConnection, defaultLimits.MaxSubscriptionsPerConnection, maximumLimits.MaxSubscriptionsPerConnection},
 		{"ConnectionInitBytes", &output.ConnectionInitBytes, defaultLimits.ConnectionInitBytes, maximumLimits.ConnectionInitBytes},
 		{"RetentionDeleteRows", &output.RetentionDeleteRows, defaultLimits.RetentionDeleteRows, maximumLimits.RetentionDeleteRows},
+		{"MaxSubscriptionsPerPrincipal", &output.MaxSubscriptionsPerPrincipal, defaultLimits.MaxSubscriptionsPerPrincipal, maximumLimits.MaxSubscriptionsPerPrincipal},
 	}
 	for _, item := range integers {
 		if *item.value == 0 {
@@ -116,6 +120,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"WebSocketPongTimeout", &output.WebSocketPongTimeout, defaultLimits.WebSocketPongTimeout, maximumLimits.WebSocketPongTimeout},
 		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
 		{"RetentionAge", &output.RetentionAge, defaultLimits.RetentionAge, maximumLimits.RetentionAge},
+		{"RevalidateEvery", &output.RevalidateEvery, defaultLimits.RevalidateEvery, maximumLimits.RevalidateEvery},
 	}
 	if output.RetentionEnabled() {
 		durations = append(durations, struct {
