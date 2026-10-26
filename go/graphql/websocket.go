@@ -283,14 +283,8 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 	}
 }
 
-func (state *wsConnection[P]) subscribe(executor SubscriptionExecutor[P], ctx context.Context, operation Operation) (stream ResponseStream, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			stream = nil
-			err = errors.New("GraphQL subscription admission panicked")
-		}
-	}()
-	return executor.Subscribe(ctx, state.principal, operation)
+func (state *wsConnection[P]) subscribe(executor SubscriptionExecutor[P], ctx context.Context, operation Operation) (ResponseStream, error) {
+	return subscribeSafely(executor, ctx, state.principal, operation)
 }
 
 func (state *wsConnection[P]) attachStream(id string, instance *atomic.Bool, stream ResponseStream) bool {
@@ -335,7 +329,7 @@ func (state *wsConnection[P]) startLiveness() func() {
 		return nil
 	})
 	go func() {
-		ticker := time.NewTicker(state.server.eventLimits.WebSocketKeepAlive)
+		ticker := time.NewTicker(state.server.eventLimits.KeepAlive)
 		defer ticker.Stop()
 		for {
 			select {
@@ -547,7 +541,7 @@ func cloneRaw(value json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), value...)
 }
 
-// Shutdown owns WebSocket subscriptions only. It never closes the application
+// Shutdown owns subscriptions only. It never closes the application
 // event transport or publisher.
 func (server *Server[P]) Shutdown(ctx context.Context) (resultErr error) {
 	if server == nil {

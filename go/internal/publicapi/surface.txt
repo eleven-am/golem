@@ -219,12 +219,13 @@ events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
 events.Limits comparable
 events.Limits type struct
-events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
+events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher}
 events.Limits.ClaimRows field int
 events.Limits.ConnectionInitBytes field int
 events.Limits.ConnectionInitTimeout field time.Duration
 events.Limits.EvaluationConcurrency field int
 events.Limits.HubInputQueue field int
+events.Limits.KeepAlive field time.Duration
 events.Limits.LeaseDuration field time.Duration
 events.Limits.MaxEncodedBatchBytes field int
 events.Limits.MaxEncodedEventBytes field int

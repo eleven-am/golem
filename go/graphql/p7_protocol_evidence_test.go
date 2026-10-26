@@ -73,8 +73,8 @@ func mustP7JSON(t testing.TB, value any) json.RawMessage {
 	return encoded
 }
 
-func TestUnsupportedLegacyProtocolAndSSEAreNotSilentlyAccepted(t *testing.T) {
-	server, _ := newProtocolServer(t, events.Limits{})
+func TestUnsupportedLegacyProtocolIsRefusedAndSSEIsServed(t *testing.T) {
+	server, stream := newProtocolServer(t, events.Limits{})
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
 	legacy := websocket.Dialer{Subprotocols: []string{"graphql-ws"}}
@@ -83,14 +83,18 @@ func TestUnsupportedLegacyProtocolAndSSEAreNotSilentlyAccepted(t *testing.T) {
 		t.Fatalf("legacy websocket was silently accepted: conn=%v response=%v err=%v", connection, response, err)
 	}
 
+	stream.values <- Response{Data: map[string]any{"ticks": int32(7)}}
+	close(stream.values)
 	body, _ := json.Marshal(Request{Query: `subscription { ticks }`})
 	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
+	request = request.WithContext(context.WithValue(request.Context(), wsAuthKey{}, 41))
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNotAcceptable || strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(recorder.Body.String(), "SUBSCRIPTION_TRANSPORT_UNSUPPORTED") {
-		t.Fatalf("unsupported SSE was treated as a subscription stream: status=%d type=%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+	want := "event: next\ndata: {\"data\":{\"ticks\":7}}\n\nevent: complete\n\n"
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream" || recorder.Body.String() != want || !recorder.Flushed {
+		t.Fatalf("SSE subscription was not streamed: status=%d type=%q flushed=%t body=%q", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Flushed, recorder.Body.String())
 	}
 }
 

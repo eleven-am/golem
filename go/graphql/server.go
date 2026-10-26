@@ -222,53 +222,60 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 		server.serveWebSocket(writer, request)
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if strings.Contains(strings.ToLower(request.Header.Get("Accept")), "text/event-stream") {
-		writer.WriteHeader(http.StatusNotAcceptable)
-		writeResponse(writer, Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_UNSUPPORTED", "GraphQL over SSE is unsupported")}})
+	if acceptsEventStream(request) {
+		server.serveSSE(writer, request)
 		return
 	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		writeResponse(writer, Response{Errors: []Error{publicError("METHOD_NOT_ALLOWED", "GraphQL requires POST")}})
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, int64(server.limits.MaxRequestBytes))
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	var envelope requestEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		writeResponse(writer, Response{Errors: []Error{publicError("BAD_REQUEST", "invalid GraphQL request")}})
+	decoded, failure := decodeHTTPRequest(request.Body, server.limits)
+	if failure != nil {
+		writeResponse(writer, Response{Errors: []Error{*failure}})
 		return
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		writeResponse(writer, Response{Errors: []Error{publicError("BAD_REQUEST", "invalid GraphQL request")}})
-		return
-	}
-	if envelope.Query == "" || exceedsLexicalTokenLimit(envelope.Query, server.limits.MaxTokens) {
-		writeResponse(writer, Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")}})
-		return
-	}
-	variables := map[string]any{}
-	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
-		if len(envelope.Variables) > server.limits.MaxVariableBytes {
-			writeResponse(writer, Response{Errors: []Error{publicError("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")}})
-			return
-		}
-		variableDecoder := json.NewDecoder(strings.NewReader(string(envelope.Variables)))
-		variableDecoder.UseNumber()
-		if err := variableDecoder.Decode(&variables); err != nil {
-			writeResponse(writer, Response{Errors: []Error{publicError("BAD_USER_INPUT", "invalid GraphQL variables")}})
-			return
-		}
 	}
 	principal, ok := server.config.PrincipalFromContext(request.Context())
 	if !ok {
 		writeResponse(writer, Response{Errors: []Error{publicError("UNAUTHENTICATED", "authentication is required")}})
 		return
 	}
-	writeResponse(writer, server.execute(request.Context(), principal, Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, true))
+	writeResponse(writer, server.execute(request.Context(), principal, decoded, true, nil))
+}
+
+func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *Error) {
+	fail := func(code, message string) (Request, *Error) {
+		failure := publicError(code, message)
+		return Request{}, &failure
+	}
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var envelope requestEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return fail("BAD_REQUEST", "invalid GraphQL request")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fail("BAD_REQUEST", "invalid GraphQL request")
+	}
+	if envelope.Query == "" || exceedsLexicalTokenLimit(envelope.Query, limits.MaxTokens) {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	variables := map[string]any{}
+	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
+		if len(envelope.Variables) > limits.MaxVariableBytes {
+			return fail("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")
+		}
+		variableDecoder := json.NewDecoder(strings.NewReader(string(envelope.Variables)))
+		variableDecoder.UseNumber()
+		if err := variableDecoder.Decode(&variables); err != nil {
+			return fail("BAD_USER_INPUT", "invalid GraphQL variables")
+		}
+	}
+	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, nil
 }
 
 // Execute applies the same parse, validation, coercion, limit, isolation, and
@@ -277,14 +284,14 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 // Response data holds decoded Go values, so object key order is not retained;
 // Handler writes the same data in selection order.
 func (server *Server[P]) Execute(ctx context.Context, principal P, request Request) (response Response) {
-	return decodedResponse(server.execute(ctx, principal, request, false))
+	return decodedResponse(server.execute(ctx, principal, request, false, nil))
 }
 
-// execute receives byteLimitsChecked=true only from serveHTTP, after the raw
+// execute receives byteLimitsChecked=true after the raw
 // request body and raw variables have already been bounded. Re-encoding those
 // values can add canonical JSON envelope/escaping bytes and must not turn an
 // accepted HTTP boundary into a second, representation-dependent refusal.
-func (server *Server[P]) execute(ctx context.Context, principal P, request Request, byteLimitsChecked bool) (response Response) {
+func (server *Server[P]) execute(ctx context.Context, principal P, request Request, byteLimitsChecked bool, admitted *preparedRequest) (response Response) {
 	if server == nil || ctx == nil {
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 	}
@@ -300,9 +307,15 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 			observeexec.Finish(operationSpan, outcome, reason)
 		}
 	}()
-	preparedOperation, failure := server.prepareRequest(request, byteLimitsChecked)
-	if failure != nil {
-		return *failure
+	var preparedOperation preparedRequest
+	if admitted != nil {
+		preparedOperation = *admitted
+	} else {
+		var failure *Response
+		preparedOperation, failure = server.prepareRequest(request, byteLimitsChecked)
+		if failure != nil {
+			return *failure
+		}
 	}
 	if preparedOperation.Operation.Definition.Operation == ast.Subscription {
 		return Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_REQUIRED", "GraphQL subscriptions require graphql-transport-ws")}}
