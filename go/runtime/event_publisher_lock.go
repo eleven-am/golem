@@ -14,15 +14,14 @@ import (
 const processLocalPublisherReacquireAttempts = 3
 
 type processLocalPublisherGuard struct {
-	delivery  eventprovider.Coordinator
-	observer  events.Observer
-	strict    bool
-	namespace string
-	base      time.Duration
-	cap       time.Duration
-	release   func()
-	lost      <-chan struct{}
-	err       error
+	delivery eventprovider.Coordinator
+	observer events.Observer
+	strict   bool
+	base     time.Duration
+	cap      time.Duration
+	release  func()
+	lost     <-chan struct{}
+	err      error
 }
 
 func (app *App[P, A]) processLocalPublisherGuarded() bool {
@@ -36,11 +35,10 @@ func (app *App[P, A]) startProcessLocalPublisherGuard(ctx context.Context) (*pro
 	if !app.processLocalPublisherGuarded() {
 		return nil, nil
 	}
-	namespace, _ := app.registry.PhysicalSystemNamespace(app.eventProvider)
 	guard := &processLocalPublisherGuard{
 		delivery: app.eventDelivery, observer: app.eventObserver,
-		strict: app.eventLimits.RequireExclusiveProcessLocalPublisher, namespace: string(namespace),
-		base: app.eventLimits.RetryBase, cap: app.eventLimits.RetryCap,
+		strict: app.eventLimits.RequireExclusiveProcessLocalPublisher,
+		base:   app.eventLimits.RetryBase, cap: app.eventLimits.RetryCap,
 	}
 	if guard.acquire(ctx) {
 		return guard, nil
@@ -78,9 +76,9 @@ func (guard *processLocalPublisherGuard) report(ctx context.Context) {
 
 func (guard *processLocalPublisherGuard) failure() error {
 	if guard.err != nil {
-		return events.Failf(events.CodeEventConfig, "the process-local publisher lock for namespace %s is unavailable", guard.namespace)
+		return events.Failf(events.CodeEventConfig, "the process-local publisher lock is unavailable")
 	}
-	return events.Failf(events.CodeEventConfig, "another process-local publisher holds namespace %s", guard.namespace)
+	return events.Failf(events.CodeEventConfig, "another process-local publisher holds the lock")
 }
 
 func (guard *processLocalPublisherGuard) delay(attempt int) time.Duration {

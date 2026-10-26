@@ -132,7 +132,11 @@ func openPublisherLockApp(t *testing.T, database *sqlx.DB, provider golem.Provid
 	if provider == golem.PostgreSQL {
 		features = []string{string(providerapi.FeatureAdvisoryLocks)}
 	}
-	handle := (*providerapi.Database)(providerhandle.AdoptUnverifiedForTest(database, providerhandle.TestMetadata{Provider: provider, Features: features, MaximumOpen: 4, MaximumIdle: 4}))
+	poolSize := database.Stats().MaxOpenConnections
+	if poolSize < 1 {
+		poolSize = 4
+	}
+	handle := (*providerapi.Database)(providerhandle.AdoptUnverifiedForTest(database, providerhandle.TestMetadata{Provider: provider, Features: features, MaximumOpen: poolSize, MaximumIdle: poolSize}))
 	bindings, err := p10operations.GolemGeneratedApplicationBindings()
 	if err != nil {
 		t.Fatal(err)
@@ -258,8 +262,8 @@ func TestStrictProcessLocalPublisherRefusesASecondPublisherAndAcquiresAfterRelea
 	if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig {
 		t.Fatalf("strict second publisher error=%v", err)
 	}
-	if !strings.Contains(err.Error(), string(p10OperationSystemNamespace)) {
-		t.Fatalf("strict refusal does not name the namespace: %v", err)
+	if !strings.Contains(err.Error(), "another process-local publisher holds the lock") {
+		t.Fatalf("strict refusal does not say another publisher holds the lock: %v", err)
 	}
 	if second.app.EventCapabilities().PublisherRunning() {
 		t.Fatal("refused publisher reports running")
@@ -324,12 +328,58 @@ func TestStrictProcessLocalPublisherStopsWhenTheLockIsLostToAnotherSession(t *te
 	select {
 	case err := <-first.done:
 		first.cancel = nil
-		if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig || !strings.Contains(err.Error(), string(p10OperationSystemNamespace)) {
+		if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig || !strings.Contains(err.Error(), "another process-local publisher holds the lock") {
 			t.Fatalf("strict publisher error after losing the lock=%v", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("strict publisher kept running without the lock")
 	}
+}
+
+func TestProcessLocalPublisherLockLeavesASingleConnectionPoolUsable(t *testing.T) {
+	ctx := context.Background()
+	dsn := openPublisherLockPostgreSQL(t)
+	monitor := openPublisherLockPool(t, dsn)
+	database := openPublisherLockPool(t, dsn)
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	fixture := openPublisherLockApp(t, database, golem.PostgreSQL, publisherLockLimits(true))
+	fixture.start(t)
+	waitPublisherLockHolder(t, monitor, 0)
+	caller, err := fixture.app.ForPrincipal(ctx, p10operations.Principal{ID: "alpha", Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamContext, cancelStream := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelStream()
+	stream, err := golemruntime.CallerEvents[p10operations.Principal, p10operations.Actor, p10operations.Team, p10operations.TeamEvent](streamContext, caller, p10operations.GolemGeneratedTeamDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	team, err := golem.ParseUUID("00000000-0000-0000-0000-000000000077")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryContext, cancelQuery := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelQuery()
+	if _, err := golemruntime.SystemCreate(queryContext, fixture.app.System(), p10operations.GolemGeneratedTeamDescriptor, p10operations.Teams.Create(p10operations.Teams.ID.Create(team), p10operations.Teams.Owner.Create("alpha"))); err != nil {
+		t.Fatalf("app write while the publisher holds the lock: %v", err)
+	}
+	rows, err := golemruntime.CallerFindMany(queryContext, caller, p10operations.GolemGeneratedTeamDescriptor)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("app query while the publisher holds the lock rows=%d err=%v", len(rows), err)
+	}
+	if _, err := stream.Recv(streamContext); err != nil {
+		t.Fatalf("publisher did not deliver the event through a single-connection pool: %v", err)
+	}
+	if holders := publisherLockHolders(t, monitor); len(holders) != 1 {
+		t.Fatalf("lock holders=%v want one", holders)
+	}
+	if err := fixture.stop(t); err != nil {
+		t.Fatal(err)
+	}
+	waitPublisherLock(t, "the lock to be released", func() bool { return len(publisherLockHolders(t, monitor)) == 0 })
 }
 
 func TestSubscriberWithoutLocalPublisherReportsTopologyOnce(t *testing.T) {
