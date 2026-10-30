@@ -102,6 +102,24 @@ func TestSQLiteNetworkFilesystemProfileRejectsMemoryAndOverrides(t *testing.T) {
 	}
 }
 
+func TestSQLiteNetworkFilesystemOpenErrorPreservesDiagnosticCause(t *testing.T) {
+	dsn := "file:" + filepath.Join(t.TempDir(), "diagnostic.sqlite") + "?_pragma=journal_mode(wal)"
+	database, err := sqlite.OpenNetworkFilesystem(context.Background(), sqlite.Config{DataSourceName: dsn})
+	if database != nil {
+		_ = database.Close()
+		t.Fatal("invalid network profile configuration opened")
+	}
+	if err == nil {
+		t.Fatal("invalid network profile configuration returned no error")
+	}
+	if code, ok := provider.CodeOf(err); !ok || code != provider.CodeOpen {
+		t.Fatalf("code=(%q,%v), want OPEN", code, ok)
+	}
+	if !strings.Contains(err.Error(), "journal_mode, synchronous, foreign_keys and busy_timeout pragmas are provider-owned") {
+		t.Fatalf("open error discarded diagnostic cause: %v", err)
+	}
+}
+
 func TestSQLiteDefaultStillTransitionsNetworkProfileDatabaseBackToWAL(t *testing.T) {
 	ctx := context.Background()
 	dsn := "file:" + filepath.Join(t.TempDir(), "transition.sqlite")
