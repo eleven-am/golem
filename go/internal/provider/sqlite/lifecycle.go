@@ -17,15 +17,24 @@ import (
 )
 
 const VerifiedPoolWidth = 4
+const NetworkFilesystemPoolWidth = 1
+
+type DurabilityProfile uint8
+
+const (
+	DurabilityWAL DurabilityProfile = iota
+	DurabilityNetworkFilesystem
+)
 
 const (
 	journalModeWAL    = "wal"
+	journalModeDelete = "delete"
 	journalModeMemory = "memory"
 	synchronousFull   = 2
 )
 
-func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
-	configured, err := configureDataSourceName(dataSourceName)
+func (provider *Provider) open(ctx context.Context, dataSourceName string, durability DurabilityProfile) (*sqlx.DB, CapabilityReport, error) {
+	configured, err := configureDataSourceNameForProfile(dataSourceName, durability)
 	if err != nil {
 		return nil, CapabilityReport{}, err
 	}
@@ -34,7 +43,7 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
 	}
 	database := sqlx.NewDb(standard, "sqlite3")
-	return provider.verifyOpenedDatabase(ctx, database)
+	return provider.verifyOpenedDatabaseForProfile(ctx, database, durability)
 }
 
 func initializeProviderConnection(connection *sqlite3.Conn) error {
@@ -52,22 +61,31 @@ func initializeProviderConnection(connection *sqlite3.Conn) error {
 // evidence observe the real failed-probe path without adding a production or
 // public injection seam.
 func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
-	database.SetMaxOpenConns(VerifiedPoolWidth)
-	database.SetMaxIdleConns(VerifiedPoolWidth)
-	if err := establishJournalMode(ctx, database); err != nil {
-		_ = database.Close()
-		return nil, CapabilityReport{}, err
-	}
-	report, err := provider.VerifyPool(ctx, database, VerifiedPoolWidth)
+	return provider.verifyOpenedDatabaseForProfile(ctx, database, DurabilityWAL)
+}
+
+func (provider *Provider) verifyOpenedDatabaseForProfile(ctx context.Context, database *sqlx.DB, durability DurabilityProfile) (*sqlx.DB, CapabilityReport, error) {
+	width, err := durability.poolWidth()
 	if err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	if err := verifyProviderOwnedDurability(ctx, database, VerifiedPoolWidth); err != nil {
+	database.SetMaxOpenConns(width)
+	database.SetMaxIdleConns(width)
+	if err := establishJournalModeForProfile(ctx, database, durability); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	if err := healShadowTableStatistics(ctx, database); err != nil {
+	report, err := provider.VerifyPool(ctx, database, width)
+	if err != nil {
+		_ = database.Close()
+		return nil, CapabilityReport{}, err
+	}
+	if err := verifyProviderOwnedDurabilityForProfile(ctx, database, width, durability); err != nil {
+		_ = database.Close()
+		return nil, CapabilityReport{}, err
+	}
+	if err := healShadowTableStatisticsForWidth(ctx, database, width); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
@@ -75,11 +93,15 @@ func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sq
 }
 
 func healShadowTableStatistics(ctx context.Context, database *sqlx.DB) error {
+	return healShadowTableStatisticsForWidth(ctx, database, VerifiedPoolWidth)
+}
+
+func healShadowTableStatisticsForWidth(ctx context.Context, database *sqlx.DB, width int) error {
 	if _, err := ForgetShadowTableStatistics(ctx, database); err != nil {
 		return fmt.Errorf("sqlite open: %w", err)
 	}
 	database.SetMaxIdleConns(0)
-	database.SetMaxIdleConns(VerifiedPoolWidth)
+	database.SetMaxIdleConns(width)
 	return nil
 }
 
@@ -89,12 +111,16 @@ const (
 )
 
 func establishJournalMode(ctx context.Context, database *sqlx.DB) error {
+	return establishJournalModeForProfile(ctx, database, DurabilityWAL)
+}
+
+func establishJournalModeForProfile(ctx context.Context, database *sqlx.DB, durability DurabilityProfile) error {
 	connection, err := database.Connx(ctx)
 	if err != nil {
 		return fmt.Errorf("sqlite open: bootstrap connection: %w", err)
 	}
 	defer connection.Close()
-	required, err := requiredJournalMode(ctx, connection)
+	required, err := requiredJournalModeForProfile(ctx, connection, durability)
 	if err != nil {
 		return err
 	}
@@ -114,29 +140,33 @@ func establishJournalMode(ctx context.Context, database *sqlx.DB) error {
 		if err != nil {
 			return err
 		}
-		if established == journalModeWAL {
+		if established == required {
 			return nil
 		}
 		var applied string
-		transitionErr := connection.GetContext(ctx, &applied, "PRAGMA journal_mode=WAL")
-		if transitionErr == nil && normalizeJournalMode(applied) == journalModeWAL {
+		transitionErr := connection.GetContext(ctx, &applied, "PRAGMA journal_mode="+strings.ToUpper(required))
+		if transitionErr == nil && normalizeJournalMode(applied) == required {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			if transitionErr != nil {
-				return fmt.Errorf("sqlite open: write-ahead logging transition failed: %w", transitionErr)
+				return fmt.Errorf("sqlite open: journal mode transition failed: %w", transitionErr)
 			}
-			return fmt.Errorf("sqlite open: write-ahead logging transition reported journal mode %q, want %q", applied, journalModeWAL)
+			return fmt.Errorf("sqlite open: journal mode transition reported journal mode %q, want %q", applied, required)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("sqlite open: write-ahead logging transition failed: %w", ctx.Err())
+			return fmt.Errorf("sqlite open: journal mode transition failed: %w", ctx.Err())
 		case <-time.After(journalModeTransitionBackoff):
 		}
 	}
 }
 
 func verifyProviderOwnedDurability(ctx context.Context, database *sqlx.DB, width int) error {
+	return verifyProviderOwnedDurabilityForProfile(ctx, database, width, DurabilityWAL)
+}
+
+func verifyProviderOwnedDurabilityForProfile(ctx context.Context, database *sqlx.DB, width int, durability DurabilityProfile) error {
 	if database == nil || width < 1 || database.Stats().InUse != 0 {
 		return fmt.Errorf("sqlite durability verification requires an idle bounded database")
 	}
@@ -161,7 +191,7 @@ func verifyProviderOwnedDurability(ctx context.Context, database *sqlx.DB, width
 		return fmt.Errorf("sqlite durability verification did not exclusively hold every slot")
 	}
 	for index, connection := range connections {
-		required, err := requiredJournalMode(ctx, connection)
+		required, err := requiredJournalModeForProfile(ctx, connection, durability)
 		if err != nil {
 			return err
 		}
@@ -187,14 +217,38 @@ func verifyProviderOwnedDurability(ctx context.Context, database *sqlx.DB, width
 }
 
 func requiredJournalMode(ctx context.Context, connection *sqlx.Conn) (string, error) {
+	return requiredJournalModeForProfile(ctx, connection, DurabilityWAL)
+}
+
+func requiredJournalModeForProfile(ctx context.Context, connection *sqlx.Conn, durability DurabilityProfile) (string, error) {
 	var location string
 	if err := connection.GetContext(ctx, &location, "SELECT file FROM pragma_database_list WHERE name = 'main'"); err != nil {
 		return "", fmt.Errorf("sqlite open: main database location: %w", err)
 	}
 	if strings.TrimSpace(location) == "" {
+		if durability == DurabilityNetworkFilesystem {
+			return "", fmt.Errorf("sqlite open: network-filesystem durability requires a file-backed database")
+		}
 		return journalModeMemory, nil
 	}
+	if durability == DurabilityNetworkFilesystem {
+		return journalModeDelete, nil
+	}
+	if durability != DurabilityWAL {
+		return "", fmt.Errorf("sqlite open: unsupported durability profile")
+	}
 	return journalModeWAL, nil
+}
+
+func (durability DurabilityProfile) poolWidth() (int, error) {
+	switch durability {
+	case DurabilityWAL:
+		return VerifiedPoolWidth, nil
+	case DurabilityNetworkFilesystem:
+		return NetworkFilesystemPoolWidth, nil
+	default:
+		return 0, fmt.Errorf("sqlite open: unsupported durability profile")
+	}
 }
 
 func observedJournalMode(ctx context.Context, connection *sqlx.Conn) (string, error) {
@@ -210,6 +264,13 @@ func normalizeJournalMode(value string) string {
 }
 
 func configureDataSourceName(dataSourceName string) (string, error) {
+	return configureDataSourceNameForProfile(dataSourceName, DurabilityWAL)
+}
+
+func configureDataSourceNameForProfile(dataSourceName string, durability DurabilityProfile) (string, error) {
+	if _, err := durability.poolWidth(); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(dataSourceName) == "" {
 		return "", fmt.Errorf("sqlite open: data source name is empty")
 	}
@@ -261,6 +322,9 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 		}
 	}
 	if modePresent && modes[0] == "memory" {
+		if durability == DurabilityNetworkFilesystem {
+			return "", fmt.Errorf("sqlite open: network-filesystem durability requires a file-backed database")
+		}
 		name := strings.TrimPrefix(base, "file:")
 		if !strings.HasPrefix(base, "file:") || strings.Trim(name, "/") == "" || strings.EqualFold(name, ":memory:") || !cachePresent || caches[0] != "shared" {
 			return "", fmt.Errorf("sqlite open: private in-memory databases are incompatible with the verified multi-connection pool; use a named file: DSN with mode=memory&cache=shared")

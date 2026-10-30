@@ -120,7 +120,7 @@ func TestPublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
 			"FeaturePolicyASCIIText", "FeaturePolicyBinaryText", "FeaturePolicyExactJSON", "FeaturePolicyRelation", "FeaturePolicyScalarList",
 			"PoolStatus", "Version",
 		},
-		paths[1]: {"CheckpointForBackup", "Config", "Open"},
+		paths[1]: {"CheckpointForBackup", "Config", "Open", "OpenNetworkFilesystem"},
 		paths[2]: {"Config", "Open", "PoolConfig"},
 	}
 	expectedMethods := map[string]map[string][]string{

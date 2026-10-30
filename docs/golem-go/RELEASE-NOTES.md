@@ -14,6 +14,18 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
+## Unreleased
+
+**SQLite databases on network filesystems can opt into a compatible profile.**
+`sqlite.OpenNetworkFilesystem` uses verified rollback journaling and a single
+connection while retaining `synchronous=FULL`, foreign keys, the bounded busy
+timeout, and provider-owned transaction locking. The existing `sqlite.Open`
+entry point remains unchanged and continues to enforce WAL with its verified
+four-connection pool. `CheckpointForBackup` now dispatches by the profile stored
+on the verified handle: it truncates and verifies WAL for the default profile,
+while a closed rollback-journal database is verified without attempting a WAL
+checkpoint. See [SQLite durability profiles](./SQLITE_DURABILITY.md).
+
 ## go/v0.7.0
 
 **This release changes behaviour you may depend on.** Error codes, write

@@ -130,6 +130,7 @@ type databaseState struct {
 	pool                 PoolStatus
 	testOnly             bool
 	sqliteDataSourceName string
+	sqliteDurability     internalsqlite.DurabilityProfile
 
 	closeOnce sync.Once
 	closeErr  error
@@ -305,10 +306,17 @@ func (state *databaseState) closeCompleted() bool {
 }
 
 func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
+	return OpenSQLiteWithDurability(ctx, dataSourceName, internalsqlite.DurabilityWAL)
+}
+
+func OpenSQLiteWithDurability(ctx context.Context, dataSourceName string, durability internalsqlite.DurabilityProfile) (*Database, error) {
 	if ctx == nil || strings.TrimSpace(dataSourceName) == "" {
 		return nil, failure(CodeConfig, "sqlite provider configuration is invalid")
 	}
-	database, report, err := internalsqlite.New().Open(ctx, dataSourceName)
+	if durability != internalsqlite.DurabilityWAL && durability != internalsqlite.DurabilityNetworkFilesystem {
+		return nil, failure(CodeConfig, "sqlite provider configuration is invalid")
+	}
+	database, report, err := internalsqlite.New().OpenWithDurability(ctx, dataSourceName, durability)
 	if err != nil {
 		return nil, failure(CodeOpen, "sqlite provider open failed")
 	}
@@ -326,10 +334,18 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 		"policy-scalar-list.v1",
 		"policy-relation.v1",
 		"analytics-exact.v1",
-	}, PoolStatus{maximumOpen: internalsqlite.VerifiedPoolWidth, maximumIdle: internalsqlite.VerifiedPoolWidth})
+	}, PoolStatus{maximumOpen: poolWidthForSQLiteDurability(durability), maximumIdle: poolWidthForSQLiteDurability(durability)})
 	result.state.sqliteDataSourceName = dataSourceName
+	result.state.sqliteDurability = durability
 	result.state.maintainSQLiteStatistics(sqliteStatisticsInterval)
 	return result, nil
+}
+
+func poolWidthForSQLiteDurability(durability internalsqlite.DurabilityProfile) int {
+	if durability == internalsqlite.DurabilityNetworkFilesystem {
+		return internalsqlite.NetworkFilesystemPoolWidth
+	}
+	return internalsqlite.VerifiedPoolWidth
 }
 
 func (state *databaseState) maintainSQLiteStatistics(interval time.Duration) {
@@ -374,7 +390,7 @@ func CheckpointSQLiteForBackup(ctx context.Context, database *Database) error {
 	if ctx == nil || database == nil || database.state == nil || database.state.provider != golem.SQLite || !database.state.closeCompleted() || strings.TrimSpace(database.state.sqliteDataSourceName) == "" {
 		return failure(CodeMaintenance, "sqlite backup checkpoint requires a closed verified SQLite provider handle")
 	}
-	if err := internalsqlite.New().CheckpointForBackup(ctx, database.state.sqliteDataSourceName); err != nil {
+	if err := internalsqlite.New().CheckpointForBackupWithDurability(ctx, database.state.sqliteDataSourceName, database.state.sqliteDurability); err != nil {
 		return failure(CodeMaintenance, "sqlite backup checkpoint failed")
 	}
 	return nil
