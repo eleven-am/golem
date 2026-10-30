@@ -3903,6 +3903,7 @@ provider/sqlite.Config type struct
 provider/sqlite.Config unkeyed literal {DataSourceName}
 provider/sqlite.Config.DataSourceName field string
 provider/sqlite.Open func(context.Context, Config) (*provider.Database, error)
+provider/sqlite.OpenNetworkFilesystem func(context.Context, Config) (*provider.Database, error)
 queryplan.(*Node).Access func() AccessKind
 queryplan.(*Node).BatchCapacity func() (uint32, bool)
 queryplan.(*Node).Children func() []Node
