@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -19,10 +20,14 @@ import (
 )
 
 func p8RuntimeDatabaseConfig(t *testing.T) (*providerapi.Database, Config[testPrincipal, testActor]) {
+	return p8RuntimeDatabaseConfigWithOpen(t, providersqlite.Open)
+}
+
+func p8RuntimeDatabaseConfigWithOpen(t *testing.T, open func(context.Context, providersqlite.Config) (*providerapi.Database, error)) (*providerapi.Database, Config[testPrincipal, testActor]) {
 	t.Helper()
 	ctx := context.Background()
 	fixture := schematest.New(t)
-	database, err := providersqlite.Open(ctx, providersqlite.Config{
+	database, err := open(ctx, providersqlite.Config{
 		DataSourceName: "file:" + filepath.Join(t.TempDir(), "p8-runtime-database.sqlite"),
 	})
 	if err != nil {
@@ -63,6 +68,28 @@ func p8RuntimeDatabaseConfig(t *testing.T) (*providerapi.Database, Config[testPr
 		ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 			return testActor{Allow: principal.Allow}, nil
 		},
+	}
+}
+
+func TestRuntimeStartsWithNetworkFilesystemSQLiteLifecycle(t *testing.T) {
+	database, config := p8RuntimeDatabaseConfigWithOpen(t, providersqlite.OpenNetworkFilesystem)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	app, err := Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app == nil {
+		t.Fatal("runtime returned no application")
+	}
+	if got := database.Pool().MaximumOpen(); got != 1 {
+		t.Fatalf("verified maximum open=%d, want 1", got)
+	}
+	if got := database.UnsafeSQLX().Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("live maximum open=%d, want 1", got)
+	}
+	if err := database.UnsafeSQLX().PingContext(ctx); err != nil {
+		t.Fatalf("network-profile database unusable after runtime startup: %v", err)
 	}
 }
 

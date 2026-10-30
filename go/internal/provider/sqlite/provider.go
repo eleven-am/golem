@@ -63,7 +63,11 @@ type CapabilityReport struct {
 // Open opens the CGO-free sqlite-vec WASM database through sqlx and proves the provider
 // floor and required connection capabilities before returning it.
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
-	return provider.open(ctx, dataSourceName)
+	return provider.open(ctx, dataSourceName, DurabilityWAL)
+}
+
+func (provider *Provider) OpenWithDurability(ctx context.Context, dataSourceName string, durability DurabilityProfile) (*sqlx.DB, CapabilityReport, error) {
+	return provider.open(ctx, dataSourceName, durability)
 }
 
 func (provider *Provider) Probe(ctx context.Context, database *sqlx.DB) (CapabilityReport, error) {
