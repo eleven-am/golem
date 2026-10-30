@@ -3,10 +3,13 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/ncruces/go-sqlite3/driver"
 )
+
+const rollbackJournalBackupOwnershipBudget = 5 * time.Second
 
 // CheckpointForBackup performs the bounded provider-owned WAL checkpoint that
 // the supported backup procedure requires before the database file is copied.
@@ -49,6 +52,16 @@ func (provider *Provider) CheckpointForBackupWithDurability(ctx context.Context,
 		}
 		if observed != journalModeDelete {
 			return fmt.Errorf("sqlite checkpoint: database reported journal mode %q, want %q", observed, journalModeDelete)
+		}
+		ownershipContext, cancel := context.WithTimeout(ctx, rollbackJournalBackupOwnershipBudget)
+		defer cancel()
+		if _, err := connection.ExecContext(ownershipContext, "BEGIN EXCLUSIVE"); err != nil {
+			return fmt.Errorf("sqlite checkpoint: rollback-journal exclusive ownership unavailable: %w", err)
+		}
+		releaseContext, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackJournalBackupOwnershipBudget)
+		defer releaseCancel()
+		if _, err := connection.ExecContext(releaseContext, "ROLLBACK"); err != nil {
+			return fmt.Errorf("sqlite checkpoint: rollback-journal exclusive ownership release failed: %w", err)
 		}
 		return nil
 	}

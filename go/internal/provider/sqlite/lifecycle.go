@@ -375,20 +375,27 @@ func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (Capabil
 	if database == nil {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe: database is nil")
 	}
+	width := 2
+	if database.Stats().MaxOpenConnections == NetworkFilesystemPoolWidth {
+		width = NetworkFilesystemPoolWidth
+	}
 	first, err := database.Connx(ctx)
 	if err != nil {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe first pooled connection: %w", err)
 	}
 	defer first.Close()
+	firstReport, err := probeConnection(ctx, first, "first")
+	if err != nil {
+		return CapabilityReport{}, err
+	}
+	if width == NetworkFilesystemPoolWidth {
+		return firstReport, nil
+	}
 	second, err := database.Connx(ctx)
 	if err != nil {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe second pooled connection: %w", err)
 	}
 	defer second.Close()
-	firstReport, err := probeConnection(ctx, first, "first")
-	if err != nil {
-		return CapabilityReport{}, err
-	}
 	secondReport, err := probeConnection(ctx, second, "second")
 	if err != nil {
 		return CapabilityReport{}, err

@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/provider"
 	"github.com/eleven-am/golem/go/provider/sqlite"
+	ncrucesdriver "github.com/ncruces/go-sqlite3/driver"
 )
 
 func TestSQLiteNetworkFilesystemProfileUsesVerifiedRollbackJournalAndSingleConnection(t *testing.T) {
@@ -138,5 +140,54 @@ func TestSQLiteDefaultStillTransitionsNetworkProfileDatabaseBackToWAL(t *testing
 	}
 	if strings.ToLower(journal) != "wal" {
 		t.Fatalf("default journal=%q, want wal", journal)
+	}
+}
+
+func TestSQLiteNetworkFilesystemBackupRefusesExternalWriter(t *testing.T) {
+	ctx := context.Background()
+	dsn := "file:" + filepath.Join(t.TempDir(), "network-busy.sqlite")
+	database, err := sqlite.OpenNetworkFilesystem(ctx, sqlite.Config{DataSourceName: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.UnsafeSQLX().ExecContext(ctx, `CREATE TABLE durable (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	external, err := ncrucesdriver.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer external.Close()
+	writer, err := external.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+
+	busyContext, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	started := time.Now()
+	err = sqlite.CheckpointForBackup(busyContext, database)
+	cancel()
+	if err == nil {
+		t.Fatal("backup preparation accepted an active external writer")
+	}
+	if code, ok := provider.CodeOf(err); !ok || code != provider.CodeMaintenance {
+		t.Fatalf("code=(%q,%v), want MAINTENANCE", code, ok)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("busy ownership check exceeded bound: %s", elapsed)
+	}
+	if _, err := writer.ExecContext(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.CheckpointForBackup(ctx, database); err != nil {
+		t.Fatalf("backup preparation after writer release: %v", err)
 	}
 }
