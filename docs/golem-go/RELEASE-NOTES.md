@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.7.1
+go get github.com/eleven-am/golem/go@v0.7.2
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
