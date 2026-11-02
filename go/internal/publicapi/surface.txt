@@ -858,6 +858,10 @@ golem.(*RuntimeReadHookResult).Found func() bool
 golem.(*RuntimeReadHookResult).ModelID func() ModelID
 golem.(*RuntimeReadHookResult).Operation func() HookOperation
 golem.(*RuntimeReadHookResult).Rows func() []RuntimeModelRow
+golem.(*RuntimeRowIdentity).Fields func() []FieldID
+golem.(*RuntimeRowIdentity).Present func() bool
+golem.(*RuntimeRowIdentity).Token func() RuntimeSemanticIdentityToken
+golem.(*RuntimeRowIdentity).Values func() []any
 golem.(*RuntimeScalarListValue).CanonicalJSON func() []uint8
 golem.(*RuntimeTransportValue).Get func() (any, bool)
 golem.(*RuntimeTransportValue).State func() ReadState
@@ -1574,6 +1578,10 @@ golem.(RuntimeReadHookResult).Found func() bool
 golem.(RuntimeReadHookResult).ModelID func() ModelID
 golem.(RuntimeReadHookResult).Operation func() HookOperation
 golem.(RuntimeReadHookResult).Rows func() []RuntimeModelRow
+golem.(RuntimeRowIdentity).Fields func() []FieldID
+golem.(RuntimeRowIdentity).Present func() bool
+golem.(RuntimeRowIdentity).Token func() RuntimeSemanticIdentityToken
+golem.(RuntimeRowIdentity).Values func() []any
 golem.(RuntimeScalarListValue).CanonicalJSON func() []uint8
 golem.(RuntimeTransportValue).Get func() (any, bool)
 golem.(RuntimeTransportValue).State func() ReadState
@@ -2895,6 +2903,8 @@ golem.RuntimeModelReadRowWithCounts func(ModelID, []RuntimeReadCell, []RuntimeRe
 golem.RuntimeModelReadRowWithOccurrences func(ModelID, []RuntimeReadCell, []RuntimeRelationCountCell, []RuntimeOccurrenceCell) (RuntimeModelRow, error)
 golem.RuntimeModelRow type struct
 golem.RuntimeModelRowFromTyped func[M any](Row[M]) RuntimeModelRow
+golem.RuntimeModelRowIdentity func(RuntimeModelRow) RuntimeRowIdentity
+golem.RuntimeModelRowWithIdentity func(RuntimeModelRow, RuntimeRowIdentity) RuntimeModelRow
 golem.RuntimeModelRowWithSemanticIdentity func(RuntimeModelRow, string) RuntimeModelRow
 golem.RuntimeMutationCountResult func(int64) (RuntimeMutationResult, error)
 golem.RuntimeMutationCreate const RuntimeMutationOperation = 1
@@ -2960,6 +2970,7 @@ golem.RuntimeNestedMutationValue.Field field FieldID
 golem.RuntimeNestedMutationValue.Parent field ModelID
 golem.RuntimeNestedMutationValue.Relation field RelationID
 golem.RuntimeNestedMutationValue.Target field ModelID
+golem.RuntimeNewRowIdentity func([]FieldID, []RuntimeReadCell) (RuntimeRowIdentity, error)
 golem.RuntimeNullAnalyticsCell func(string) RuntimeAnalyticsCell
 golem.RuntimeNullOccurrenceCell func(FieldID, RuntimeOccurrenceID) RuntimeOccurrenceCell
 golem.RuntimeNullReadCell func(FieldID) RuntimeReadCell
@@ -3054,6 +3065,8 @@ golem.RuntimeReadSelectorInput.Key field KeyID
 golem.RuntimeReadSelectorInput.Model field ModelID
 golem.RuntimeRelationCountCell type struct
 golem.RuntimeRelationGroupRow func[M any](ModelID, ...RuntimeAnalyticsCell) RelationGroupRow[M]
+golem.RuntimeRowIdentity comparable
+golem.RuntimeRowIdentity type struct
 golem.RuntimeScalarListReadCell func(FieldID, []uint8) RuntimeReadCell
 golem.RuntimeScalarListValue type struct
 golem.RuntimeScopedAuditRecord func(FrozenScopedQuery, string, uint64, bool, Provider, string, time.Duration, int64, ScopedOutcome) ScopedAuditRecord
@@ -3093,6 +3106,7 @@ golem.RuntimeTypedCreateInput func[M any](ModelID, RuntimeCustomMutationInput) (
 golem.RuntimeTypedMutationTarget func[M any](ModelID, FrozenMutationTarget) (MutationTarget[M], error)
 golem.RuntimeTypedPredicate func[M any](ModelID, FrozenPredicate) (Predicate[M], error)
 golem.RuntimeTypedReadRow func[M any](ModelDescriptor[M], RuntimeModelRow) (Row[M], error)
+golem.RuntimeTypedRowIdentity func[M any](Row[M]) RuntimeRowIdentity
 golem.RuntimeTypedUniqueSelector func[M any](ModelID, FrozenMutationTarget) (UniqueSelectorValue[M], error)
 golem.RuntimeTypedUpdateInput func[M any](ModelID, RuntimeCustomMutationInput) (UpdateInput[M], error)
 golem.RuntimeTypedUpdateManyInput func[M any](ModelID, RuntimeCustomMutationInput) (UpdateManyInput[M], error)

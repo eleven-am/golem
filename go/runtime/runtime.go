@@ -1286,6 +1286,11 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 		if err != nil {
 			return nil, err
 		}
+		identity, identityErr := plannedRowIdentity(app, planned, plannedFields, result[rowIndex].values, record)
+		if identityErr != nil {
+			return nil, identityErr
+		}
+		result[rowIndex].row = golem.RuntimeModelRowWithIdentity(result[rowIndex].row, identity)
 	}
 	return result, nil
 }
@@ -1591,4 +1596,40 @@ func operationName(operation golem.ReadOperation) string {
 	default:
 		return "read"
 	}
+}
+
+func plannedRowIdentity[P, A any](app *App[P, A], planned readplan.Plan, plannedFields []readplan.Field, values map[policyir.FieldID]readdecode.Cell, record evaluate.Record) (golem.RuntimeRowIdentity, error) {
+	model, ok := app.registry.Model(golem.ModelID(planned.ModelID()))
+	if !ok || len(model.PrimaryKey()) == 0 {
+		return golem.RuntimeRowIdentity{}, nil
+	}
+	key := model.PrimaryKey()
+	fields := make([]golem.FieldID, len(key))
+	cells := make([]golem.RuntimeReadCell, len(key))
+	for index, primary := range key {
+		field := policyir.FieldID(primary)
+		cell, present := values[field]
+		if !present {
+			return golem.RuntimeRowIdentity{}, nil
+		}
+		for _, planField := range plannedFields {
+			if planField.FieldID() != field {
+				continue
+			}
+			visible, err := fieldVisible(planField.Mask, record, app.providers)
+			if err != nil {
+				return golem.RuntimeRowIdentity{}, maskInvariantError(planned.ModelID(), field, "field", err)
+			}
+			if !visible {
+				return golem.RuntimeRowIdentity{}, fmt.Errorf("P3_RUNTIME_IDENTITY: model=%x field=%x: primary-key field is masked for a row that was read", planned.ModelID(), field)
+			}
+		}
+		fields[index] = golem.FieldID(field)
+		cells[index] = cell.RuntimeCell()
+	}
+	identity, err := golem.RuntimeNewRowIdentity(fields, cells)
+	if err != nil {
+		return golem.RuntimeRowIdentity{}, fmt.Errorf("P3_RUNTIME_IDENTITY: model=%x: %w", planned.ModelID(), err)
+	}
+	return identity, nil
 }

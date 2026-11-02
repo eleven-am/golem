@@ -64,6 +64,7 @@ type RuntimeModelRow struct {
 	counts            map[relationCountKey]readCell
 	occurrences       map[runtimeOccurrenceKey]readCell
 	semanticIdentity  RuntimeSemanticIdentityToken
+	identity          *rowIdentity
 	semanticTransport *RuntimeSemanticRow
 	// cdcExact is set only by RuntimeCDCModelRow. Ordinary public/authorized
 	// rows deliberately cannot be reinterpreted as exact database images:
@@ -196,6 +197,7 @@ type Row[M any] struct {
 	cells       map[FieldID]readCell
 	counts      map[relationCountKey]readCell
 	occurrences map[runtimeOccurrenceKey]readCell
+	identity    *rowIdentity
 	_           func() M
 }
 
@@ -284,7 +286,7 @@ func RuntimeTypedReadRow[M any](descriptor ModelDescriptor[M], runtime RuntimeMo
 	if model == (ModelID{}) || runtime.model != model {
 		return Row[M]{}, fmt.Errorf("read row: runtime model does not match descriptor")
 	}
-	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences)}, nil
+	return typedRowFromRuntime[M](runtime), nil
 }
 
 // RuntimeToOneReadCell and RuntimeToManyReadCell attach already hydrated
@@ -341,7 +343,7 @@ func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccur
 }
 
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	result := RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), semanticIdentity: row.semanticIdentity, cdcExact: row.cdcExact}
+	result := RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), semanticIdentity: row.semanticIdentity, identity: row.identity, cdcExact: row.cdcExact}
 	if row.semanticTransport != nil {
 		transport := *row.semanticTransport
 		transport.row = cloneRuntimeModelRow(transport.row)
@@ -361,7 +363,7 @@ func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
 }
 
 func cloneRow[M any](row Row[M]) Row[M] {
-	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences)}
+	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), identity: row.identity}
 	for field, cell := range row.cells {
 		result.cells[field] = cloneReadCell(cell)
 	}
@@ -560,7 +562,7 @@ func One[M, R any](row Row[M], field ToOne[M, R]) ReadValue[Row[R]] {
 		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
 			return ReadValue[Row[R]]{}
 		}
-		typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+		typed := typedRowFromRuntime[R](value)
 		return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
 	}
 	// Retain compatibility with runtime cells constructed before relation rows
@@ -588,7 +590,7 @@ func Many[M, R any](row Row[M], field ToMany[M, R]) ReadValue[[]Row[R]] {
 			if item.model != field.targetModel || field.targetModel == (ModelID{}) {
 				return ReadValue[[]Row[R]]{}
 			}
-			typed[index] = Row[R]{model: item.model, cells: cloneReadCells(item.cells), counts: cloneReadCounts(item.counts), occurrences: cloneOccurrences(item.occurrences)}
+			typed[index] = typedRowFromRuntime[R](item)
 		}
 	} else {
 		legacy, legacyOK := cell.value.([]Row[R])
@@ -647,7 +649,7 @@ func RuntimeOccurrenceToOne[M, R any](row Row[M], field ToOne[M, R], occurrence 
 	if !ok || value.model != field.targetModel || field.targetModel == (ModelID{}) {
 		return ReadValue[Row[R]]{}
 	}
-	typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+	typed := typedRowFromRuntime[R](value)
 	return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
 }
 
@@ -668,7 +670,7 @@ func RuntimeOccurrenceToMany[M, R any](row Row[M], field ToMany[M, R], occurrenc
 		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
 			return ReadValue[[]Row[R]]{}
 		}
-		typed[index] = Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+		typed[index] = typedRowFromRuntime[R](value)
 	}
 	return ReadValue[[]Row[R]]{state: ReadPresent, value: cloneRows(typed), clone: cloneRows[R]}
 }
@@ -1646,4 +1648,8 @@ func readOperationName(operation ReadOperation) string {
 	default:
 		return "read"
 	}
+}
+
+func typedRowFromRuntime[M any](runtime RuntimeModelRow) Row[M] {
+	return Row[M]{model: runtime.model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences), identity: runtime.identity}
 }
