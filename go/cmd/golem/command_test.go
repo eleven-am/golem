@@ -57,14 +57,14 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "92719e49d7577607eee1006be50c5ce35dac92e93c053344440f326fb41fe16d"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "b99e0f0c7b9b7302d7ad8126d0edfb3f531e26270f5a326864ffb3fdb51ec0f5"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 5 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
+	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 6 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
 	}
 	for _, entry := range output.PolicyOperators {

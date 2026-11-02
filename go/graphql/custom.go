@@ -9,6 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // CustomOperation is the closed public custom-root vocabulary.
@@ -141,7 +142,7 @@ type CustomCallerCapability interface {
 }
 
 func NewCustomRegistry(bundle golem.SchemaBundle, supplied ...CustomBinding) (*CustomRegistry, error) {
-	compilation, err := compilationFromBundle(bundle)
+	compilation, err := policyschema.DecodeActive(bundle)
 	if err != nil {
 		return nil, err
 	}

@@ -26,7 +26,7 @@ import (
 const GQLGenVersion = "v0.17.70"
 
 const (
-	GraphQLABIVersion        = "p8-graphql-abi-v5"
+	GraphQLABIVersion        = "p8-graphql-abi-v6"
 	GoFilename               = adaptersurface.Filename
 	SDLFilename              = "zz_golem_graphql.schema.graphqls"
 	DefaultGolemImportPath   = "github.com/eleven-am/golem/go/golem"

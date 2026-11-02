@@ -80,12 +80,12 @@ func TestCanonicalContractSortsAndFingerprintsOptimisticConcurrencyProjection(t 
 	}
 }
 
-func TestOptimisticConcurrencyContractFormatIsV6(t *testing.T) {
+func TestOptimisticConcurrencyContractFormatIsV6AndCurrentIsV7(t *testing.T) {
 	if OptimisticConcurrencyContractFormatVersionRequired != 6 {
 		t.Fatalf("required optimistic concurrency ContractIR version = %d, want reviewed v6", OptimisticConcurrencyContractFormatVersionRequired)
 	}
-	if ContractFormatVersion != OptimisticConcurrencyContractFormatVersionRequired {
-		t.Fatalf("current ContractIR version = %d, want coordinated v6", ContractFormatVersion)
+	if ContractFormatVersion != 7 {
+		t.Fatalf("current ContractIR version = %d, want v7", ContractFormatVersion)
 	}
 }
 
@@ -104,15 +104,15 @@ func TestContractV5HistoricalDecoderPreservesExactReleasedBytesAndFingerprint(t 
 	if got, err := ContractFingerprintV5([]byte(payload)); err != nil || got != wantFingerprint {
 		t.Fatalf("released v5 fingerprint changed: got %s want %s err=%v", got, wantFingerprint, err)
 	}
-	if _, err := decodeCurrentContractCanonicalFraming([]byte(payload)); err == nil || !strings.Contains(err.Error(), "expected 6") {
+	if _, err := decodeCurrentContractCanonicalFraming([]byte(payload)); err == nil || !strings.Contains(err.Error(), "expected 7") {
 		t.Fatalf("current framing seam accepted v5: %v", err)
 	}
 }
 
-func TestContractV6CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
+func TestContractV7CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
 	const (
-		wantBytes       = `{"formatVersion":6,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`
-		wantFingerprint = Fingerprint("6736c667e443dcfaf42cee3119cf431798b3e554f11945a04ce74109dea6e2d8")
+		wantBytes       = `{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`
+		wantFingerprint = Fingerprint("3562ed2ecea99b14b957f0657bfb8856a0b25fd32ab473d5c9a0417e755feb3a")
 	)
 	contract := ContractIR{FormatVersion: ContractFormatVersion, GraphQLABIVersion: 5}
 	encoded, err := CanonicalContract(contract)
@@ -120,14 +120,14 @@ func TestContractV6CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(encoded) != wantBytes {
-		t.Fatalf("canonical v6 bytes changed:\n got %s\nwant %s", encoded, wantBytes)
+		t.Fatalf("canonical v7 bytes changed:\n got %s\nwant %s", encoded, wantBytes)
 	}
 	fingerprint, err := ContractFingerprint(contract)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fingerprint != wantFingerprint {
-		t.Fatalf("canonical v6 fingerprint changed: got %s want %s", fingerprint, wantFingerprint)
+		t.Fatalf("canonical v7 fingerprint changed: got %s want %s", fingerprint, wantFingerprint)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestContractDecodersAreVersionExactAndHistoricalV5CannotConsumeV6Projection
 		t.Fatalf("historical v5 decoder accepted v6: %v", err)
 	}
 
-	relabelled := bytes.Replace(v6, []byte(`"formatVersion":6`), []byte(`"formatVersion":5`), 1)
+	relabelled := bytes.Replace(v6, []byte(`"formatVersion":7`), []byte(`"formatVersion":5`), 1)
 	if _, err := CanonicalDecodeContractV5(relabelled); err == nil || !strings.Contains(err.Error(), "optimisticConcurrency") {
 		t.Fatalf("historical v5 decoder reinterpreted a relabelled v6 projection: %v", err)
 	}

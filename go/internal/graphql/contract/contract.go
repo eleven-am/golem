@@ -13,7 +13,7 @@ import (
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
-const ABIVersion uint16 = 5
+const ABIVersion uint16 = 6
 
 const (
 	DefaultPageSize    uint32 = 50

@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // BindGeneratedComputed is the generated-code bridge from a statically checked
@@ -188,7 +189,7 @@ func BindGeneratedCustomMutationModelContract[M, C, A, R any](bundle golem.Schem
 }
 
 func bindGeneratedCustomContract[M, C, A, R any](bundle golem.SchemaBundle, operation CustomOperation, spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), modelResult bool, conversions []GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	compilation, err := compilationFromBundle(bundle)
+	compilation, err := policyschema.DecodeActive(bundle)
 	if err != nil {
 		return CustomBinding{}, err
 	}

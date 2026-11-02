@@ -30,7 +30,7 @@ func TestHistoricalBundleRoutesModelV1ThroughFrozenDecoderOnly(t *testing.T) {
 	if len(registry.Providers()) != 2 {
 		t.Fatalf("historical registry providers = %v", registry.Providers())
 	}
-	if _, err := New(historical); !isSchemaFailure(err, CodeDocument, "model", "unsupported format/canonical versions 1/1") {
+	if _, err := New(historical); !isSchemaFailure(err, CodeDocument, "model.formatVersion", "generated model format 1 predates this golem (format 2): regenerate with golem generate") {
 		t.Fatalf("active registry accepted historical ModelIR v1: %v", err)
 	}
 	wrongFingerprint := digest(t, string(v1Fingerprint))

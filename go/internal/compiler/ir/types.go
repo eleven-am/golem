@@ -15,7 +15,7 @@ const (
 	// ModelIR format that owns the optimistic-concurrency field identity.
 	// Released v1 documents remain owned by CanonicalDecodeModelV1.
 	OptimisticConcurrencyModelFormatVersionRequired uint16 = 2
-	ContractFormatVersion                           uint16 = 6
+	ContractFormatVersion                           uint16 = 7
 	// OptimisticConcurrencyContractFormatVersionRequired freezes the first
 	// ContractIR format that carries the optimistic-concurrency projection.
 	// Released v5 documents remain owned by CanonicalDecodeContractV5.

@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 )
 
@@ -210,4 +212,24 @@ func generatedTestFixedID(t *testing.T, value string, destination []byte) {
 		t.Fatalf("identity=%q err=%v", value, err)
 	}
 	copy(destination, decoded)
+}
+
+func TestGeneratedExecutorRejectsUnknownContractField(t *testing.T) {
+	_, bundle := generatedTestCompilation(t)
+	contract := bundle.Contract()
+	payload := bytes.Replace(contract.Bytes(), []byte(`{"formatVersion":`), []byte(`{"unknownField":1,"formatVersion":`), 1)
+	if bytes.Equal(payload, contract.Bytes()) {
+		t.Fatal("contract payload does not start with formatVersion")
+	}
+	tampered := golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(),
+		golem.GeneratedSchemaDocument(contract.FormatVersion(), contract.CanonicalVersion(), contract.Fingerprint(), payload), bundle.Providers()...)
+	_, err := NewGeneratedExecutor(GeneratedExecutorConfig[int]{
+		Bundle:              tampered,
+		BeginCaller:         func(context.Context, int) (CallerExecution, error) { return nil, nil },
+		ReportInternalError: func(context.Context, error) {},
+	})
+	var failure *policyschema.Error
+	if !errors.As(err, &failure) || failure.Code != policyschema.CodeDocument || failure.Path != "contract.payload" || failure.Detail != `json: unknown field "unknownField"` {
+		t.Fatalf("executor accepted or mis-described an unknown contract field: %v", err)
+	}
 }

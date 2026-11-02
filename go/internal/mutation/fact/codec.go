@@ -414,17 +414,22 @@ func DecodeV2(payload []byte, registry *schema.Registry, eventSchema golem.Schem
 // DecodeWithResolver decodes V1 and V2 without falling back from a missing
 // historical schema to the active schema.
 func DecodeWithResolver(payload []byte, resolver HistoricalSchemaResolver) (Envelope, error) {
+	envelope, _, err := decodeResolved(payload, resolver)
+	return envelope, err
+}
+
+func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope, *schema.Registry, error) {
 	if resolver == nil {
-		return Envelope{}, &CodecError{Detail: "historical schema resolver is required"}
+		return Envelope{}, nil, &CodecError{Detail: "historical schema resolver is required"}
 	}
 	d := decoder{data: append([]byte(nil), payload...)}
 	magic, err := d.raw(len(factMagic))
 	if err != nil || !bytes.Equal(magic, factMagic) {
-		return Envelope{}, d.fail("invalid fact magic")
+		return Envelope{}, nil, d.fail("invalid fact magic")
 	}
 	version, err := d.u16()
 	if err != nil || version != FormatVersionV1 && version != FormatVersionV2 {
-		return Envelope{}, d.fail("unsupported fact version %d", version)
+		return Envelope{}, nil, d.fail("unsupported fact version %d", version)
 	}
 	codec, err := d.text()
 	expectedCodec := CodecIdentityV1
@@ -432,89 +437,89 @@ func DecodeWithResolver(payload []byte, resolver HistoricalSchemaResolver) (Enve
 		expectedCodec = CodecIdentityV2
 	}
 	if err != nil || codec != expectedCodec {
-		return Envelope{}, d.fail("unsupported codec identity %q", codec)
+		return Envelope{}, nil, d.fail("unsupported codec identity %q", codec)
 	}
 	eventBytes, err := d.fixed16()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	if eventBytes == ([16]byte{}) {
-		return Envelope{}, d.fail("event identity is zero")
+		return Envelope{}, nil, d.fail("event identity is zero")
 	}
 	generationBytes, err := d.fixed32()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	var eventSchemaBytes [32]byte
 	if version == FormatVersionV2 {
 		eventSchemaBytes, err = d.fixed32()
 		if err != nil {
-			return Envelope{}, err
+			return Envelope{}, nil, err
 		}
 		if eventSchemaBytes == ([32]byte{}) {
-			return Envelope{}, d.fail("event-schema fingerprint is zero")
+			return Envelope{}, nil, d.fail("event-schema fingerprint is zero")
 		}
 	}
 	reference := SchemaReference{FormatVersion: version, CodecIdentity: codec, Generation: golem.SchemaDigest(generationBytes), EventSchema: golem.SchemaDigest(eventSchemaBytes)}
 	registry, resolvedEventSchema, resolved := resolver.ResolveFactSchema(reference)
 	if !resolved || registry == nil {
-		return Envelope{}, d.fail("required historical fact schema is unavailable")
+		return Envelope{}, nil, SchemaUnavailable(reference)
 	}
 	if version == FormatVersionV1 && registry.GenerationDigest() != reference.Generation {
-		return Envelope{}, d.fail("resolved V1 generation fingerprint disagrees")
+		return Envelope{}, nil, d.fail("resolved V1 generation fingerprint disagrees")
 	}
 	if version == FormatVersionV2 && resolvedEventSchema != reference.EventSchema {
-		return Envelope{}, d.fail("resolved V2 event-schema fingerprint disagrees")
+		return Envelope{}, nil, d.fail("resolved V2 event-schema fingerprint disagrees")
 	}
 	modelBytes, err := d.fixed16()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	if modelBytes == ([16]byte{}) {
-		return Envelope{}, d.fail("model identity is zero")
+		return Envelope{}, nil, d.fail("model identity is zero")
 	}
 	actionByte, err := d.u8()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	causationBytes, err := d.fixed16()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	if causationBytes == ([16]byte{}) {
-		return Envelope{}, d.fail("causation identity is zero")
+		return Envelope{}, nil, d.fail("causation identity is zero")
 	}
 	ordinal, err := d.u32()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	model := policyir.ModelID(modelBytes)
 	before, err := d.optionalIdentity()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	after, err := d.optionalIdentity()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	deleteState := mutationir.DeleteSnapshotNotApplicable
 	if version == FormatVersionV2 {
 		state, stateErr := d.u8()
 		if stateErr != nil {
-			return Envelope{}, stateErr
+			return Envelope{}, nil, stateErr
 		}
 		deleteState = mutationir.DeleteSnapshotState(state)
 	}
 	snapshotFields, err := d.fields()
 	if err != nil {
-		return Envelope{}, err
+		return Envelope{}, nil, err
 	}
 	if d.remaining() != 0 {
-		return Envelope{}, d.fail("trailing bytes")
+		return Envelope{}, nil, d.fail("trailing bytes")
 	}
 	action := mutationir.FactAction(actionByte)
 	if action < mutationir.FactCreated || action > mutationir.FactDeleted {
-		return Envelope{}, d.fail("invalid fact action %d", action)
+		return Envelope{}, nil, d.fail("invalid fact action %d", action)
 	}
 	if version == FormatVersionV1 {
 		if action == mutationir.FactDeleted {
@@ -525,26 +530,26 @@ func DecodeWithResolver(payload []byte, resolver HistoricalSchemaResolver) (Enve
 		}
 	} else if action == mutationir.FactDeleted {
 		if deleteState != mutationir.DeleteSnapshotUnverifiable && deleteState != mutationir.DeleteSnapshotStoredScalars {
-			return Envelope{}, d.fail("invalid delete snapshot state %d", deleteState)
+			return Envelope{}, nil, d.fail("invalid delete snapshot state %d", deleteState)
 		}
 		if deleteState == mutationir.DeleteSnapshotUnverifiable && len(snapshotFields) != 0 {
-			return Envelope{}, d.fail("unverifiable delete carries snapshot fields")
+			return Envelope{}, nil, d.fail("unverifiable delete carries snapshot fields")
 		}
 	} else if deleteState != mutationir.DeleteSnapshotNotApplicable {
-		return Envelope{}, d.fail("non-delete fact carries delete snapshot state")
+		return Envelope{}, nil, d.fail("non-delete fact carries delete snapshot state")
 	}
 	if before != nil {
 		if err := mutationdecode.ValidateIdentity(registry, model, *before); err != nil {
-			return Envelope{}, d.fail("before identity: %v", err)
+			return Envelope{}, nil, d.fail("before identity: %v", err)
 		}
 	}
 	if after != nil {
 		if err := mutationdecode.ValidateIdentity(registry, model, *after); err != nil {
-			return Envelope{}, d.fail("after identity: %v", err)
+			return Envelope{}, nil, d.fail("after identity: %v", err)
 		}
 	}
 	if err := validateFactShape(action, before, after, deleteState, snapshotFields, registry, model); err != nil {
-		return Envelope{}, d.fail("invalid envelope: %v", err)
+		return Envelope{}, nil, d.fail("invalid envelope: %v", err)
 	}
 	result := Envelope{
 		formatVersion: version, codecIdentity: codec,
@@ -555,9 +560,9 @@ func DecodeWithResolver(payload []byte, resolver HistoricalSchemaResolver) (Enve
 	}
 	canonical, err := Encode(result)
 	if err != nil || !bytes.Equal(canonical, payload) {
-		return Envelope{}, d.fail("envelope is not canonically encoded")
+		return Envelope{}, nil, d.fail("envelope is not canonically encoded")
 	}
-	return result, nil
+	return result, registry, nil
 }
 
 // DecodeOutbox joins the versioned metadata with its separate private
@@ -575,7 +580,7 @@ func DecodeOutboxWithResolver(metadata, deleteSnapshot []byte, resolver Historic
 }
 
 func decodeOutbox(metadata, deleteSnapshot []byte, resolver HistoricalSchemaResolver) (Envelope, error) {
-	envelope, err := DecodeWithResolver(metadata, resolver)
+	envelope, registry, err := decodeResolved(metadata, resolver)
 	if err != nil {
 		return Envelope{}, err
 	}
@@ -587,11 +592,6 @@ func decodeOutbox(metadata, deleteSnapshot []byte, resolver HistoricalSchemaReso
 	}
 	if len(deleteSnapshot) == 0 {
 		return Envelope{}, &CodecError{Detail: "configured delete snapshot is absent"}
-	}
-	reference := SchemaReference{FormatVersion: envelope.formatVersion, CodecIdentity: envelope.codecIdentity, Generation: envelope.generation, EventSchema: envelope.eventSchema}
-	registry, resolvedDigest, resolved := resolver.ResolveFactSchema(reference)
-	if !resolved || registry == nil || envelope.formatVersion == FormatVersionV2 && resolvedDigest != envelope.eventSchema {
-		return Envelope{}, &CodecError{Detail: "required historical delete-snapshot schema is unavailable"}
 	}
 	snapshot, err := DecodeDeleteSnapshot(deleteSnapshot, registry)
 	if err != nil {

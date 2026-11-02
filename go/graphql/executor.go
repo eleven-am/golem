@@ -2,8 +2,6 @@ package graphql
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -12,6 +10,7 @@ import (
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	"github.com/eleven-am/golem/go/observe"
 )
@@ -61,7 +60,7 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 	if config.BeginCaller == nil || config.ReportInternalError == nil {
 		return nil, fmt.Errorf("GraphQL generated executor requires caller factory and trusted error reporter")
 	}
-	compilation, err := compilationFromBundle(config.Bundle)
+	compilation, err := policyschema.DecodeActive(config.Bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -346,48 +345,6 @@ func (caller invalidatingMutationCaller) ExecuteFrozenMutation(ctx context.Conte
 		caller.invalidate()
 	}
 	return result, err
-}
-
-func compilationFromBundle(bundle golem.SchemaBundle) (compilerir.CompilationIR, error) {
-	if bundle.FormatVersion() != golem.SchemaBundleFormatVersion || bundle.GenerationDigest() == (golem.SchemaDigest{}) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL schema bundle is absent or unsupported")
-	}
-	modelDocument, contractDocument := bundle.Model(), bundle.Contract()
-	if modelDocument.FormatVersion() != uint32(compilerir.ModelFormatVersion) || contractDocument.FormatVersion() != uint32(compilerir.ContractFormatVersion) || modelDocument.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) || contractDocument.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL schema bundle document version is unsupported")
-	}
-	var compilation compilerir.CompilationIR
-	if err := json.Unmarshal(modelDocument.Bytes(), &compilation.Model); err != nil {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model document is invalid: %w", err)
-	}
-	if err := json.Unmarshal(contractDocument.Bytes(), &compilation.Contract); err != nil {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract document is invalid: %w", err)
-	}
-	modelCanonical, err := compilerir.CanonicalModel(compilation.Model)
-	if err != nil || string(modelCanonical) != string(modelDocument.Bytes()) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model document is not canonical")
-	}
-	contractCanonical, err := compilerir.CanonicalContract(compilation.Contract)
-	if err != nil || string(contractCanonical) != string(contractDocument.Bytes()) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract document is not canonical")
-	}
-	modelFingerprint, err := compilerir.ModelFingerprint(compilation.Model)
-	if err != nil || schemaDigest(modelFingerprint) != modelDocument.Fingerprint() {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model fingerprint does not match its document")
-	}
-	contractFingerprint, err := compilerir.ContractFingerprint(compilation.Contract)
-	if err != nil || schemaDigest(contractFingerprint) != contractDocument.Fingerprint() {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract fingerprint does not match its document")
-	}
-	return compilation, nil
-}
-
-func schemaDigest(fingerprint compilerir.Fingerprint) (result golem.SchemaDigest) {
-	decoded, err := hex.DecodeString(string(fingerprint))
-	if err == nil && len(decoded) == len(result) {
-		copy(result[:], decoded)
-	}
-	return result
 }
 
 func errOr(err error, message string) error {

@@ -2,13 +2,13 @@
   "kind": "contract_metadata",
   "formatVersion": 1,
   "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-  "contractFingerprint": "e15cee98589237a082bfa5e5a3353354d806dc99814ebb3a0573a24cbd441158",
-  "generationDigest": "90b9eacb433afa4ec615ee03afa82ae5b79231984a1830ac901f9a5dc99800a7",
+  "contractFingerprint": "1a6f41387c3c65eda076e3e3f3f1944fecea43bc3c9dccfc1837e90045704b2e",
+  "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
-    "formatVersion": 6,
-    "graphqlAbiVersion": 5,
+    "formatVersion": 7,
+    "graphqlAbiVersion": 6,
     "models": [
       {
         "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",

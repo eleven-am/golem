@@ -20,8 +20,8 @@ func TestHistoricalContractV4IsCanonicalFingerprintBoundAndActiveClosed(t *testi
 	if _, err := decodeContract(document, false); err == nil {
 		t.Fatal("active bundle path accepted historical contract v4")
 	}
-	currentCanonical := []byte(`{"formatVersion":6,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
-	currentDocument := historicalContractDocument(6, currentCanonical, historicalContractDigest(currentCanonical))
+	currentCanonical := []byte(`{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
+	currentDocument := historicalContractDocument(7, currentCanonical, historicalContractDigest(currentCanonical))
 	if decoded, err := decodeContract(currentDocument, true); err != nil || decoded.FormatVersion != compilerir.ContractFormatVersion {
 		t.Fatalf("historical path rejected exact current contract: decode=%#v err=%v", decoded, err)
 	}
@@ -38,7 +38,7 @@ func TestHistoricalContractV4IsCanonicalFingerprintBoundAndActiveClosed(t *testi
 		{name: "attempted-hook-owned-synthesis", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":3,"models":[{"modelId":"00000000000000000000000000000001","graphqlName":"Post","graphqlPlural":"Posts","roots":{},"fields":[],"hookOwnedCreateFields":[],"selectors":[],"operations":[],"subscriptions":false,"scopedReads":false,"limits":{},"computed":[],"exposed":true}],"enums":[],"methods":[],"customOperations":[]}`)},
 		{name: "wrong-graphql-abi", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
 		{name: "v3-refusal", version: 3, payload: []byte(`{"formatVersion":3,"graphqlAbiVersion":2,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
-		{name: "v7-refusal", version: 7, payload: []byte(`{"formatVersion":7,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
+		{name: "v8-refusal", version: 8, payload: []byte(`{"formatVersion":8,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestHistoricalContractV5IsOriginalFingerprintBoundAndActiveClosed(t *testin
 	if decoded.FormatVersion != compilerir.ContractFormatVersion || decoded.GraphQLABIVersion != 4 || len(decoded.Models) != 0 {
 		t.Fatalf("historical v5 projection = %#v", decoded)
 	}
-	if _, err := decodeContract(document, false); !isSchemaFailure(err, CodeDocument, "contract", "unsupported format/canonical versions 5/1") {
+	if _, err := decodeContract(document, false); !isSchemaFailure(err, CodeDocument, "contract.formatVersion", "generated contract format 5 predates this golem (format 7): regenerate with golem generate") {
 		t.Fatalf("active contract path accepted v5: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestHistoricalContractV5IsOriginalFingerprintBoundAndActiveClosed(t *testin
 	if _, err := decodeContract(historicalContractDocument(5, relabelled, historicalContractDigest(relabelled)), true); err == nil || !strings.Contains(err.Error(), "optimisticConcurrency") {
 		t.Fatalf("historical v5 accepted relabelled current-only field: %v", err)
 	}
-	if _, err := decodeContract(historicalContractDocument(7, []byte(`{"formatVersion":7,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`), golem.SchemaDigest{}), true); err == nil {
+	if _, err := decodeContract(historicalContractDocument(8, []byte(`{"formatVersion":8,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`), golem.SchemaDigest{}), true); err == nil {
 		t.Fatal("historical contract path accepted a future version")
 	}
 }
