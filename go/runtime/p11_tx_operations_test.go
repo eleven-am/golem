@@ -341,3 +341,120 @@ func TestRunAndMutateRefuseTheOtherOperationKindAcrossProviders(t *testing.T) {
 		}
 	})
 }
+
+func (fixture *p10OperationFixture) systemEscapeRecords() int {
+	count := 0
+	for _, record := range fixture.observer.snapshot("") {
+		if record.kind == observe.KindTransaction && record.operation == observe.OperationSystemEscape {
+			count++
+		}
+	}
+	return count
+}
+
+func TestTxOperationSystemEscapeEndsWithTheOperationAcrossProviders(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		ctx := context.Background()
+		var escape *p10operations.SystemTx[p10operations.Principal]
+		var during error
+		p10operations.SetTxProbe(func(ctx context.Context, _ string, scoped *p11Tx) error {
+			escape = p10operations.SystemEscape(scoped)
+			_, during = escape.Teams.Create(ctx, p10TeamInput(p10OperationID(t, 1800)))
+			return nil
+		})
+		fixture.observer.reset()
+		var afterRun error
+		err := fixture.caller(t, "alpha").Transaction(ctx, func(tx *p11Tx) error {
+			if _, runErr := p10operations.Run(ctx, tx, p10operations.RecordInvite, fixture.inviteArgs(p10OperationID(t, 1803), "escape@example.test")); runErr != nil {
+				return runErr
+			}
+			_, afterRun = escape.Teams.Create(ctx, p10TeamInput(p10OperationID(t, 1801)))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if during != nil {
+			t.Fatalf("system escape inside Run = %v", during)
+		}
+		if count := fixture.systemEscapeRecords(); count != 1 {
+			t.Fatalf("system escape observations = %d, want 1", count)
+		}
+		assertP11OperationEnded(t, "retained system escape inside the outer callback", afterRun)
+		_, afterCommit := escape.Teams.Create(context.Background(), p10TeamInput(p10OperationID(t, 1802)))
+		assertP11OperationEnded(t, "retained system escape after commit", afterCommit)
+		for id, want := range map[int]bool{1800: true, 1801: false, 1802: false} {
+			if _, exists := fixture.teamOwner(t, p10OperationID(t, id)); exists != want {
+				t.Fatalf("team %d exists=%t want %t", id, exists, want)
+			}
+		}
+	})
+}
+
+func TestTxOperationSystemEscapeFromAnEndedOperationIsRefusedUnobservedAcrossProviders(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		ctx := context.Background()
+		var retained *p11Tx
+		p10operations.SetTxProbe(func(_ context.Context, _ string, scoped *p11Tx) error {
+			retained = scoped
+			return nil
+		})
+		var inside error
+		var insideEscapes int
+		err := fixture.caller(t, "alpha").Transaction(ctx, func(tx *p11Tx) error {
+			if _, runErr := p10operations.Run(ctx, tx, p10operations.RecordInvite, fixture.inviteArgs(p10OperationID(t, 1812), "ended@example.test")); runErr != nil {
+				return runErr
+			}
+			fixture.observer.reset()
+			_, inside = p10operations.SystemEscape(retained).Teams.Create(ctx, p10TeamInput(p10OperationID(t, 1810)))
+			insideEscapes = fixture.systemEscapeRecords()
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertP11OperationEnded(t, "system escape from an ended operation inside the outer callback", inside)
+		if insideEscapes != 0 {
+			t.Fatalf("system escape from an ended operation was observed %d times", insideEscapes)
+		}
+		fixture.observer.reset()
+		_, afterCommit := p10operations.SystemEscape(retained).Teams.Create(context.Background(), p10TeamInput(p10OperationID(t, 1811)))
+		assertP11OperationEnded(t, "system escape from an ended operation after commit", afterCommit)
+		if count := fixture.systemEscapeRecords(); count != 0 {
+			t.Fatalf("system escape after commit was observed %d times", count)
+		}
+		for _, id := range []int{1810, 1811} {
+			if _, exists := fixture.teamOwner(t, p10OperationID(t, id)); exists {
+				t.Fatalf("a system escape from an ended operation wrote team %d", id)
+			}
+		}
+	})
+}
+
+func TestCallerTransactionSystemEscapeIgnoresEndedOperationsAcrossProviders(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		ctx := context.Background()
+		fixture.observer.reset()
+		var before, after error
+		err := fixture.caller(t, "alpha").Transaction(ctx, func(tx *p11Tx) error {
+			escape := p10operations.SystemEscape(tx)
+			_, before = escape.Teams.Create(ctx, p10TeamInput(p10OperationID(t, 1820)))
+			if _, runErr := p10operations.Run(ctx, tx, p10operations.RecordInvite, fixture.inviteArgs(p10OperationID(t, 1822), "plain@example.test")); runErr != nil {
+				return runErr
+			}
+			_, after = escape.Teams.Create(ctx, p10TeamInput(p10OperationID(t, 1821)))
+			return nil
+		})
+		if err != nil || before != nil || after != nil {
+			t.Fatalf("plain caller system escape = %v, before Run %v, after Run %v", err, before, after)
+		}
+		if count := fixture.systemEscapeRecords(); count != 1 {
+			t.Fatalf("system escape observations = %d, want 1", count)
+		}
+		for _, id := range []int{1820, 1821} {
+			if _, exists := fixture.teamOwner(t, p10OperationID(t, id)); !exists {
+				t.Fatalf("team %d was not committed", id)
+			}
+		}
+	})
+}
