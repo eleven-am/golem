@@ -2,12 +2,14 @@ package plan
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	readbind "github.com/eleven-am/golem/go/internal/read/bind"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -612,4 +614,269 @@ func publicPolicy(t *testing.T, model golem.ModelID, allow bool) policyir.Policy
 	// retain the original error if that invariant ever changes.
 	t.Fatal(err)
 	return policyir.Policy{}
+}
+
+type planItem struct{}
+type planKeyedPost struct{}
+
+type planFieldSummary struct {
+	field       policyir.FieldID
+	public      bool
+	conditional bool
+}
+
+func summarizeFields(planned Plan) []planFieldSummary {
+	fields := planned.Fields()
+	result := make([]planFieldSummary, len(fields))
+	for index, field := range fields {
+		result[index] = planFieldSummary{field: field.FieldID(), public: field.Public(), conditional: field.Conditional()}
+	}
+	return result
+}
+
+func publicFieldIDs(planned Plan) []policyir.FieldID {
+	result := make([]policyir.FieldID, 0, len(planned.Fields()))
+	for _, field := range planned.Fields() {
+		if field.Public() {
+			result = append(result, field.FieldID())
+		}
+	}
+	return result
+}
+
+func planRead[M any](t *testing.T, registry *schema.Registry, descriptor golem.ModelDescriptor[M], system bool, policies PolicySet, limits Limits, options ...golem.ReadOption[M]) (Plan, error) {
+	t.Helper()
+	frozen, err := golem.FreezeFindMany(descriptor, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := readbind.Request(frozen, registry, policyir.PortableProviders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if system {
+		return System(request, registry, limits)
+	}
+	return Caller(request, registry, policies, limits)
+}
+
+func scalarRequest(t *testing.T, model golem.ModelID, unordered bool, fields ...golem.FieldID) readir.Request {
+	t.Helper()
+	selections := make([]readir.Selection, len(fields))
+	for index, field := range fields {
+		selection, err := readir.NewScalarSelection(policyir.FieldID(field))
+		if err != nil {
+			t.Fatal(err)
+		}
+		selections[index] = selection
+	}
+	request, err := readir.NewRequest(readir.RequestInput{Operation: readir.FindMany, Model: policyir.ModelID(model), Projection: readir.ProjectionSelect, Selection: selections, Unordered: unordered})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func TestSelectedFieldLimitUnchangedByHiddenIdentity(t *testing.T) {
+	fixture := schematest.NewMutationExactValues(t)
+	policies := policyMap{policyir.ModelID(fixture.Post): allowPolicy(t, fixture.Post)}
+	limits := DefaultLimits()
+	limits.MaxSelected = 2
+	build := func(system bool, request readir.Request) (Plan, error) {
+		if system {
+			return System(request, fixture.Registry, limits)
+		}
+		return Caller(request, fixture.Registry, policies, limits)
+	}
+	assertSelectedFieldLimit := func(t *testing.T, err error) {
+		t.Helper()
+		var failure *Error
+		if !errors.As(err, &failure) || failure.Code != CodeLimit || failure.Limit != golem.LimitSelectedFields || failure.Maximum != 2 || failure.Model != policyir.ModelID(fixture.Post) || failure.Detail != "selected field limit exceeded" {
+			t.Fatalf("limit error=%#v err=%v", failure, err)
+		}
+	}
+	for _, mode := range []struct {
+		name   string
+		system bool
+	}{{"system", true}, {"caller", false}} {
+		mode := mode
+		t.Run(mode.name, func(t *testing.T) {
+			exact, err := build(mode.system, scalarRequest(t, fixture.Post, true, fixture.AuthorID, fixture.PostTitle))
+			if err != nil {
+				t.Fatalf("MaxSelected non-key selections: %v", err)
+			}
+			if got := publicFieldIDs(exact); !reflect.DeepEqual(got, []policyir.FieldID{policyir.FieldID(fixture.AuthorID), policyir.FieldID(fixture.PostTitle)}) {
+				t.Fatalf("public fields=%x", got)
+			}
+			if _, err := build(mode.system, scalarRequest(t, fixture.Post, true, fixture.PostID, fixture.AuthorID)); err != nil {
+				t.Fatalf("MaxSelected selections including the key: %v", err)
+			}
+			_, err = build(mode.system, scalarRequest(t, fixture.Post, true, fixture.AuthorID, fixture.PostTitle, fixture.PostBigInt))
+			assertSelectedFieldLimit(t, err)
+
+			ordered, err := build(mode.system, scalarRequest(t, fixture.Post, false, fixture.PostTitle))
+			if err != nil {
+				t.Fatalf("one selection plus the primary-key tie-breaker: %v", err)
+			}
+			if got := publicFieldIDs(ordered); !reflect.DeepEqual(got, []policyir.FieldID{policyir.FieldID(fixture.PostTitle)}) {
+				t.Fatalf("ordered public fields=%x", got)
+			}
+			_, err = build(mode.system, scalarRequest(t, fixture.Post, false, fixture.AuthorID, fixture.PostTitle, fixture.PostBigInt))
+			assertSelectedFieldLimit(t, err)
+		})
+	}
+}
+
+func TestConditionallyMaskedKeyStaysConditionalInPlan(t *testing.T) {
+	fixture := schematest.New(t)
+	descriptor := golem.GeneratedModelDescriptor[planPost](fixture.Post, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+	postID := golem.GeneratedEqualField[planPost, golem.UUID](fixture.PostID)
+	postTitle := golem.GeneratedTextField[planPost, string](fixture.PostTitle)
+	rules := golem.NewRules[planPost]()
+	rules.CanRead(golem.All[planPost]())
+	rules.CannotReadFields(golem.All[planPost](), postID)
+	rules.CanReadFields(postTitle.EndsWith("-open"), postID)
+	policies := policyMap{policyir.ModelID(fixture.Post): bindPlanPolicy(t, fixture, fixture.Post, rules)}
+
+	unordered, err := Caller(scalarRequest(t, fixture.Post, true, fixture.PostID), fixture.Registry, policies, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []planFieldSummary{
+		{field: policyir.FieldID(fixture.PostID), public: true, conditional: true},
+		{field: policyir.FieldID(fixture.PostTitle), public: false, conditional: false},
+	}
+	if got := summarizeFields(unordered); !reflect.DeepEqual(got, want) {
+		t.Fatalf("masked key fields=%+v want %+v", got, want)
+	}
+	key := unordered.Fields()[0]
+	if mask, present := key.Mask(); !present || key.DischargedByConstraint() || mask.ModelID() != policyir.ModelID(fixture.Post) {
+		t.Fatalf("key mask present=%t discharged=%t", present, key.DischargedByConstraint())
+	}
+
+	_, err = planRead(t, fixture.Registry, descriptor, false, policies, DefaultLimits(), golem.Select[planPost](postTitle))
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodeField || failure.Field != policyir.FieldID(fixture.PostID) {
+		t.Fatalf("ordered read of a conditionally masked key without a discharging filter: %v", err)
+	}
+
+	discharged, err := planRead(t, fixture.Registry, descriptor, false, policies, DefaultLimits(),
+		golem.Where(postTitle.EndsWith("-open")), golem.Select[planPost](postID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := discharged.Fields()[0]; got.FieldID() != policyir.FieldID(fixture.PostID) || !got.Public() || !got.Conditional() || !got.DischargedByConstraint() {
+		t.Fatalf("discharged key field=%+v", got)
+	}
+}
+
+func TestCompositeAndTypedKeyIdentityKeepsComponentOrderInPlan(t *testing.T) {
+	assertKeyOrder := func(t *testing.T, registry *schema.Registry, model golem.ModelID, planned Plan, selected []golem.FieldID, wantKey []golem.FieldID) {
+		t.Helper()
+		fact, ok := registry.Model(model)
+		if !ok || !reflect.DeepEqual(fact.PrimaryKey(), wantKey) {
+			t.Fatalf("registry key order=%x want %x", fact.PrimaryKey(), wantKey)
+		}
+		wantPublic := make([]policyir.FieldID, len(selected))
+		for index, field := range selected {
+			wantPublic[index] = policyir.FieldID(field)
+		}
+		if got := publicFieldIDs(planned); !reflect.DeepEqual(got, wantPublic) {
+			t.Fatalf("public fields=%x want %x", got, wantPublic)
+		}
+		inKey := make(map[policyir.FieldID]bool, len(wantKey))
+		for _, field := range wantKey {
+			inKey[policyir.FieldID(field)] = true
+		}
+		var present []policyir.FieldID
+		for _, field := range planned.Fields() {
+			if inKey[field.FieldID()] {
+				present = append(present, field.FieldID())
+			}
+		}
+		var want []policyir.FieldID
+		for _, field := range wantKey {
+			for _, candidate := range present {
+				if candidate == policyir.FieldID(field) {
+					want = append(want, candidate)
+				}
+			}
+		}
+		if !reflect.DeepEqual(present, want) {
+			t.Fatalf("key components in plan order=%x want key order %x", present, want)
+		}
+	}
+
+	t.Run("composite-key-in-reverse-of-field-id-order", func(t *testing.T) {
+		fixture := schematest.NewCompositeRelationReversedItemKey(t, "public")
+		if !(string(fixture.ItemRegion[:]) < string(fixture.ItemID[:])) {
+			t.Fatal("fixture precondition: Region sorts before ID")
+		}
+		descriptor := golem.GeneratedModelDescriptor[planItem](fixture.Item, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+		ownerRegion := golem.GeneratedEqualField[planItem, golem.UUID](fixture.OwnerRegion)
+		planned, err := planRead(t, fixture.Registry, descriptor, true, nil, DefaultLimits(), golem.Select[planItem](ownerRegion))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertKeyOrder(t, fixture.Registry, fixture.Item, planned, []golem.FieldID{fixture.OwnerRegion}, []golem.FieldID{fixture.ItemID, fixture.ItemRegion})
+	})
+	t.Run("bytes-key", func(t *testing.T) {
+		fixture := schematest.NewBytesKeyed(t)
+		descriptor := golem.GeneratedModelDescriptor[planKeyedPost](fixture.Post, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+		authorName := golem.GeneratedTextField[planKeyedPost, string](fixture.PostAuthorName)
+		planned, err := planRead(t, fixture.Registry, descriptor, true, nil, DefaultLimits(), golem.Select[planKeyedPost](authorName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertKeyOrder(t, fixture.Registry, fixture.Post, planned, []golem.FieldID{fixture.PostAuthorName}, []golem.FieldID{fixture.PostID, fixture.PostTitle})
+	})
+	t.Run("datetime-key", func(t *testing.T) {
+		fixture := schematest.NewDateTimeKeyed(t)
+		descriptor := golem.GeneratedModelDescriptor[planKeyedPost](fixture.Post, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+		title := golem.GeneratedTextField[planKeyedPost, string](fixture.PostTitle)
+		planned, err := planRead(t, fixture.Registry, descriptor, true, nil, DefaultLimits(), golem.Select[planKeyedPost](title))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertKeyOrder(t, fixture.Registry, fixture.Post, planned, []golem.FieldID{fixture.PostTitle}, []golem.FieldID{fixture.PostID, fixture.PostAt})
+	})
+}
+
+func TestSystemAndCallerPlansCarryTheSameFields(t *testing.T) {
+	fixture := schematest.New(t)
+	descriptor := golem.GeneratedModelDescriptor[planPost](fixture.Post, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+	postTitle := golem.GeneratedTextField[planPost, string](fixture.PostTitle)
+	author := golem.GeneratedToOne[planPost, planUser](fixture.PostAuthor, fixture.Authorship, fixture.User)
+	userName := golem.GeneratedTextField[planUser, string](fixture.UserName)
+	policies := policyMap{policyir.ModelID(fixture.User): allowPolicy(t, fixture.User), policyir.ModelID(fixture.Post): allowPolicy(t, fixture.Post)}
+	for _, selection := range []struct {
+		name    string
+		options []golem.ReadOption[planPost]
+	}{
+		{"root-scalar", []golem.ReadOption[planPost]{golem.Select[planPost](postTitle)}},
+		{"relation", []golem.ReadOption[planPost]{golem.Select[planPost](postTitle, author.Select(userName))}},
+	} {
+		selection := selection
+		t.Run(selection.name, func(t *testing.T) {
+			system, err := planRead(t, fixture.Registry, descriptor, true, nil, DefaultLimits(), selection.options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caller, err := planRead(t, fixture.Registry, descriptor, false, policies, DefaultLimits(), selection.options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := summarizeFields(caller), summarizeFields(system); !reflect.DeepEqual(got, want) {
+				t.Fatalf("caller fields=%+v system fields=%+v", got, want)
+			}
+			if len(caller.Relations()) != len(system.Relations()) {
+				t.Fatalf("caller relations=%d system relations=%d", len(caller.Relations()), len(system.Relations()))
+			}
+			for index := range system.Relations() {
+				if got, want := summarizeFields(caller.Relations()[index].Child()), summarizeFields(system.Relations()[index].Child()); !reflect.DeepEqual(got, want) {
+					t.Fatalf("caller relation fields=%+v system relation fields=%+v", got, want)
+				}
+			}
+		})
+	}
 }

@@ -24,20 +24,28 @@ type CompositeRelationFixture struct {
 }
 
 func NewCompositeRelation(t testing.TB) CompositeRelationFixture {
-	return newCompositeRelation(t, "public")
+	return newCompositeRelation(t, "public", false)
+}
+
+func NewCompositeRelationReversedItemKey(t testing.TB, postgresNamespace physical.PhysicalName) CompositeRelationFixture {
+	return newCompositeRelation(t, postgresNamespace, true)
 }
 
 func NewCompositeRelationPostgreSQLNamespace(t testing.TB, namespace physical.PhysicalName) CompositeRelationFixture {
-	return newCompositeRelation(t, namespace)
+	return newCompositeRelation(t, namespace, false)
 }
 
-func newCompositeRelation(t testing.TB, postgresNamespace physical.PhysicalName) CompositeRelationFixture {
+func newCompositeRelation(t testing.TB, postgresNamespace physical.PhysicalName, reversedItemKey bool) CompositeRelationFixture {
 	t.Helper()
 	tenant, item := compilerir.ModelID(id(161)), compilerir.ModelID(id(162))
 	tenantRegion, tenantID, tenantItems := compilerir.FieldID(id(171)), compilerir.FieldID(id(172)), compilerir.FieldID(id(173))
 	itemRegion, itemID, ownerRegion, ownerID, itemOwner := compilerir.FieldID(id(181)), compilerir.FieldID(id(182)), compilerir.FieldID(id(183)), compilerir.FieldID(id(184)), compilerir.FieldID(id(185))
 	ownership := compilerir.RelationID(id(191))
 	tenantKey, itemKey := compilerir.KeyID(id(201)), compilerir.KeyID(id(202))
+	itemKeyFields := []compilerir.FieldID{itemRegion, itemID}
+	if reversedItemKey {
+		itemKeyFields = []compilerir.FieldID{itemID, itemRegion}
+	}
 	model := compilerir.ModelIR{FormatVersion: compilerir.ModelFormatVersion, Providers: []compilerir.Provider{compilerir.SQLite, compilerir.PostgreSQL}, Models: []compilerir.ModelDeclIR{
 		{ID: tenant, LogicalName: "Tenant", Table: compilerir.TableBindingIR{PhysicalName: "tenants"}, Fields: []compilerir.FieldIR{
 			scalar(tenantRegion, "Region", "region", compilerir.TypeUUID, false), scalar(tenantID, "ID", "id", compilerir.TypeUUID, false),
@@ -47,7 +55,7 @@ func newCompositeRelation(t testing.TB, postgresNamespace physical.PhysicalName)
 			scalar(itemRegion, "Region", "region", compilerir.TypeUUID, false), scalar(itemID, "ID", "id", compilerir.TypeUUID, false),
 			scalar(ownerRegion, "OwnerRegion", "owner_region", compilerir.TypeUUID, false), scalar(ownerID, "OwnerID", "owner_id", compilerir.TypeUUID, false),
 			relation(itemOwner, "Owner", ownership, compilerir.RelationSource, compilerir.RelationBelongsTo),
-		}, PrimaryKey: &compilerir.KeyIR{ID: itemKey, Kind: compilerir.KeyPrimary, PhysicalName: "pk_items", Fields: []compilerir.FieldID{itemRegion, itemID}}},
+		}, PrimaryKey: &compilerir.KeyIR{ID: itemKey, Kind: compilerir.KeyPrimary, PhysicalName: "pk_items", Fields: itemKeyFields}},
 	}, Relations: []compilerir.RelationIR{{
 		ID: ownership, SourceModel: item, TargetModel: tenant, SourceField: itemOwner, InverseField: &tenantItems, Cardinality: compilerir.RelationMany,
 		LocalFields: []compilerir.FieldID{ownerRegion, ownerID}, RemoteFields: []compilerir.FieldID{tenantRegion, tenantID},
@@ -72,8 +80,8 @@ func newCompositeRelation(t testing.TB, postgresNamespace physical.PhysicalName)
 		fingerprint, err := compilerir.ContractFingerprint(contract)
 		return payload, fingerprint, err
 	})
-	sqliteSchema := compositeRelationPhysical(compilerir.SQLite, tenant, item, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID, tenantKey, itemKey)
-	postgresSchema := compositeRelationPhysical(compilerir.PostgreSQL, tenant, item, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID, tenantKey, itemKey)
+	sqliteSchema := compositeRelationPhysical(compilerir.SQLite, tenant, item, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID, tenantKey, itemKey, itemKeyFields)
+	postgresSchema := compositeRelationPhysical(compilerir.PostgreSQL, tenant, item, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID, tenantKey, itemKey, itemKeyFields)
 	postgresSchema.Namespace.Name = postgresNamespace
 	bundle := golem.GeneratedSchemaBundle(golem.SchemaDigest{3}, "schematest", "p4-composite-relation", modelDocument, contractDocument,
 		providerDocument(t, golem.SQLite, sqliteSchema), providerDocument(t, golem.PostgreSQL, postgresSchema))
@@ -91,7 +99,7 @@ func newCompositeRelation(t testing.TB, postgresNamespace physical.PhysicalName)
 	}
 }
 
-func compositeRelationPhysical(provider compilerir.Provider, tenant, item compilerir.ModelID, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID compilerir.FieldID, tenantKey, itemKey compilerir.KeyID) physical.PhysicalSchema {
+func compositeRelationPhysical(provider compilerir.Provider, tenant, item compilerir.ModelID, tenantRegion, tenantID, itemRegion, itemID, ownerRegion, ownerID compilerir.FieldID, tenantKey, itemKey compilerir.KeyID, itemKeyFields []compilerir.FieldID) physical.PhysicalSchema {
 	manifest, namespace, uuid := postgresprovider.New().Manifest(), physical.PhysicalName("public"), physical.StoragePostgreSQLUUID
 	if provider == compilerir.SQLite {
 		manifest, namespace, uuid = sqliteprovider.New().Manifest(), "main", physical.StorageSQLiteText
@@ -101,6 +109,6 @@ func compositeRelationPhysical(provider compilerir.Provider, tenant, item compil
 	}
 	return physical.PhysicalSchema{Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion, Provider: manifest, Namespace: physical.Namespace{Name: namespace}, Tables: []physical.PhysicalTable{
 		{ID: tenant, Name: "tenants", Columns: []physical.PhysicalColumn{column(tenantRegion, "region", 0), column(tenantID, "id", 1)}, PrimaryKey: &physical.PhysicalKey{ID: tenantKey, Name: "pk_tenants", Columns: []compilerir.FieldID{tenantRegion, tenantID}}},
-		{ID: item, Name: "items", Columns: []physical.PhysicalColumn{column(itemRegion, "region", 0), column(itemID, "id", 1), column(ownerRegion, "owner_region", 2), column(ownerID, "owner_id", 3)}, PrimaryKey: &physical.PhysicalKey{ID: itemKey, Name: "pk_items", Columns: []compilerir.FieldID{itemRegion, itemID}}},
+		{ID: item, Name: "items", Columns: []physical.PhysicalColumn{column(itemRegion, "region", 0), column(itemID, "id", 1), column(ownerRegion, "owner_region", 2), column(ownerID, "owner_id", 3)}, PrimaryKey: &physical.PhysicalKey{ID: itemKey, Name: "pk_items", Columns: itemKeyFields}},
 	}}
 }
