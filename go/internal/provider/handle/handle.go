@@ -313,7 +313,7 @@ func OpenSQLiteWithDurability(ctx context.Context, dataSourceName string, durabi
 	if ctx == nil || strings.TrimSpace(dataSourceName) == "" {
 		return nil, failure(CodeConfig, "sqlite provider configuration is invalid")
 	}
-	if durability != internalsqlite.DurabilityWAL && durability != internalsqlite.DurabilityNetworkFilesystem {
+	if durability != internalsqlite.DurabilityWAL && durability != internalsqlite.DurabilityNetworkFilesystem && durability != internalsqlite.DurabilityNetworkFilesystemWAL {
 		return nil, failure(CodeConfig, "sqlite provider configuration is invalid")
 	}
 	database, report, err := internalsqlite.New().OpenWithDurability(ctx, dataSourceName, durability)
@@ -342,7 +342,7 @@ func OpenSQLiteWithDurability(ctx context.Context, dataSourceName string, durabi
 }
 
 func poolWidthForSQLiteDurability(durability internalsqlite.DurabilityProfile) int {
-	if durability == internalsqlite.DurabilityNetworkFilesystem {
+	if durability == internalsqlite.DurabilityNetworkFilesystem || durability == internalsqlite.DurabilityNetworkFilesystemWAL {
 		return internalsqlite.NetworkFilesystemPoolWidth
 	}
 	return internalsqlite.VerifiedPoolWidth

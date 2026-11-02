@@ -28,7 +28,7 @@ func (provider *Provider) CheckpointForBackupWithDurability(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	standard, err := driver.Open(configured, initializeProviderConnection)
+	standard, err := driver.Open(configured, connectionInitializerForProfile(durability))
 	if err != nil {
 		return fmt.Errorf("sqlite checkpoint: %w", err)
 	}

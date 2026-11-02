@@ -36,6 +36,14 @@ func OpenNetworkFilesystem(ctx context.Context, config Config) (*provider.Databa
 	return (*provider.Database)(database), nil
 }
 
+func OpenNetworkFilesystemWAL(ctx context.Context, config Config) (*provider.Database, error) {
+	database, err := providerhandle.OpenSQLiteWithDurability(ctx, config.DataSourceName, internalsqlite.DurabilityNetworkFilesystemWAL)
+	if err != nil {
+		return nil, err
+	}
+	return (*provider.Database)(database), nil
+}
+
 // CheckpointForBackup prepares a verified SQLite database for an offline copy.
 // It checkpoints WAL databases and verifies rollback-journal databases. The
 // supplied handle must already be closed, and all other application readers
