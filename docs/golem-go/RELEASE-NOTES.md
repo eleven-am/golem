@@ -29,6 +29,19 @@ refused, and `locking_mode` is now a provider-owned pragma that no profile
 accepts from the data source name. `CheckpointForBackup` truncates and verifies
 the WAL for this profile. See [SQLite durability profiles](./SQLITE_DURABILITY.md).
 
+**`sqlite.OpenNetworkFilesystem` converts a WAL database back to rollback
+journaling on open.** Previously a database whose header still declared WAL,
+for example one left behind by `sqlite.Open` or `sqlite.OpenNetworkFilesystemWAL`
+with an empty `-shm` and a `-wal` file, could not be opened on a network
+filesystem because the journal-mode transition failed. The rollback profile now
+reads the database header and, when it declares WAL, converts the file on a
+dedicated exclusive-locking connection: a truncating checkpoint, then
+`journal_mode=DELETE`, then an integrity check that must report `ok`. Rows held
+only in the `-wal` file are preserved. The conversion refuses to run beside a
+non-empty `-shm` file and fails closed when another process holds the database;
+it never deletes or truncates sidecar files itself. Databases already in
+rollback-journal mode and the WAL profiles are unaffected.
+
 ## go/v0.7.1
 
 **SQLite databases on network filesystems can opt into a compatible profile.**
