@@ -17,17 +17,17 @@ import (
 func TestDependencyLicenseAuthorityIsCanonicalDigestBoundAndDetached(t *testing.T) {
 	root := dependencyLicenseModuleRoot(t)
 	encoded := dependencyLicenseRead(t, root, DependencyLicenseAuthorityPath)
-	if got := DependencyLicenseAuthorityDigest(encoded); got != "79194428844d892bfbb0535a946b88b61fbfaf51c88226d20e502a31a56e9e91" {
+	if got := DependencyLicenseAuthorityDigest(encoded); got != "32b0e6dd0e77d14f459998efbbcffb890d856e32203b7a16adc74521b3975b6e" {
 		t.Fatalf("dependency license authority digest=%s", got)
 	}
-	if DependencyLicenseAuthoritySHA256 != "79194428844d892bfbb0535a946b88b61fbfaf51c88226d20e502a31a56e9e91" {
+	if DependencyLicenseAuthoritySHA256 != "32b0e6dd0e77d14f459998efbbcffb890d856e32203b7a16adc74521b3975b6e" {
 		t.Fatalf("dependency license source digest=%s", DependencyLicenseAuthoritySHA256)
 	}
 	value, err := ParseDependencyLicenseAuthority(encoded, DependencyLicenseAuthoritySHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "6e9159eea6b9127f742688cda56c4b606dd1798ba60f97fefadb250c6015e7be" {
+	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "7f45c7297e6a37a3b1048b20320ae37fbaded22d6b8ee56c49d45836efd78f3d" {
 		t.Fatalf("project/notices authority=%+v %+v", value.Project, value.Notices)
 	}
 	want := []DependencyLicense{
@@ -35,8 +35,8 @@ func TestDependencyLicenseAuthorityIsCanonicalDigestBoundAndDetached(t *testing.
 		{Module: "github.com/nats-io/nats.go", Version: "v1.52.0", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
 		{Module: "github.com/nats-io/nkeys", Version: "v0.4.15", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
 		{Module: "github.com/nats-io/nuid", Version: "v1.0.1", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
-		{Module: "golang.org/x/crypto", Version: "v0.49.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
-		{Module: "golang.org/x/sys", Version: "v0.47.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
+		{Module: "golang.org/x/crypto", Version: "v0.58.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
+		{Module: "golang.org/x/sys", Version: "v0.49.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
 	}
 	if len(value.Dependencies) != len(want) {
 		t.Fatalf("dependency inventory=%+v", value.Dependencies)
