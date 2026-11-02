@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -25,6 +26,27 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 		return Script{}, err
 	}
 	return renderNormalizedInitial(normalized, false)
+}
+
+const legacyVectorTablePrefix = "CREATE VIRTUAL TABLE "
+
+func executableStatement(statement string) string {
+	name, rest, found := strings.Cut(strings.TrimPrefix(statement, legacyVectorTablePrefix), " USING vec0(")
+	if !found || !strings.HasPrefix(statement, legacyVectorTablePrefix) || !strings.HasSuffix(rest, ")") {
+		return statement
+	}
+	return "CREATE TABLE " + name + " (" + quote("record_key") + " TEXT PRIMARY KEY, " + quote("embedding") + " BLOB)"
+}
+
+func refuseLiveLegacyVectorTables(ctx context.Context, database catalogQuerier) error {
+	var tables []string
+	if err := database.SelectContext(ctx, &tables, `SELECT name FROM sqlite_schema WHERE type='table' AND sql LIKE '%USING vec0(%' ORDER BY name`); err != nil {
+		return fmt.Errorf("sqlite legacy vector table check: %w", err)
+	}
+	if len(tables) != 0 {
+		return sqlitevec.LegacyVectorTable(tables[0])
+	}
+	return nil
 }
 
 func requireExactSemanticVectors(schemas ...physical.PhysicalSchema) error {

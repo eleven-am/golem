@@ -2,13 +2,17 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
@@ -59,7 +63,7 @@ func openBlankFixture(t *testing.T, provider *Provider, name string) *sqlx.DB {
 
 func requireLegacyStateRefusal(t *testing.T, err error) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "SQLITE_VEC_LEGACY_STATE") || !strings.Contains(err.Error(), "go/v0.7.2") {
+	if err == nil || !strings.Contains(err.Error(), "SQLITE_VEC_LEGACY_STATE") || !strings.Contains(err.Error(), "go/v0.7.1") {
 		t.Fatalf("legacy semantic state error = %v", err)
 	}
 }
@@ -109,4 +113,108 @@ func TestSQLiteVerifyRefusesALegacyVec0VectorTable(t *testing.T) {
 		}
 	}
 	requireLegacyStateRefusal(t, provider.Verify(ctx, database, after))
+}
+
+func chainMigrationFixtures(t *testing.T, heads ...physical.PhysicalSchema) (migration.Manifest, map[string][]byte) {
+	t.Helper()
+	var manifest migration.Manifest
+	files := map[string][]byte{}
+	for index := 1; index < len(heads); index++ {
+		var parent *migration.ManifestEntry
+		if index > 1 {
+			parent = &manifest.Entries[len(manifest.Entries)-1]
+		}
+		next, nextFiles := migrationFixtureManifest(t, heads[index-1], heads[index], fmt.Sprintf("%03d_history.sql", index), parent)
+		if index == 1 {
+			manifest = next
+		} else {
+			manifest.Entries = append(manifest.Entries, next.Entries[0])
+		}
+		for path, content := range nextFiles {
+			files[path] = content
+		}
+	}
+	return manifest, files
+}
+
+func TestSQLiteBootstrapsAFreshDatabaseThroughLegacySemanticStateHistory(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	_, stateOne := legacyStateFixture(t, semanticstorage.StateVersionIdentity)
+	_, stateTwo := legacyStateFixture(t, semanticstorage.StateVersionStrikes)
+	_, stateThree := legacyStateFixture(t, semanticstorage.StateVersionExactVectors)
+	manifest, files := chainMigrationFixtures(t, canonicalEmptyMigrationSchema(t, stateOne), stateOne, stateTwo, stateThree)
+	if len(manifest.Entries) != 3 {
+		t.Fatalf("history has %d entries", len(manifest.Entries))
+	}
+	reviewed := string(files["001_history.sql"])
+	if !strings.Contains(reviewed, "USING vec0(") {
+		t.Fatalf("reviewed bootstrap SQL no longer records the legacy vec0 table:\n%s", reviewed)
+	}
+	database := openBlankFixture(t, provider, "legacy-history.db")
+	vectors := "_golem_semantic_70000000000000000000000000000001_vec"
+	for step := range manifest.Entries {
+		if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+			t.Fatalf("history entry %d: %v", step+1, err)
+		}
+		var ddl string
+		if err := database.GetContext(ctx, &ddl, `SELECT sql FROM sqlite_schema WHERE type='table' AND name=?`, vectors); err != nil {
+			t.Fatalf("history entry %d vector table: %v", step+1, err)
+		}
+		if step < 2 && ddl != `CREATE TABLE "`+vectors+`" ("record_key" TEXT PRIMARY KEY, "embedding" BLOB)` {
+			t.Fatalf("history entry %d vector table is not the legacy placeholder: %s", step+1, ddl)
+		}
+		if step == 2 && ddl != renderExactVectorTable(physical.PhysicalName(vectors), 3) {
+			t.Fatalf("final vector table is not exact: %s", ddl)
+		}
+	}
+	ledger, err := provider.ReadLedger(ctx, database)
+	if err != nil || migration.VerifyLedger(manifest, ledger) != nil {
+		t.Fatalf("ledger=%d error=%v", len(ledger), err)
+	}
+	if err := provider.Verify(ctx, database, stateThree); err != nil {
+		t.Fatal(err)
+	}
+	var legacyObjects int
+	if err := database.GetContext(ctx, &legacyObjects, `SELECT COUNT(*) FROM sqlite_schema WHERE sql LIKE '%vec0%' OR name LIKE '%\_exact\_upgrade' ESCAPE '\'`); err != nil || legacyObjects != 0 {
+		t.Fatalf("legacy vector objects=%d error=%v", legacyObjects, err)
+	}
+	for key, values := range map[string][]float32{"near": {1, 0.1, 0}, "far": {0, 1, 0}, "exact": {2, 0, 0}} {
+		encoded, err := sqlitevec.Serialize(values, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.ExecContext(ctx, `INSERT INTO "`+vectors+`" (record_key,embedding) VALUES (?,?)`, key, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
+	var ranked []string
+	if err := database.SelectContext(ctx, &ranked, `SELECT record_key FROM "`+vectors+`" ORDER BY vec1_cos_distance(embedding,?),record_key`, query); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ranked, []string{"exact", "near", "far"}) {
+		t.Fatalf("ranked=%v", ranked)
+	}
+	if err := provider.Verify(ctx, database, stateThree); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteMigrationRefusesADatabaseHoldingALiveVec0Table(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	_, stateThree := legacyStateFixture(t, semanticstorage.StateVersionExactVectors)
+	database := openBlankFixture(t, provider, "live-vec0.db")
+	for _, statement := range []string{
+		`PRAGMA writable_schema=ON`,
+		`INSERT INTO sqlite_schema (type,name,tbl_name,rootpage,sql) VALUES ('table','legacy_vec','legacy_vec',0,'CREATE VIRTUAL TABLE "legacy_vec" USING vec0(record_key TEXT PRIMARY KEY, embedding float[3] distance_metric=cosine)')`,
+		`PRAGMA writable_schema=OFF`,
+	} {
+		if _, err := database.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	manifest, files := chainMigrationFixtures(t, canonicalEmptyMigrationSchema(t, stateThree), stateThree)
+	requireLegacyStateRefusal(t, provider.ApplyMigration(ctx, database, manifest, files))
 }

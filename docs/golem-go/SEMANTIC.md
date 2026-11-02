@@ -231,12 +231,23 @@ drives ranking from the authorized candidate query before calculating cosine
 distance. The previous `vec0` virtual-table shape forced the opposite join
 order and made a selective policy scan the entire vector table. Distance is
 SQLite's bundled `vec1` extension (`vec1_cos_distance`), computed in single
-precision, so SQLite refuses to store or query a vector whose Euclidean norm
-lies outside `[1e-9, 1e9]`: beyond that range the single-precision norm
-product underflows or overflows and the distance stops being exact. A database
-whose semantic state predates exact vectors (sqlite-vec `vec0` tables) must be
-opened and migrated with go/v0.7.2 first; this release refuses to open,
-create or migrate it. PostgreSQL
+precision. Beyond a Euclidean norm of `[1e-9, 1e9]` the single-precision norm
+product underflows or overflows and the distance stops being exact, so every
+provider refuses to store or query a vector outside that range; a record
+therefore embeds or fails identically on SQLite and PostgreSQL. Distances
+within `1e-6` below zero are single-precision rounding of an identical
+direction and rank as `0`.
+
+A database that still holds sqlite-vec `vec0` vector tables (semantic state
+below 3) must be opened and migrated with go/v0.7.1, the last release that
+ships sqlite-vec, before this release can use it; this release refuses to
+open or migrate such a database, and refuses an application whose current
+schema is still below state 3. Reviewed migration history is unaffected: a
+fresh database bootstraps through history entries that created state 1 or 2
+`vec0` tables by executing an empty `record_key`/`embedding` placeholder table
+in their place, which the reviewed upgrade to state 3 then replaces with the
+exact vector table. The reviewed SQL files keep their original `vec0` text.
+PostgreSQL
 keeps `pgvector` storage but uses an exact distance expression rather than
 HNSW, because a full approximate page does not reveal which true neighbours it
 missed.

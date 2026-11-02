@@ -40,11 +40,11 @@ func RequireExactVectors(index string, stateVersion uint16) error {
 	if stateVersion >= semanticstorage.StateVersionExactVectors {
 		return nil
 	}
-	return fmt.Errorf("SQLITE_VEC_LEGACY_STATE: semantic index %s uses semantic state version %d, whose sqlite-vec vec0 vector table this release cannot open; open and migrate the database with golem go/v0.7.2 to upgrade it to semantic state version %d first", index, stateVersion, semanticstorage.StateVersionExactVectors)
+	return fmt.Errorf("SQLITE_VEC_LEGACY_STATE: semantic index %s uses semantic state version %d, whose sqlite-vec vec0 vector table this release cannot open; open and migrate the database with golem go/v0.7.1 to upgrade it to semantic state version %d first", index, stateVersion, semanticstorage.StateVersionExactVectors)
 }
 
-func LegacyVectorTable(index string) error {
-	return fmt.Errorf("SQLITE_VEC_LEGACY_STATE: semantic index %s still stores vectors in a sqlite-vec vec0 table that this release cannot open; open and migrate the database with golem go/v0.7.2 to upgrade it to semantic state version %d first", index, semanticstorage.StateVersionExactVectors)
+func LegacyVectorTable(storage string) error {
+	return fmt.Errorf("SQLITE_VEC_LEGACY_STATE: semantic storage %s still stores vectors in a sqlite-vec vec0 table that this release cannot open; open and migrate the database with golem go/v0.7.1 to upgrade it to semantic state version %d first", storage, semanticstorage.StateVersionExactVectors)
 }
 
 func Probe(ctx context.Context, database *sql.DB) (string, error) {
@@ -61,19 +61,26 @@ func Probe(ctx context.Context, database *sql.DB) (string, error) {
 	return version, nil
 }
 
-func Serialize(values []float32, dimensions int) ([]byte, error) {
+func ValidateVector(values []float32, dimensions int) error {
 	if dimensions < 1 || len(values) != dimensions {
-		return nil, fmt.Errorf("SQLITE_VEC_VECTOR: dimensions do not match")
+		return fmt.Errorf("SEMANTIC_VECTOR_INVALID: dimensions do not match")
 	}
 	var squared float64
 	for _, value := range values {
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return nil, fmt.Errorf("SQLITE_VEC_VECTOR: elements must be finite")
+			return fmt.Errorf("SEMANTIC_VECTOR_INVALID: elements must be finite")
 		}
 		squared += float64(value) * float64(value)
 	}
 	if norm := math.Sqrt(squared); norm < MinimumNorm || norm > MaximumNorm {
-		return nil, fmt.Errorf("SQLITE_VEC_VECTOR: euclidean norm must be within [%g, %g] for exact vec1 cosine distance", MinimumNorm, MaximumNorm)
+		return fmt.Errorf("SEMANTIC_VECTOR_INVALID: euclidean norm must be within [%g, %g] for exact cosine distance", MinimumNorm, MaximumNorm)
+	}
+	return nil
+}
+
+func Serialize(values []float32, dimensions int) ([]byte, error) {
+	if err := ValidateVector(values, dimensions); err != nil {
+		return nil, err
 	}
 	encoded, err := binary.Append(make([]byte, 0, 4*len(values)), binary.LittleEndian, values)
 	if err != nil {

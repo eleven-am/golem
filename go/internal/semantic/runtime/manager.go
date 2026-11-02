@@ -2140,6 +2140,9 @@ func (manager *Manager) vectorValue(vector embedding.Vector) (any, error) {
 		return sqlitevec.Serialize(vector.Values(), vector.Dimensions())
 	}
 	values := vector.Values()
+	if err := sqlitevec.ValidateVector(values, vector.Dimensions()); err != nil {
+		return nil, err
+	}
 	parts := make([]string, len(values))
 	for index, value := range values {
 		parts[index] = strconv.FormatFloat(float64(value), 'g', -1, 32)

@@ -187,27 +187,11 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 				expectedObjectTables["index\x00"+string(name)] = stateName
 			}
 			vectorKey := "table\x00" + vectorName
-			if descriptor.StateVersion >= semanticstorage.StateVersionExactVectors {
-				if vector, exists := actual[vectorKey]; exists && strings.Contains(vector.SQL, "USING vec0(") {
-					return physical.PhysicalSchema{}, sqlitevec.LegacyVectorTable(string(extension.ID))
-				}
-				expectedObjects[vectorKey] = statements[len(statements)-1]
-				expectedObjectTables[vectorKey] = vectorName
-				continue
+			if vector, exists := actual[vectorKey]; exists && strings.Contains(vector.SQL, "USING vec0(") {
+				return physical.PhysicalSchema{}, sqlitevec.LegacyVectorTable(vectorName)
 			}
-			vector, exists := actual[vectorKey]
-			if !exists || strings.TrimSpace(vector.SQL) != statements[len(statements)-1] {
-				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: vectorName, Table: vectorName}, "sqlite introspect drift: semantic vector table %s", vectorName)
-			}
-			delete(actual, vectorKey)
-			for _, suffix := range []string{"_chunks", "_info", "_rowids", "_vector_chunks00"} {
-				key := "table\x00" + vectorName + suffix
-				if _, exists := actual[key]; !exists {
-					name := vectorName + suffix
-					return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: vectorName}, "sqlite introspect drift: semantic vector shadow table %s", name)
-				}
-				delete(actual, key)
-			}
+			expectedObjects[vectorKey] = executableStatement(statements[len(statements)-1])
+			expectedObjectTables[vectorKey] = vectorName
 		}
 	}
 	for _, unmanaged := range normalized.Unmanaged {

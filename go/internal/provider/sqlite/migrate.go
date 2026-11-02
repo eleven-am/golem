@@ -1037,7 +1037,15 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := provider.verifyReviewedSQL(manifest, files); err != nil {
 		return err
 	}
+	if len(manifest.Entries) != 0 {
+		if err := requireExactSemanticVectors(manifest.Entries[len(manifest.Entries)-1].AfterSnapshot); err != nil {
+			return fmt.Errorf("sqlite migration manifest head: %w", err)
+		}
+	}
 	if _, err := provider.probe(ctx, database); err != nil {
+		return err
+	}
+	if err := refuseLiveLegacyVectorTables(ctx, database); err != nil {
 		return err
 	}
 	connection, err := database.Connx(ctx)
@@ -1075,9 +1083,6 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	beforeReviewed, afterReviewed, err := reviewedEntrySnapshots(entry)
 	if err != nil {
 		return err
-	}
-	if err := requireExactSemanticVectors(entry.BeforeSnapshot, entry.AfterSnapshot); err != nil {
-		return fmt.Errorf("sqlite migration %s: %w", entry.ID, err)
 	}
 	plan, err := provider.planIncremental(entry)
 	if err != nil {
@@ -1154,7 +1159,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	}
 	for stepIndex, step := range plan.steps {
 		for statementIndex, statement := range step.statements {
-			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+			if _, err := transaction.ExecContext(ctx, executableStatement(statement)); err != nil {
 				return fmt.Errorf("sqlite migration step %d statement %d: %w", stepIndex, statementIndex, err)
 			}
 		}
@@ -1203,9 +1208,6 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	reviewed, err := reviewedInitial(entry)
 	if err != nil {
 		return err
-	}
-	if err := requireExactSemanticVectors(entry.AfterSnapshot); err != nil {
-		return fmt.Errorf("sqlite initial migration %s: %w", entry.ID, err)
 	}
 	script, err := provider.renderReviewedInitialSnapshot(reviewed)
 	if err != nil {
@@ -1268,7 +1270,7 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 		return fmt.Errorf("sqlite initial migration starting physical verification: %w", err)
 	}
 	for index, statement := range script.statements {
-		if _, err := transaction.ExecContext(ctx, statement); err != nil {
+		if _, err := transaction.ExecContext(ctx, executableStatement(statement)); err != nil {
 			return fmt.Errorf("sqlite initial migration statement %d: %w", index, err)
 		}
 	}

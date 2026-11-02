@@ -1883,3 +1883,21 @@ func TestSemanticSimilaritySourceVectorPreservesSafeCancellationCauses(t *testin
 		t.Fatalf("driver failure was not sealed: %v", sealed)
 	}
 }
+
+func TestVectorNormBoundIsTheSameOnEveryProvider(t *testing.T) {
+	for _, provider := range []ir.Provider{ir.SQLite, ir.PostgreSQL} {
+		manager := &Manager{provider: provider}
+		for _, test := range []struct {
+			scale float32
+			valid bool
+		}{{1, true}, {1.001e-9, true}, {0.999e9, true}, {9e-10, false}, {1.1e9, false}, {1e10, false}} {
+			vector, err := embedding.NewVector([]float32{0.6 * test.scale, 0.8 * test.scale, 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.vectorValue(vector); (err == nil) != test.valid {
+				t.Errorf("%s norm %g error=%v want valid=%v", provider, test.scale, err, test.valid)
+			}
+		}
+	}
+}
