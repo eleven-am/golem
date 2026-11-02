@@ -19,13 +19,17 @@ databases and caller overrides of provider-owned pragmas remain rejected.
 
 ## Write-ahead logging on a network filesystem
 
-`sqlite.OpenNetworkFilesystem` avoids WAL because ordinary WAL keeps its index
-in a `<database>-shm` file that every connection memory-maps and grows. On Linux
-the driver grows that file with `fallocate(2)`, which NFS 4.1 mounts reject
-with `EOPNOTSUPP`, so ordinary WAL fails there and leaves an empty `-shm`
-behind. SQLite can run WAL without that file when the connection uses
-exclusive locking: the WAL index then lives in the process's heap memory.
-`sqlite.OpenNetworkFilesystemWAL` opts into exactly that:
+Ordinary WAL keeps its index in a `<database>-shm` file that every connection
+memory-maps and grows. Before go/v0.7.3 the driver grew that file with
+`fallocate(2)`, which Linux NFS 4.1 mounts reject with `EOPNOTSUPP`, so
+`sqlite.Open` failed there; the current driver falls back to growing the file
+another way, so `sqlite.Open` works on such a mount when a single node opens
+the database. SQLite's own guidance is that shared-memory WAL is not safe when
+processes on different hosts open the same file over a network filesystem.
+`sqlite.OpenNetworkFilesystem` avoids WAL altogether. SQLite can also run WAL
+without the `-shm` file when the connection uses exclusive locking: the WAL
+index then lives in the process's heap memory. `sqlite.OpenNetworkFilesystemWAL`
+opts into exactly that:
 
 ```go
 database, err := sqlite.OpenNetworkFilesystemWAL(ctx, sqlite.Config{
