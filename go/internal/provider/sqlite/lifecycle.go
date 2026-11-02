@@ -44,6 +44,11 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string, durab
 	if err != nil {
 		return nil, CapabilityReport{}, err
 	}
+	if durability == DurabilityNetworkFilesystem {
+		if err := convertWriteAheadLogForRollbackJournal(ctx, dataSourceName); err != nil {
+			return nil, CapabilityReport{}, err
+		}
+	}
 	standard, err := driver.Open(configured, connectionInitializerForProfile(durability))
 	if err != nil {
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
@@ -96,6 +101,10 @@ func connectionLockingMode(connection *sqlite3.Conn) (string, error) {
 }
 
 func refuseSharedMemoryIndex(location string) error {
+	return refuseSharedMemoryIndexFor(location, "network-filesystem write-ahead logging refuses to open it")
+}
+
+func refuseSharedMemoryIndexFor(location string, refusal string) error {
 	sharedMemory := location + "-shm"
 	info, err := os.Stat(sharedMemory)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -108,7 +117,7 @@ func refuseSharedMemoryIndex(location string) error {
 		return fmt.Errorf("sqlite open: shared-memory index %s is not a regular file", sharedMemory)
 	}
 	if info.Size() != 0 {
-		return fmt.Errorf("sqlite open: shared-memory index %s is non-empty (%d bytes); another process may hold this database in shared-memory write-ahead logging mode, so network-filesystem write-ahead logging refuses to open it", sharedMemory, info.Size())
+		return fmt.Errorf("sqlite open: shared-memory index %s is non-empty (%d bytes); another process may hold this database in shared-memory write-ahead logging mode, so %s", sharedMemory, info.Size(), refusal)
 	}
 	return nil
 }

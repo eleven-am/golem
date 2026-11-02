@@ -47,18 +47,47 @@ The trade-off is exclusive access. While the application holds the handle, no
 other process can read or write the database: not another replica, not the
 `sqlite3` command-line tool, and not a backup job. They fail with a busy error
 until the handle is closed. Choose this profile over the rollback-journal one
-when one process owns the database and you want WAL's cheaper commits and
-readers that do not block the single writer inside that process. Choose
+when one process owns the database and you want WAL's cheaper commits, which
+append to the log instead of rewriting database pages through a rollback
+journal. The pool holds a single connection, so the profile adds no read
+concurrency inside the process. Choose
 `sqlite.OpenNetworkFilesystem` when anything else must open the file while the
 application runs.
 
 A rollback-journal database opened with this profile is converted to WAL. The
-reverse works when the filesystem supports ordinary WAL: after a clean close,
-`sqlite.OpenNetworkFilesystem` converts the database back to rollback
-journaling. On a filesystem that rejects the `-shm` file, any connection
-without exclusive locking cannot read a WAL database at all, so convert it back
-first from a single connection that runs `PRAGMA locking_mode=EXCLUSIVE;` and
-then `PRAGMA journal_mode=DELETE;`.
+reverse needs no manual step. On a filesystem that rejects the `-shm` file, a
+connection without exclusive locking cannot read a WAL database at all, so
+`sqlite.OpenNetworkFilesystem` converts it before the normal open. When the
+database file's header declares WAL, the provider opens one dedicated
+connection with `locking_mode=EXCLUSIVE` set before its first database access,
+verifies exclusive locking, runs `PRAGMA wal_checkpoint(TRUNCATE)` and
+`PRAGMA journal_mode=DELETE`, requires `PRAGMA integrity_check` to report `ok`,
+and closes the connection before opening the rollback-journal pool. The same
+conversion recovers a database left in WAL by `sqlite.Open` or by a crash,
+including frames that were only in the `-wal` file; SQLite removes that file
+when the conversion completes. The conversion fails closed and changes nothing
+when a non-empty `<database>-shm` exists, because another process may be using
+the database in ordinary WAL mode, and when another process holds the database
+so the exclusive lock cannot be obtained. An empty `-shm` leftover is
+tolerated. The provider never deletes or truncates a sidecar file itself. A
+database already in rollback-journal mode opens exactly as before, and the WAL
+profiles never convert.
+
+### Recovering from a stale `-shm`
+
+A non-empty `<database>-shm` blocks both network profiles: the WAL profile
+refuses to open the database and the rollback profile refuses to convert it.
+Golem never deletes that file automatically, because a live process may still
+be using it. If the file is stale, for example after a crash of a process that
+used ordinary WAL, recover it by hand:
+
+1. Stop every process that uses the database.
+2. Confirm that none still holds it. For example, copy the database and its
+   sidecar files to a local disk and open the copy with `sqlite.Open`, or open
+   the database with the `sqlite3` command-line tool and confirm that a write
+   such as `BEGIN IMMEDIATE; ROLLBACK;` does not report a busy or locked error.
+3. Only then remove the `-shm` file, and open the database with the profile
+   you need.
 
 ## Backups and replicas
 
