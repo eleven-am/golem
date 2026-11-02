@@ -181,15 +181,19 @@ func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.Poli
 	} else {
 		planned, err = analytics.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
 	}
-	if refused, ok := publicBindReasonError(app.registry, "analytics", descriptor, err); ok {
-		return preparedAnalyticsStatement{}, refused
-	}
 	if err != nil {
 		if refused, ok := policyUnavailableReadError("analytics", descriptor, err); ok {
 			return preparedAnalyticsStatement{}, refused
 		}
 		if limited, ok := publicLimitError("analytics", descriptor, err); ok {
 			return preparedAnalyticsStatement{}, limited
+		}
+		if refused, ok := publicBindReasonError(app.registry, "analytics", descriptor, err); ok {
+			return preparedAnalyticsStatement{}, refused
+		}
+		var whereFailure *analytics.WhereError
+		if errors.As(err, &whereFailure) {
+			return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics request is invalid", err)
 		}
 		if public, ok := publicReadReasonError("analytics", descriptor, analyticsFieldMentions(request, app.registry, app.providers), err); ok {
 			return preparedAnalyticsStatement{}, public
