@@ -375,7 +375,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 
 	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
 	var nearest string
-	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" ORDER BY vec_distance_cosine(vec_f32(embedding),vec_f32(?)),record_key LIMIT 1`, query); err != nil {
+	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" ORDER BY vec1_cos_distance(embedding,?),record_key LIMIT 1`, query); err != nil {
 		t.Fatal(err)
 	}
 	if nearest != "golem-semantic-key:v1|5:s:1:a" {
@@ -554,6 +554,71 @@ func TestSQLiteRankBreaksDistanceTiesOnTheRecordKey(t *testing.T) {
 	}
 	if len(ranks) != 2 || ranks[0].Key != "a" || ranks[1].Key != "b" {
 		t.Fatalf("tie page=%#v want the two lowest record keys a,b", ranks)
+	}
+}
+
+func TestSQLiteRankPlacesAScaledCopyOfTheQueryFirstAtDistanceZero(t *testing.T) {
+	fixture := newDrainFixture(t)
+	index, ok := fixture.manager.index("post", "related")
+	if !ok {
+		t.Fatal("semantic index is absent")
+	}
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+	if _, err := fixture.db.Exec(`DELETE FROM "posts"; DELETE FROM "` + drainStateTable + `"; DELETE FROM "` + drainVectorTable + `"`); err != nil {
+		t.Fatal(err)
+	}
+	query := []float32{0.3, 0.7, 0.2}
+	queryVector, err := sqlitevec.Serialize(query, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := map[string][]float32{"scaled": {1.5, 3.5, 1}, "other": {0.7, 0.3, 0.2}}
+	for key, values := range stored {
+		vector, err := sqlitevec.Serialize(values, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,'copy')`, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainStateTable+`" (record_key,source_hash,space_fingerprint,status,updated_at,"id") VALUES (?,x'01',?,'ready',1,?)`, key, fingerprint, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainVectorTable+`" (record_key,embedding) VALUES (?,?)`, key, vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scaled, _ := sqlitevec.Serialize(stored["scaled"], 3)
+	var raw float64
+	if err := fixture.db.Get(&raw, `SELECT vec1_cos_distance(?1,?2)`, scaled, queryVector); err != nil {
+		t.Fatal(err)
+	}
+	if raw >= 0 {
+		t.Fatalf("fixture no longer reproduces a rounding-negative distance: %g", raw)
+	}
+	ranks, err := fixture.manager.rankVector(context.Background(), index, queryVector, candidates, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 2 || ranks[0].Key != "scaled" || ranks[0].Distance != 0 || ranks[1].Key != "other" {
+		t.Fatalf("ranks=%#v want the scaled copy first at distance 0", ranks)
+	}
+}
+
+func TestRoundedCosineDistanceClampsOnlyRoundingNoise(t *testing.T) {
+	for _, test := range []struct {
+		in    float64
+		out   float64
+		valid bool
+	}{
+		{-6.4e-8, 0, true}, {-1e-6, 0, true}, {0, 0, true}, {0.5, 0.5, true}, {2, 2, true}, {2 + 1e-6, 2 + 1e-6, true},
+		{-1.1e-6, 0, false}, {-0.5, 0, false}, {2 + 1.1e-6, 0, false}, {math.NaN(), 0, false}, {math.Inf(1), 0, false}, {math.Inf(-1), 0, false},
+	} {
+		out, valid := roundedCosineDistance(test.in)
+		if valid != test.valid || out != test.out {
+			t.Errorf("roundedCosineDistance(%g)=(%g,%v) want (%g,%v)", test.in, out, valid, test.out, test.valid)
+		}
 	}
 }
 

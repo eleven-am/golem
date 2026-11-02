@@ -81,7 +81,7 @@ type kernelModeFixture struct {
 func newKernelModeFixture(t *testing.T) kernelModeFixture {
 	t.Helper()
 	root := t.TempDir()
-	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/kernelmode\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/kernelmode\n\ngo 1.26\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
 	writePipelineAcceptanceFile(t, root, "app/zz_golem_registry.gen.go", "package app\ntype Caller[P any] struct{}\n")
 	fixture := kernelModeFixture{root: root}
 	fixture.setMode(t, false)

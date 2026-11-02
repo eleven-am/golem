@@ -11,6 +11,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
@@ -19,7 +21,31 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 	if err != nil {
 		return Script{}, err
 	}
+	if err := requireExactSemanticVectors(normalized); err != nil {
+		return Script{}, err
+	}
 	return renderNormalizedInitial(normalized, false)
+}
+
+func requireExactSemanticVectors(schemas ...physical.PhysicalSchema) error {
+	for _, schema := range schemas {
+		if schema.Version == 1 && schema.CanonicalVersion == 1 {
+			continue
+		}
+		for _, extension := range schema.Extensions {
+			if extension.Kind != semanticcontract.IndexKind {
+				continue
+			}
+			descriptor, err := semanticstorage.Decode(extension)
+			if err != nil {
+				return fmt.Errorf("sqlite semantic extension %s: %w", extension.ID, err)
+			}
+			if err := sqlitevec.RequireExactVectors(string(extension.ID), descriptor.StateVersion); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }

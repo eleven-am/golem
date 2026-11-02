@@ -748,7 +748,7 @@ func TestInspectDoesNotBypassProviderExtensionFailure(t *testing.T) {
 
 func TestCheckRecoversInterruptedPublicationBeforeOutputValidation(t *testing.T) {
 	module := t.TempDir()
-	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/recovery\n\ngo 1.25.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/recovery\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	build := func(body string) manifest.Result {
@@ -850,7 +850,7 @@ func writeSocialModule(t *testing.T, invalidBinding bool) string {
 	directory := t.TempDir()
 	repository := commandModuleRoot(t)
 	files := map[string]string{
-		"go.mod": "module example.test/social\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
+		"go.mod": "module example.test/social\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
 	}
 	actorType := "Actor"
 	if invalidBinding {

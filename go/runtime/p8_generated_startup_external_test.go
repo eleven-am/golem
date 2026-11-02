@@ -48,7 +48,7 @@ func p8RunExternalGeneratedStartupCase(t *testing.T, name string, bothProviders 
 	if bothProviders {
 		providers = "golem.SQLite, golem.PostgreSQL"
 	}
-	p8WriteExternalFile(t, module, "go.mod", fmt.Sprintf("module example.test/p8startup\n\ngo 1.25.0\n\nrequire (\n\tgithub.com/eleven-am/golem/go v0.0.0\n\tgithub.com/99designs/gqlgen v0.17.70\n\tgithub.com/vektah/gqlparser/v2 v2.5.23\n)\nreplace github.com/eleven-am/golem/go => %s\n", filepath.ToSlash(golemModule)))
+	p8WriteExternalFile(t, module, "go.mod", fmt.Sprintf("module example.test/p8startup\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/eleven-am/golem/go v0.0.0\n\tgithub.com/99designs/gqlgen v0.17.70\n\tgithub.com/vektah/gqlparser/v2 v2.5.23\n)\nreplace github.com/eleven-am/golem/go => %s\n", filepath.ToSlash(golemModule)))
 	p8WriteExternalFile(t, module, "schema.go", fmt.Sprintf(`package startup
 
 import "github.com/eleven-am/golem/go/golem"

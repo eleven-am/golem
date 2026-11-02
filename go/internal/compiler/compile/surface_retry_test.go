@@ -43,7 +43,7 @@ func writeSurfaceRetryFixture(t *testing.T, declarations string) string {
 	}
 	directory := t.TempDir()
 	files := map[string]string{
-		"go.mod": "module example.com/surfaceretry\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n",
+		"go.mod": "module example.com/surfaceretry\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n",
 		"schema.go": `package surfaceretry
 
 import (

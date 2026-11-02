@@ -627,7 +627,7 @@ func GolemGeneratedDescriptors() golem.PackageDescriptors { return golem.Generat
 func compileRegistry(t *testing.T, handwritten map[string]string, generatedPath string, generated []byte) {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.26\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
 	writeRegistryTestFile(t, filepath.Join(root, "go.mod"), module)
 	for path, source := range handwritten {
 		writeRegistryTestFile(t, filepath.Join(root, path), source)

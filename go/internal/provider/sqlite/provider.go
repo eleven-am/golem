@@ -56,11 +56,11 @@ type CapabilityReport struct {
 	PolicyScalarList bool
 	PolicyRelation   bool
 	AnalyticsExact   bool
-	Vec0             bool
+	Vec1             bool
 	VecVersion       string
 }
 
-// Open opens the CGO-free sqlite-vec WASM database through sqlx and proves the provider
+// Open opens the CGO-free vec1-enabled SQLite WASM database through sqlx and proves the provider
 // floor and required connection capabilities before returning it.
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
 	return provider.open(ctx, dataSourceName, DurabilityWAL)

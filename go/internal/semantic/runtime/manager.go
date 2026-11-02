@@ -103,6 +103,13 @@ func NewManager(database *sqlx.DB, provider ir.Provider, schema physical.Physica
 	if len(observers) == 1 {
 		observer = observers[0]
 	}
+	if provider == ir.SQLite {
+		for _, index := range inventory.Indexes() {
+			if err := sqlitevec.RequireExactVectors(string(index.Descriptor.ModelID)+"."+index.Descriptor.Name, index.Descriptor.StateVersion); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return &Manager{database: database, provider: provider, schema: schema, indexes: inventory.Indexes(), observer: observer, refreshLocks: make(map[string]*sync.Mutex)}, nil
 }
 
@@ -546,7 +553,7 @@ func (manager *Manager) exactSQLiteRankStatement(index Index, candidates Candida
 		identity[position] = policysql.ProjectStorageColumn(column.Storage.Kind, "golem_ss."+manager.quote(column.Name))
 		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
 	}
-	distance := "vec_distance_cosine(vec_f32(golem_sv.embedding),vec_f32(" + manager.placeholder(1) + "))"
+	distance := "vec1_cos_distance(golem_sv.embedding," + manager.placeholder(1) + ")"
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
 	statement := "SELECT golem_sv.record_key," + distance + " AS distance," + strings.Join(identity, ",") +
 		" FROM (" + candidateSQL + ") AS golem_sq" +
@@ -573,6 +580,15 @@ func (manager *Manager) placeholder(position int) string {
 	return "?" + strconv.Itoa(position)
 }
 
+const cosineDistanceRounding = 1e-6
+
+func roundedCosineDistance(distance float64) (float64, bool) {
+	if math.IsNaN(distance) || distance < -cosineDistanceRounding || distance > 2+cosineDistanceRounding {
+		return 0, false
+	}
+	return math.Max(distance, 0), true
+}
+
 func decodeRanks(rows *sqlx.Rows, capacity int, candidates Candidates) ([]Rank, error) {
 	result := make([]Rank, 0, capacity)
 	for rows.Next() {
@@ -587,9 +603,11 @@ func decodeRanks(rows *sqlx.Rows, capacity int, candidates Candidates) ([]Rank, 
 		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking decode failed")
 		}
-		if math.IsNaN(rank.Distance) || math.IsInf(rank.Distance, 0) || rank.Distance < 0 || rank.Distance > 2.000001 {
+		distance, valid := roundedCosineDistance(rank.Distance)
+		if !valid {
 			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: invalid cosine distance")
 		}
+		rank.Distance = distance
 		rank.Identity = scan.RawValues()
 		result = append(result, rank)
 	}
@@ -2054,21 +2072,6 @@ func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, in
 		return nil
 	}
 	vectorTable := manager.hidden(index, "_vec")
-	if manager.provider == ir.SQLite && index.Descriptor.StateVersion < semanticstorage.StateVersionExactVectors {
-		marks := make([]string, len(keys))
-		keyArguments := make([]any, len(keys))
-		for position, key := range keys {
-			marks[position] = manager.placeholder(position + 1)
-			keyArguments[position] = key
-		}
-		observeexec.RecordStatement(ctx)
-		if _, err := transaction.ExecContext(ctx, "DELETE FROM "+vectorTable+" WHERE "+manager.quote("record_key")+" IN ("+strings.Join(marks, ",")+")", keyArguments...); err != nil {
-			return err
-		}
-		observeexec.RecordStatement(ctx)
-		_, err = transaction.ExecContext(ctx, "INSERT INTO "+vectorTable+" ("+manager.quote("record_key")+","+manager.quote("embedding")+") VALUES "+strings.Join(vectorTuples, ","), values...)
-		return err
-	}
 	observeexec.RecordStatement(ctx)
 	_, err = transaction.ExecContext(ctx, "INSERT INTO "+vectorTable+" (record_key,embedding) VALUES "+strings.Join(vectorTuples, ",")+" ON CONFLICT(record_key) DO UPDATE SET embedding=excluded.embedding", values...)
 	return err

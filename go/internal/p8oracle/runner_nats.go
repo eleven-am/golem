@@ -226,7 +226,7 @@ func runExternalNATSProfiles(t *testing.T, source []byte, scenario string, race 
 	}
 	module := `module p8oracle.nats.consumer
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/eleven-am/golem/go v0.0.0
@@ -244,7 +244,7 @@ require (
 	canonicalRoot := canonicalPath(t, root)
 	canonicalExample := canonicalPath(t, example)
 	workspace := filepath.Join(t.TempDir(), "go.work")
-	work := fmt.Sprintf(`go 1.25.0
+	work := fmt.Sprintf(`go 1.26.0
 
 use (
 	%s

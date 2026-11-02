@@ -12,6 +12,7 @@ import (
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
@@ -54,6 +55,9 @@ func (provider *Provider) introspect(ctx context.Context, database *sqlx.DB, exp
 func (provider *Provider) introspectCatalog(ctx context.Context, database catalogQuerier, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
 	normalized, err := physical.Normalize(expected)
 	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	if err := requireExactSemanticVectors(normalized); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
 	return provider.introspectNormalizedCatalog(ctx, database, normalized, false)
@@ -184,6 +188,9 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			}
 			vectorKey := "table\x00" + vectorName
 			if descriptor.StateVersion >= semanticstorage.StateVersionExactVectors {
+				if vector, exists := actual[vectorKey]; exists && strings.Contains(vector.SQL, "USING vec0(") {
+					return physical.PhysicalSchema{}, sqlitevec.LegacyVectorTable(string(extension.ID))
+				}
 				expectedObjects[vectorKey] = statements[len(statements)-1]
 				expectedObjectTables[vectorKey] = vectorName
 				continue

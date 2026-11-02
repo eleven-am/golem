@@ -27,6 +27,6 @@ func ProjectStorageColumn(storage physical.StorageKind, expression string) strin
 }
 
 func hexProjection(expression string) string {
-	// TODO: remove the hex projection when go-sqlite3 >= v0.25.0 (empty-blob column offset fix) can be adopted with a compatible sqlite-vec wasm
+	// TODO: remove hexProjection and the matching hex decoding of SQLite BLOB columns now that go-sqlite3 v0.36.0 reads the column after an empty BLOB correctly
 	return "CASE WHEN " + expression + " IS NULL THEN NULL ELSE hex(" + expression + ") END"
 }

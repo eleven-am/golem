@@ -32,7 +32,7 @@ func TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle(t *tes
 	root := t.TempDir()
 	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.com/semanticpgapp
 
-go 1.25
+go 1.26
 
 require github.com/eleven-am/golem/go v0.0.0
 

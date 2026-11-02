@@ -25,7 +25,7 @@ func TestExternalSocialApplicationGenerateCheckBuildAndRun(t *testing.T) {
 	frameworkRoot := goModuleDirectory(t, exampleRoot, "github.com/eleven-am/golem/go")
 	frameworkRoot = canonicalP8Path(t, frameworkRoot)
 	workspace := filepath.Join(t.TempDir(), "go.work")
-	work := fmt.Sprintf("go 1.25.0\nuse (\n\t%s\n\t%s\n)\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n", filepath.ToSlash(frameworkRoot), filepath.ToSlash(freshRoot), filepath.ToSlash(frameworkRoot))
+	work := fmt.Sprintf("go 1.26.0\nuse (\n\t%s\n\t%s\n)\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n", filepath.ToSlash(frameworkRoot), filepath.ToSlash(freshRoot), filepath.ToSlash(frameworkRoot))
 	if err := os.WriteFile(workspace, []byte(work), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -192,7 +192,7 @@ func newEvolution(t *testing.T, schema evolutionSchema) *evolution {
 
 func (value *evolution) writeModule(schema evolutionSchema) {
 	value.t.Helper()
-	goMod := "module example.test/evolution\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(value.t)) + "\n"
+	goMod := "module example.test/evolution\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(value.t)) + "\n"
 	if err := os.WriteFile(filepath.Join(value.module, "go.mod"), []byte(goMod), 0o644); err != nil {
 		value.t.Fatal(err)
 	}

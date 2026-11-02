@@ -371,6 +371,30 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	}
 }
 
+func TestPGVectorRankPlacesAScaledCopyOfTheQueryFirstAtDistanceZero(t *testing.T) {
+	fixture := openPGVectorRankFixture(t)
+	ctx := context.Background()
+	namespace := `"` + pgvectorRankNamespace + `".`
+	for key, vector := range map[string]string{"scaled": "[1.5,3.5,1]", "other": "[0.7,0.3,0.2]"} {
+		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","hidden") VALUES ($1,false)`, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") VALUES ($1,'\x01'::bytea,$2,'ready',1,$1)`, key, hex.EncodeToString(fixture.index.SpaceFingerprint[:])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_vec" ("record_key","embedding") VALUES ($1,$2::vector)`, key, vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[0.3,0.7,0.2]", authorizedRankCandidates(), "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 2 || ranks[0].Key != "scaled" || ranks[0].Distance != 0 || ranks[1].Key != "other" {
+		t.Fatalf("ranks=%#v want the scaled copy first at distance 0", ranks)
+	}
+}
+
 func TestPGVectorRankIgnoresHNSWScanLimits(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	fixture.seedRankRows(t, 2000, "")

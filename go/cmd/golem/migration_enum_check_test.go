@@ -90,7 +90,7 @@ func (Job) DefinePolicy(rules *golem.Rules[Job], actor Actor) {
 func newEnumCheckEvolution(t *testing.T, fields []string, checks []string) *evolution {
 	t.Helper()
 	module := t.TempDir()
-	goMod := "module example.test/enumcheck\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(t)) + "\n"
+	goMod := "module example.test/enumcheck\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(t)) + "\n"
 	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}

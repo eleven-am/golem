@@ -229,7 +229,14 @@ is "these are the closest".
 SQLite stores current vectors in a strict, dimension-checked BLOB table and
 drives ranking from the authorized candidate query before calculating cosine
 distance. The previous `vec0` virtual-table shape forced the opposite join
-order and made a selective policy scan the entire vector table. PostgreSQL
+order and made a selective policy scan the entire vector table. Distance is
+SQLite's bundled `vec1` extension (`vec1_cos_distance`), computed in single
+precision, so SQLite refuses to store or query a vector whose Euclidean norm
+lies outside `[1e-9, 1e9]`: beyond that range the single-precision norm
+product underflows or overflows and the distance stops being exact. A database
+whose semantic state predates exact vectors (sqlite-vec `vec0` tables) must be
+opened and migrated with go/v0.7.2 first; this release refuses to open,
+create or migrate it. PostgreSQL
 keeps `pgvector` storage but uses an exact distance expression rather than
 HNSW, because a full approximate page does not reveal which true neighbours it
 missed.

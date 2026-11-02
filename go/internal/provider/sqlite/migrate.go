@@ -1076,6 +1076,9 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return err
 	}
+	if err := requireExactSemanticVectors(entry.BeforeSnapshot, entry.AfterSnapshot); err != nil {
+		return fmt.Errorf("sqlite migration %s: %w", entry.ID, err)
+	}
 	plan, err := provider.planIncremental(entry)
 	if err != nil {
 		return err
@@ -1200,6 +1203,9 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	reviewed, err := reviewedInitial(entry)
 	if err != nil {
 		return err
+	}
+	if err := requireExactSemanticVectors(entry.AfterSnapshot); err != nil {
+		return fmt.Errorf("sqlite initial migration %s: %w", entry.ID, err)
 	}
 	script, err := provider.renderReviewedInitialSnapshot(reviewed)
 	if err != nil {

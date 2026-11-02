@@ -417,7 +417,7 @@ func TestMigrationPlanActiveWorkspaceIsCopiedAndReadOnly(t *testing.T) {
 	}
 	workspaceRoot := t.TempDir()
 	workspacePath := filepath.Join(workspaceRoot, "go.work")
-	workspace := "go 1.25.0\n\nuse (\n\t" + filepath.ToSlash(module) + "\n\t" + filepath.ToSlash(commandModuleRoot(t)) + "\n)\n"
+	workspace := "go 1.26.0\n\nuse (\n\t" + filepath.ToSlash(module) + "\n\t" + filepath.ToSlash(commandModuleRoot(t)) + "\n)\n"
 	if err := os.WriteFile(workspacePath, []byte(workspace), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func writePostgreSQLWideningModule(t *testing.T) string {
 	directory := t.TempDir()
 	repository := commandModuleRoot(t)
 	files := map[string]string{
-		"go.mod": "module example.test/secure\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
+		"go.mod": "module example.test/secure\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
 		"schema.go": `package secure
 
 import "github.com/eleven-am/golem/go/golem"

@@ -17,7 +17,7 @@ import (
 
 const externalApplicationModule = `module example.com/golempolicykit
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/eleven-am/golem/go v0.0.0

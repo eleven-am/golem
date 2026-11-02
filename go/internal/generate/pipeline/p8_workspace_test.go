@@ -16,15 +16,15 @@ func TestProspectivePackageResolutionSupportsNestedExternalWorkspace(t *testing.
 		t.Fatal(err)
 	}
 	for path, content := range map[string]string{
-		filepath.Join(root, "go.mod"):     "module example.test/framework\n\ngo 1.25.0\n",
-		filepath.Join(consumer, "go.mod"): "module example.test/application\n\ngo 1.25.0\n\nrequire example.test/framework v0.0.0\n",
+		filepath.Join(root, "go.mod"):     "module example.test/framework\n\ngo 1.26.0\n",
+		filepath.Join(consumer, "go.mod"): "module example.test/application\n\ngo 1.26.0\n\nrequire example.test/framework v0.0.0\n",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	workspace := filepath.Join(root, "external.go.work")
-	work := "go 1.25.0\n\nuse (\n\t" + filepath.ToSlash(root) + "\n\t" + filepath.ToSlash(consumer) + "\n)\n\nreplace example.test/framework v0.0.0 => " + filepath.ToSlash(root) + "\n"
+	work := "go 1.26.0\n\nuse (\n\t" + filepath.ToSlash(root) + "\n\t" + filepath.ToSlash(consumer) + "\n)\n\nreplace example.test/framework v0.0.0 => " + filepath.ToSlash(root) + "\n"
 	if err := os.WriteFile(workspace, []byte(work), 0o600); err != nil {
 		t.Fatal(err)
 	}

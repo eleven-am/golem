@@ -239,58 +239,38 @@ func TestStrikeBoundLeavesRoomToProveLiveness(t *testing.T) {
 	}
 }
 
-func TestUnupgradedShadowStateNeverNamesTheStrikeColumn(t *testing.T) {
+func TestSQLiteManagerRefusesUnupgradedSemanticState(t *testing.T) {
 	handle, err := sqlitevec.Open("file:" + t.TempDir() + "/legacy.db?_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = handle.Close() })
 	database := sqlx.NewDb(handle, "sqlite3")
-	if _, err := database.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
-CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
-CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.Exec(`INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
-		t.Fatal(err)
-	}
-	schema := semanticSchema(t, 3)
-	schema.Namespace = physical.Namespace{Name: "main"}
-	attributes := make([]physical.Attribute, 0, len(schema.Extensions[0].Attributes))
-	for _, attribute := range schema.Extensions[0].Attributes {
-		if attribute.Name != "state_version" {
+	for _, stateVersion := range []int64{0, 2} {
+		schema := semanticSchema(t, 3)
+		attributes := make([]physical.Attribute, 0, len(schema.Extensions[0].Attributes))
+		for _, attribute := range schema.Extensions[0].Attributes {
+			if attribute.Name == "state_version" {
+				if stateVersion == 0 {
+					continue
+				}
+				attribute.Value = physical.SemanticValue{Kind: physical.ValueInteger, Integer: stateVersion}
+			}
 			attributes = append(attributes, attribute)
 		}
-	}
-	schema.Extensions[0].Attributes = attributes
-	schema.Tables = []physical.PhysicalTable{{
-		ID: "post", Name: "posts",
-		Columns: []physical.PhysicalColumn{
-			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
-			{ID: "title", Name: "title", Ordinal: 1, Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
-		},
-		PrimaryKey: &physical.PhysicalKey{ID: "post-primary", Name: "pk_posts", Columns: []ir.FieldID{"id"}},
-	}}
-	specification, _ := embedding.NewSpecification("test", "model", "v1", 3, 8)
-	embedder := &refusingProvider{specification: specification, refuse: []string{"beta"}, code: embedding.CodeProvider}
-	registry, _ := embedding.NewRegistry(map[string]embedding.Provider{"content": embedder})
-	inventory, err := NewInventory(schema, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, err := NewManager(database, ir.SQLite, schema, inventory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 0; attempt < semanticAmbiguousStrikeBound+1; attempt++ {
-		_ = manager.Refresh(context.Background(), "post", "related")
-	}
-	var statuses []string
-	if err := database.Select(&statuses, `SELECT "status" FROM "_golem_semantic_semantic-post-related_state" ORDER BY "record_key"`); err != nil {
-		t.Fatalf("an un-upgraded shadow state table was written with the strike column: %v", err)
-	}
-	if len(statuses) == 0 {
-		t.Fatal("the un-upgraded drain wrote no state at all")
+		schema.Extensions[0].Attributes = attributes
+		specification, _ := embedding.NewSpecification("test", "model", "v1", 3, 8)
+		registry, _ := embedding.NewRegistry(map[string]embedding.Provider{"content": &refusingProvider{specification: specification, code: embedding.CodeProvider}})
+		inventory, err := NewInventory(schema, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewManager(database, ir.SQLite, schema, inventory); err == nil || !strings.Contains(err.Error(), "SQLITE_VEC_LEGACY_STATE") {
+			t.Fatalf("state version %d manager error = %v", stateVersion, err)
+		}
+		if _, err := NewManager(database, ir.PostgreSQL, schema, inventory); err != nil {
+			t.Fatalf("PostgreSQL state version %d manager error = %v", stateVersion, err)
+		}
 	}
 }
 
