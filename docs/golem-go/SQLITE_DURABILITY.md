@@ -71,7 +71,11 @@ the database in ordinary WAL mode, and when another process holds the database
 so the exclusive lock cannot be obtained. An empty `-shm` leftover is
 tolerated. The provider never deletes or truncates a sidecar file itself. A
 database already in rollback-journal mode opens exactly as before, and the WAL
-profiles never convert.
+profiles never convert. The integrity check reads the whole database, so the
+open that converts a large database can take minutes on a network filesystem;
+allow for it in startup probes. When several processes open the same
+WAL-declared database at once, one converts and the others fail their open
+after the busy timeout; restart them once the first is up.
 
 ### Recovering from a stale `-shm`
 
