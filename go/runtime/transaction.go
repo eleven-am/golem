@@ -293,6 +293,7 @@ type CallerTx[P, A any] struct {
 type SystemTx[P, A any] struct {
 	system    System[P, A]
 	execution uint64
+	scope     *usageGate
 }
 
 // undoOnPanic is the single owner of the runtime's panic contract for
@@ -470,8 +471,10 @@ func CallerTxSystem[P, A any](transaction *CallerTx[P, A]) *SystemTx[P, A] {
 		return nil
 	}
 	caller := transaction.caller
-	observeSystemEscape(caller.app, caller.executor)
-	return &SystemTx[P, A]{system: System[P, A]{app: caller.app, executor: caller.executor}, execution: caller.execution}
+	if transaction.scope == nil || !transaction.scope.isClosed() {
+		observeSystemEscape(caller.app, caller.executor)
+	}
+	return &SystemTx[P, A]{system: System[P, A]{app: caller.app, executor: caller.executor}, execution: caller.execution, scope: transaction.scope}
 }
 
 func observeSystemEscape[P, A any](app *App[P, A], execution *executionBinding) {
