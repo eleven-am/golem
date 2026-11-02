@@ -32,6 +32,7 @@ type deterministicProvider struct {
 	purposes      []embedding.Purpose
 	panicEmbed    bool
 	rejectText    string
+	degenerate    map[string][]float32
 	beforeEmbed   func(*sqlx.DB)
 	database      *sqlx.DB
 }
@@ -143,6 +144,11 @@ func (provider *deterministicProvider) Embed(_ context.Context, inputs []embeddi
 		}
 		if strings.Contains(input.Text(), "beta") {
 			values = []float32{0, 1, 0}
+		}
+		for fragment, degenerate := range provider.degenerate {
+			if strings.Contains(input.Text(), fragment) {
+				values = degenerate
+			}
 		}
 		result[index], _ = embedding.NewVector(values)
 	}
@@ -1898,6 +1904,76 @@ func TestVectorNormBoundIsTheSameOnEveryProvider(t *testing.T) {
 			if _, err := manager.vectorValue(vector); (err == nil) != test.valid {
 				t.Errorf("%s norm %g error=%v want valid=%v", provider, test.scale, err, test.valid)
 			}
+		}
+	}
+}
+
+var degenerateEmbeddings = map[string][]float32{"zeroed": {0, 0, 0}, "oversized": {1e10, 0, 0}}
+
+func TestSQLiteDrainQuarantinesOnlyTheRecordsWithAnInvalidVector(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	ids := []string{"g0", "zero", "g1", "huge", "g2"}
+	titles := map[string]string{"g0": "gamma g0", "zero": "zeroed z", "g1": "gamma g1", "huge": "oversized h", "g2": "gamma g2"}
+	for _, id := range ids {
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,?)`, id, titles[id]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.markStale(t, ids...)
+	fixture.embedder.degenerate = degenerateEmbeddings
+	seeded := fixture.embedder.calls()
+	pending, err := fixture.manager.Drain(ctx, "post", "related")
+	if err != nil || pending {
+		t.Fatalf("an invalid vector stalled the pass: pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - seeded; got != len(ids) {
+		t.Fatalf("embedded=%d want=%d", got, len(ids))
+	}
+	for _, id := range []string{"zero", "huge"} {
+		status, code, attempts := fixture.failure(t, id)
+		if status != "failed" || code.String != string(embedding.CodeProvider) || attempts != 1 {
+			t.Fatalf("record %q status=%q error_code=%#v attempt_count=%d", id, status, code, attempts)
+		}
+	}
+	for _, id := range []string{"g0", "g1", "g2"} {
+		if status := fixture.status(t, id); status != "ready" {
+			t.Fatalf("record %q status=%q", id, status)
+		}
+	}
+	if fixture.count(t, drainVectorTable) != 5 {
+		t.Fatalf("vectors=%d want=5", fixture.count(t, drainVectorTable))
+	}
+	ranked, err := fixture.manager.QueryOn(ctx, fixture.db, "post", "related", "gamma", textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, rank := range ranked {
+		found[rank.Key] = true
+	}
+	for _, id := range ids {
+		key, _ := semantickey.Encode([]any{id})
+		if want := id != "zero" && id != "huge"; found[key] != want {
+			t.Fatalf("record %q searchable=%t want=%t", id, found[key], want)
+		}
+	}
+	queried := fixture.embedder.calls()
+	if pending, err = fixture.manager.Drain(ctx, "post", "related"); err != nil || pending {
+		t.Fatalf("second pass pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - queried; got != 0 {
+		t.Fatalf("a quarantined record was sent to the provider again: embedded=%d", got)
+	}
+}
+
+func TestSemanticQueryRefusesAnInvalidQueryVector(t *testing.T) {
+	fixture := newDrainFixture(t)
+	fixture.embedder.degenerate = degenerateEmbeddings
+	for _, query := range []string{"zeroed", "oversized"} {
+		_, err := fixture.manager.QueryOn(context.Background(), fixture.db, "post", "related", query, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+		if err == nil || !strings.Contains(err.Error(), "SEMANTIC_VECTOR_INVALID") {
+			t.Fatalf("query %q error=%v", query, err)
 		}
 	}
 }

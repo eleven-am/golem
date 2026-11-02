@@ -858,6 +858,65 @@ func TestPGVectorDrainQuarantinesTheDocumentAProviderRefuses(t *testing.T) {
 	}
 }
 
+func TestPGVectorDrainQuarantinesOnlyTheRecordsWithAnInvalidVector(t *testing.T) {
+	ctx := context.Background()
+	fixture := openPGVectorDrainFixture(t)
+	namespace := `"` + pgvectorRankNamespace + `".`
+	ids := []string{"g0", "zero", "g1", "huge", "g2"}
+	titles := map[string]string{"g0": "gamma g0", "zero": "zeroed z", "g1": "gamma g1", "huge": "oversized h", "g2": "gamma g2"}
+	for _, id := range ids {
+		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","title") VALUES ($1,$2)`, id, titles[id]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.markStale(t, ids...)
+	fixture.embedder.degenerate = degenerateEmbeddings
+	seeded := fixture.embedder.calls()
+	pending, err := fixture.manager.Drain(ctx, "doc", "related")
+	if err != nil || pending {
+		t.Fatalf("an invalid vector stalled the pass: pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - seeded; got != len(ids) {
+		t.Fatalf("embedded=%d want=%d", got, len(ids))
+	}
+	for _, id := range []string{"zero", "huge"} {
+		status, code, _ := fixture.stateOf(t, id)
+		key, _ := semantickey.Encode([]any{id})
+		var attempts int
+		if err := fixture.database.Get(&attempts, `SELECT attempt_count FROM `+namespace+`"`+fixture.storage+`_state" WHERE record_key=$1`, key); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || code.String != string(embedding.CodeProvider) || attempts != 1 {
+			t.Fatalf("record %q status=%q error_code=%#v attempt_count=%d", id, status, code, attempts)
+		}
+	}
+	for _, id := range []string{"g0", "g1", "g2"} {
+		if status, _, _ := fixture.stateOf(t, id); status != "ready" {
+			t.Fatalf("record %q status=%q", id, status)
+		}
+	}
+	ranks, err := fixture.manager.rankVector(ctx, fixture.manager.indexes[0], "[0,0,1]", rankCandidates(`SELECT golem_r0."id" AS "id" FROM "`+pgvectorRankNamespace+`"."docs" AS golem_r0`), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, rank := range ranks {
+		found[rank.Key] = true
+	}
+	for _, id := range ids {
+		key, _ := semantickey.Encode([]any{id})
+		if want := id != "zero" && id != "huge"; found[key] != want {
+			t.Fatalf("record %q searchable=%t want=%t", id, found[key], want)
+		}
+	}
+	if pending, err = fixture.manager.Drain(ctx, "doc", "related"); err != nil || pending {
+		t.Fatalf("second pass pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - seeded; got != len(ids) {
+		t.Fatalf("a quarantined record was sent to the provider again: embedded=%d", got)
+	}
+}
+
 func TestPGVectorSourceVectorSeparatesAbsentFailedAndEmpty(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	fixture.seedRankRows(t, 4, "")

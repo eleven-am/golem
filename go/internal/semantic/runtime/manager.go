@@ -326,9 +326,12 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	if err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query text of %d bytes is not a valid embedding input", len(query))
 	}
-	vectors, err := manager.embed(ctx, semanticObservationModel(model), selected.Provider, selected.Specification, []embedding.Input{input})
+	vectors, invalid, err := manager.embed(ctx, semanticObservationModel(model), selected.Provider, selected.Specification, []embedding.Input{input})
 	if err != nil {
 		return nil, err
+	}
+	if cause, rejected := invalid[0]; rejected {
+		return nil, cause
 	}
 	vector, err := manager.vectorValue(vectors[0])
 	if err != nil {
@@ -1431,7 +1434,7 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			pass.pending += len(batch)
 			continue
 		}
-		vectors, embedErr := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, inputs)
+		vectors, invalid, embedErr := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, inputs)
 		if embedErr != nil {
 			if ctx.Err() != nil {
 				return embedErr
@@ -1470,11 +1473,26 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			}
 			continue
 		}
-		if err := manager.storeBatch(ctx, index, fingerprint, batch, vectors); err != nil {
-			return fmt.Errorf("P9_SEMANTIC_REFRESH: vector storage failed")
-		}
 		pass.settled()
 		pass.succeeded = true
+		stored := make([]sourceRecord, 0, len(batch))
+		storedVectors := make([]embedding.Vector, 0, len(vectors))
+		for position, record := range batch {
+			if cause, rejected := invalid[position]; rejected {
+				if err := manager.quarantine(ctx, index, record, cause); err != nil {
+					return err
+				}
+				continue
+			}
+			stored = append(stored, record)
+			storedVectors = append(storedVectors, vectors[position])
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		if err := manager.storeBatch(ctx, index, fingerprint, stored, storedVectors); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: vector storage failed")
+		}
 	}
 	return nil
 }
@@ -1521,7 +1539,7 @@ func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *em
 		if inputErr != nil {
 			continue
 		}
-		if _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
+		if _, _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
 			if ctx.Err() != nil {
 				return false
 			}
@@ -2218,12 +2236,13 @@ func callEmbeddingProvider(ctx context.Context, provider embedding.Provider, inp
 	return vectors, nil
 }
 
-func (manager *Manager) embed(ctx context.Context, model golem.ModelID, provider embedding.Provider, specification embedding.Specification, inputs []embedding.Input) ([]embedding.Vector, error) {
+func (manager *Manager) embed(ctx context.Context, model golem.ModelID, provider embedding.Provider, specification embedding.Specification, inputs []embedding.Input) ([]embedding.Vector, map[int]error, error) {
 	_, span := observeexec.BeginChild(ctx, model, observe.KindSemantic, observe.OperationSemanticProvider, observe.PhaseAttempt)
 	span.SetAggregateCount(int64(len(inputs)))
 	vectors, err := callEmbeddingProvider(ctx, provider, inputs)
+	var invalid map[int]error
 	if err == nil {
-		err = embedding.ValidateResult(specification, inputs, vectors)
+		invalid, err = validateEmbeddingResult(specification, inputs, vectors)
 	}
 	if err != nil {
 		code := embedding.CodeProvider
@@ -2233,7 +2252,30 @@ func (manager *Manager) embed(ctx context.Context, model golem.ModelID, provider
 		err = embedding.Failf(code, err, "embedding provider did not return a valid result for a batch of %d inputs", len(inputs))
 	}
 	finishSemanticObservation(span, err)
-	return vectors, err
+	return vectors, invalid, err
+}
+
+func validateEmbeddingResult(specification embedding.Specification, inputs []embedding.Input, vectors []embedding.Vector) (map[int]error, error) {
+	if len(vectors) != len(inputs) {
+		return nil, embedding.ValidateResult(specification, inputs, vectors)
+	}
+	invalid := map[int]error{}
+	validInputs := make([]embedding.Input, 0, len(inputs))
+	validVectors := make([]embedding.Vector, 0, len(vectors))
+	for position, vector := range vectors {
+		if vector.Dimensions() == specification.Dimensions() {
+			if err := sqlitevec.ValidateVector(vector.Values(), vector.Dimensions()); err != nil {
+				invalid[position] = embedding.Failf(embedding.CodeProvider, err, "SEMANTIC_VECTOR_INVALID: embedding provider returned a vector whose Euclidean norm is outside [%g, %g]", sqlitevec.MinimumNorm, sqlitevec.MaximumNorm)
+				continue
+			}
+		}
+		validInputs = append(validInputs, inputs[position])
+		validVectors = append(validVectors, vector)
+	}
+	if len(validInputs) == 0 {
+		return invalid, specification.Validate()
+	}
+	return invalid, embedding.ValidateResult(specification, validInputs, validVectors)
 }
 
 func semanticObservationModel(model ir.ModelID) golem.ModelID {
