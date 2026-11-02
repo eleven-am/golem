@@ -509,7 +509,7 @@ func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (Capabil
 		PolicyScalarList: firstReport.PolicyScalarList && secondReport.PolicyScalarList,
 		PolicyRelation:   firstReport.PolicyRelation && secondReport.PolicyRelation,
 		AnalyticsExact:   firstReport.AnalyticsExact && secondReport.AnalyticsExact,
-		Vec0:             firstReport.Vec0 && secondReport.Vec0,
+		Vec1:             firstReport.Vec1 && secondReport.Vec1,
 		VecVersion:       firstReport.VecVersion,
 	}, nil
 }
@@ -563,9 +563,9 @@ func (*Provider) VerifyPool(ctx context.Context, database *sqlx.DB, width int) (
 		combined.PolicyScalarList = combined.PolicyScalarList && report.PolicyScalarList
 		combined.PolicyRelation = combined.PolicyRelation && report.PolicyRelation
 		combined.AnalyticsExact = combined.AnalyticsExact && report.AnalyticsExact
-		combined.Vec0 = combined.Vec0 && report.Vec0
+		combined.Vec1 = combined.Vec1 && report.Vec1
 		if combined.VecVersion != report.VecVersion {
-			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed different sqlite-vec versions")
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed different vec1 versions")
 		}
 	}
 	if database.Stats().WaitCount != waitCount {
@@ -631,10 +631,10 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection analytical exactness unavailable: integer=%q decimalSum=%q decimalAverage=%q comparison=%d ordering=%d error=%v", label, integerSum, decimalSum, decimalAverage, comparison, ordering, err)
 	}
 	var vecVersion string
-	if err := connection.GetContext(ctx, &vecVersion, "SELECT vec_version()"); err != nil || vecVersion == "" {
-		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection sqlite-vec unavailable", label)
+	if err := connection.GetContext(ctx, &vecVersion, "SELECT vec1_info()"); err != nil || vecVersion == "" {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection vec1 unavailable", label)
 	}
-	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true, Vec0: true, VecVersion: vecVersion}, nil
+	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true, Vec1: true, VecVersion: vecVersion}, nil
 }
 
 // PolicyCapabilityProof measures the complete SQLite P2 policy function set on

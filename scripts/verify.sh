@@ -96,7 +96,7 @@ format() {
 gate() {
 	local work="$GO_DIR/bin/gate.work" social="$GO_DIR/examples/social" kernel="$GO_DIR/examples/kernel"
 	make -C "$ROOT" --no-print-directory GO="$GO" go-build || return 1
-	printf 'go 1.25.0\n\nuse (\n\t%s\n\t%s\n)\n\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n' \
+	printf 'go 1.26.0\n\nuse (\n\t%s\n\t%s\n)\n\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n' \
 		"$GO_DIR" "$social" "$GO_DIR" >"$work" || return 1
 	(cd "$social" && GOWORK="$work" "$GO_DIR/bin/golem" check \
 		--schema ./social --app-out ./social --migrations migrations) || return 1

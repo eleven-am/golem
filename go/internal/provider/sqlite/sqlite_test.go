@@ -61,7 +61,7 @@ func TestSemanticIndexUsesManagedExactVectorStorage(t *testing.T) {
 	}
 	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
 	var keys []string
-	rows, err := database.Queryx(`SELECT record_key FROM "`+base+`_vec" ORDER BY vec_distance_cosine(embedding,?),record_key`, query)
+	rows, err := database.Queryx(`SELECT record_key FROM "`+base+`_vec" ORDER BY vec1_cos_distance(embedding,?),record_key`, query)
 	if err != nil {
 		t.Fatal(err)
 	}

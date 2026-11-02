@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.7.2
+go get github.com/eleven-am/golem/go@v0.7.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -14,9 +14,45 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
-## go/v0.7.2
+## go/v0.7.3
 
-Unreleased.
+**This release requires Go 1.26.** The SQLite driver moves from
+`github.com/ncruces/go-sqlite3` v0.23.1 to v0.36.0, which needs Go 1.26.
+
+**The SQLite driver is current, and WAL works on NFS 4.1.** The older driver
+grew the WAL `-shm` file with `fallocate`, which Linux NFS 4.1 mounts reject, so
+`sqlite.Open` failed there. The new driver falls back when `fallocate` is not
+supported, so the default WAL profile now works on such a mount for a single
+node.
+
+**Vector ranking uses SQLite's vec1 instead of sqlite-vec.** sqlite-vec only ran
+on the old driver. Semantic search still ranks in one in-database statement over
+the same stored float32 vectors, now with `vec1_cos_distance`; no data migration
+or re-embedding is needed, and distances match sqlite-vec within 1e-6. Full-text
+search is registered explicitly, since it came bundled with sqlite-vec before.
+- vec1 computes in float32, so an embedding whose norm is outside [1e-9, 1e9] is
+  refused with `SEMANTIC_VECTOR_INVALID` on every provider. During a refresh only
+  that record is quarantined; the rest of the batch is stored.
+- Rounding could give a vector that is a scaled copy of the query a distance just
+  below zero, which failed the whole query. Distances in [-1e-6, 0) now count as
+  0.
+- A database that still holds a pre-v0.5.1 `vec0` vector table, or whose current
+  semantic state predates exact vectors, is refused with
+  `SQLITE_VEC_LEGACY_STATE`; migrate it with go/v0.7.1 first. A fresh database
+  can still be created from a migration history that passed through that state.
+See [SEMANTIC.md](./SEMANTIC.md).
+
+**A system escape ends with its transaction operation.** A `SystemTx` taken with
+`SystemEscape` from a transaction-operation handle is refused with "operation
+has ended" once that operation returns, like the handle itself.
+
+**Analytics filters are refused like read filters.** An aggregate, count or
+groupBy `where` that cannot be bound (an unknown field, a text operand on a
+datetime, an unrepresentable datetime) is now `BAD_USER_INPUT`, as on
+`FindMany`, instead of `FORBIDDEN`.
+
+**A policy that fails to build gives the same error with or without the policy
+cache.**
 
 **SQLite on a network filesystem can keep write-ahead logging.**
 `sqlite.OpenNetworkFilesystemWAL` runs WAL with exclusive locking on a single

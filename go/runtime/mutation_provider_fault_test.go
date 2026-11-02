@@ -16,13 +16,6 @@ type moderncSQLiteErrorLayout struct {
 	code int
 }
 
-type ncrucesSQLiteErrorLayout struct {
-	str  string
-	msg  string
-	sql  string
-	code int32
-}
-
 func moderncSQLiteError(t *testing.T, code int) *moderncsqlite.Error {
 	t.Helper()
 	message := fmt.Sprintf("modernc result code %d", code)
@@ -34,12 +27,28 @@ func moderncSQLiteError(t *testing.T, code int) *moderncsqlite.Error {
 	return err
 }
 
-func ncrucesSQLiteError(t *testing.T, code int32) *ncrucsqlite.Error {
+func ncrucesSQLiteError(t *testing.T, code int32) error {
 	t.Helper()
-	layout := &ncrucesSQLiteErrorLayout{str: fmt.Sprintf("ncruces result code %d", code), code: code}
-	err := (*ncrucsqlite.Error)(unsafe.Pointer(layout))
-	if int32(err.ExtendedCode()) != code || err.Code() != ncrucsqlite.ErrorCode(uint8(code)) {
-		t.Fatalf("ncruces/go-sqlite3 error layout changed: code=%d extended=%d", err.Code(), err.ExtendedCode())
+	err := ncrucsqlite.ExtendedErrorCode(code)
+	if int32(err) != code || err.Code() != ncrucsqlite.ErrorCode(uint8(code)) {
+		t.Fatalf("ncruces/go-sqlite3 error code changed: code=%d extended=%d", err.Code(), err)
+	}
+	return err
+}
+
+func ncrucesUniqueViolation(t *testing.T) error {
+	t.Helper()
+	database, err := ncrucsqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.Exec(`CREATE TABLE unique_fault (id INTEGER PRIMARY KEY, name TEXT UNIQUE); INSERT INTO unique_fault (name) VALUES ('a')`); err != nil {
+		t.Fatal(err)
+	}
+	err = database.Exec(`INSERT INTO unique_fault (name) VALUES ('a')`)
+	if _, ok := err.(*ncrucsqlite.Error); !ok {
+		t.Fatalf("ncruces/go-sqlite3 unique violation is %T, want *sqlite3.Error", err)
 	}
 	return err
 }
@@ -60,6 +69,7 @@ func providerFaultCases(t *testing.T) []providerFaultCase {
 		{name: "postgresql triggered data change violation", err: &pgconn.PgError{Code: "27000"}, conflict: true},
 		{name: "postgresql undefined table", err: &pgconn.PgError{Code: "42P01"}},
 		{name: "postgresql not null violation", err: &pgconn.PgError{Code: "23502"}},
+		{name: "ncruces driver unique violation", err: ncrucesUniqueViolation(t), conflict: true, unique: true},
 		{name: "ncruces constraint primarykey", err: ncrucesSQLiteError(t, 1555), conflict: true, unique: true},
 		{name: "ncruces constraint unique", err: ncrucesSQLiteError(t, 2067), conflict: true, unique: true},
 		{name: "ncruces busy", err: ncrucesSQLiteError(t, 5), conflict: true},

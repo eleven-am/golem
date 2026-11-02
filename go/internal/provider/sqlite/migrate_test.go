@@ -131,7 +131,7 @@ func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealed
 	}
 }
 
-func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T) {
+func TestSQLiteIncrementalSemanticIndexCreatesManagedExactVectorsAtomically(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	before := incrementalFixtureSchema(t, false)
@@ -161,8 +161,8 @@ func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T
 		t.Fatal(err)
 	}
 	var version string
-	if err := database.GetContext(ctx, &version, "SELECT vec_version()"); err != nil || version == "" {
-		t.Fatalf("sqlite-vec version=%q error=%v", version, err)
+	if err := database.GetContext(ctx, &version, "SELECT vec1_info()"); err != nil || version == "" {
+		t.Fatalf("vec1 info=%q error=%v", version, err)
 	}
 }
 

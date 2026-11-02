@@ -30,7 +30,7 @@ func TestPublicProviderAPICompilesFromCleanExternalModule(t *testing.T) {
 	}
 	consumerModule := `module example.com/golem-provider-consumer
 
-go 1.25.0
+go 1.26.0
 `
 	if strings.Contains(consumerModule, "replace") {
 		t.Fatal("clean consumer module must not contain a replace directive")
@@ -79,7 +79,7 @@ func compileFrozenProviderAPI(ctx context.Context, database *provider.Database) 
 	// directive in the consumer. Clean tag resolution without go.work is the
 	// separate release-artifact gate in P8 evidence row 22.
 	workspace := filepath.Join(t.TempDir(), "go.work")
-	workspaceSource := fmt.Sprintf("go 1.25.0\n\nuse (\n\t%q\n\t%q\n)\n", moduleRoot, consumer)
+	workspaceSource := fmt.Sprintf("go 1.26.0\n\nuse (\n\t%q\n\t%q\n)\n", moduleRoot, consumer)
 	if err := os.WriteFile(workspace, []byte(workspaceSource), 0o644); err != nil {
 		t.Fatal(err)
 	}

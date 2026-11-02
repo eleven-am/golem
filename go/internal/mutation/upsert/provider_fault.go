@@ -56,9 +56,9 @@ func providerUniqueCollision(err error) bool {
 	if errors.As(err, &postgres) && postgres.Code == postgresUniqueViolation {
 		return true
 	}
-	var ncruces *ncrucsqlite.Error
+	var ncruces ncrucsqlite.ExtendedErrorCode
 	if errors.As(err, &ncruces) {
-		switch ncruces.ExtendedCode() {
+		switch ncruces {
 		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
 			return true
 		}
@@ -84,7 +84,7 @@ func providerInterference(err error) bool {
 			return true
 		}
 	}
-	var ncruces *ncrucsqlite.Error
+	var ncruces ncrucsqlite.ExtendedErrorCode
 	if errors.As(err, &ncruces) {
 		switch ncruces.Code() {
 		case ncrucsqlite.BUSY, ncrucsqlite.LOCKED:

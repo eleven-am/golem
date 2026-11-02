@@ -64,7 +64,7 @@ func TestFreshP7EventModuleCompilesAndFactoriesBuildValidatedScalarAndCompositeV
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/p7events\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => "+moduleRoot+"\n")
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/p7events\n\ngo 1.26\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => "+moduleRoot+"\n")
 	writeFile(t, filepath.Join(modelsDir, "models.go"), generatedSupportSource())
 	writeFile(t, files[0].Path, string(files[0].Source))
 	runGo(t, root, "test", "-mod=mod", "./...")

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestEmbeddedSQLiteVecCosineKNN(t *testing.T) {
+func TestEmbeddedVec1CosineExactScan(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "semantic.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -16,11 +16,11 @@ func TestEmbeddedSQLiteVecCosineKNN(t *testing.T) {
 	t.Cleanup(func() { _ = database.Close() })
 	if version, err := Probe(context.Background(), database); err != nil || version == "" {
 		var raw string
-		rawErr := database.QueryRowContext(context.Background(), "SELECT vec_version()").Scan(&raw)
+		rawErr := database.QueryRowContext(context.Background(), "SELECT vec1_info()").Scan(&raw)
 		t.Fatalf("probe version=%q err=%v raw=%q rawErr=%v", version, err, raw, rawErr)
 	}
 	const dimensions = 3
-	if _, err := database.Exec(`CREATE VIRTUAL TABLE vec_posts USING vec0(record_id INTEGER PRIMARY KEY, embedding float[3] distance_metric=cosine)`); err != nil {
+	if _, err := database.Exec(`CREATE TABLE vec_posts (record_id INTEGER PRIMARY KEY, embedding BLOB NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	rows := []struct {
@@ -37,7 +37,7 @@ func TestEmbeddedSQLiteVecCosineKNN(t *testing.T) {
 		}
 	}
 	query, _ := Serialize([]float32{1, 0, 0}, dimensions)
-	found, err := database.Query(`SELECT record_id, distance FROM vec_posts WHERE embedding MATCH ? AND k = 3 ORDER BY distance`, query)
+	found, err := database.Query(`SELECT record_id, vec1_cos_distance(embedding, ?) AS distance FROM vec_posts ORDER BY distance, record_id LIMIT 3`, query)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,6 +32,7 @@ type deterministicProvider struct {
 	purposes      []embedding.Purpose
 	panicEmbed    bool
 	rejectText    string
+	degenerate    map[string][]float32
 	beforeEmbed   func(*sqlx.DB)
 	database      *sqlx.DB
 }
@@ -143,6 +144,11 @@ func (provider *deterministicProvider) Embed(_ context.Context, inputs []embeddi
 		}
 		if strings.Contains(input.Text(), "beta") {
 			values = []float32{0, 1, 0}
+		}
+		for fragment, degenerate := range provider.degenerate {
+			if strings.Contains(input.Text(), fragment) {
+				values = degenerate
+			}
 		}
 		result[index], _ = embedding.NewVector(values)
 	}
@@ -375,7 +381,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 
 	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
 	var nearest string
-	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" ORDER BY vec_distance_cosine(vec_f32(embedding),vec_f32(?)),record_key LIMIT 1`, query); err != nil {
+	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" ORDER BY vec1_cos_distance(embedding,?),record_key LIMIT 1`, query); err != nil {
 		t.Fatal(err)
 	}
 	if nearest != "golem-semantic-key:v1|5:s:1:a" {
@@ -554,6 +560,71 @@ func TestSQLiteRankBreaksDistanceTiesOnTheRecordKey(t *testing.T) {
 	}
 	if len(ranks) != 2 || ranks[0].Key != "a" || ranks[1].Key != "b" {
 		t.Fatalf("tie page=%#v want the two lowest record keys a,b", ranks)
+	}
+}
+
+func TestSQLiteRankPlacesAScaledCopyOfTheQueryFirstAtDistanceZero(t *testing.T) {
+	fixture := newDrainFixture(t)
+	index, ok := fixture.manager.index("post", "related")
+	if !ok {
+		t.Fatal("semantic index is absent")
+	}
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+	if _, err := fixture.db.Exec(`DELETE FROM "posts"; DELETE FROM "` + drainStateTable + `"; DELETE FROM "` + drainVectorTable + `"`); err != nil {
+		t.Fatal(err)
+	}
+	query := []float32{0.3, 0.7, 0.2}
+	queryVector, err := sqlitevec.Serialize(query, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := map[string][]float32{"scaled": {1.5, 3.5, 1}, "other": {0.7, 0.3, 0.2}}
+	for key, values := range stored {
+		vector, err := sqlitevec.Serialize(values, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,'copy')`, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainStateTable+`" (record_key,source_hash,space_fingerprint,status,updated_at,"id") VALUES (?,x'01',?,'ready',1,?)`, key, fingerprint, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainVectorTable+`" (record_key,embedding) VALUES (?,?)`, key, vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scaled, _ := sqlitevec.Serialize(stored["scaled"], 3)
+	var raw float64
+	if err := fixture.db.Get(&raw, `SELECT vec1_cos_distance(?1,?2)`, scaled, queryVector); err != nil {
+		t.Fatal(err)
+	}
+	if raw >= 0 {
+		t.Fatalf("fixture no longer reproduces a rounding-negative distance: %g", raw)
+	}
+	ranks, err := fixture.manager.rankVector(context.Background(), index, queryVector, candidates, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 2 || ranks[0].Key != "scaled" || ranks[0].Distance != 0 || ranks[1].Key != "other" {
+		t.Fatalf("ranks=%#v want the scaled copy first at distance 0", ranks)
+	}
+}
+
+func TestRoundedCosineDistanceClampsOnlyRoundingNoise(t *testing.T) {
+	for _, test := range []struct {
+		in    float64
+		out   float64
+		valid bool
+	}{
+		{-6.4e-8, 0, true}, {-1e-6, 0, true}, {0, 0, true}, {0.5, 0.5, true}, {2, 2, true}, {2 + 1e-6, 2 + 1e-6, true},
+		{-1.1e-6, 0, false}, {-0.5, 0, false}, {2 + 1.1e-6, 0, false}, {math.NaN(), 0, false}, {math.Inf(1), 0, false}, {math.Inf(-1), 0, false},
+	} {
+		out, valid := roundedCosineDistance(test.in)
+		if valid != test.valid || out != test.out {
+			t.Errorf("roundedCosineDistance(%g)=(%g,%v) want (%g,%v)", test.in, out, valid, test.out, test.valid)
+		}
 	}
 }
 
@@ -1816,5 +1887,93 @@ func TestSemanticSimilaritySourceVectorPreservesSafeCancellationCauses(t *testin
 	_, sealed := classifySourceVector("", private)
 	if errors.Unwrap(sealed) != nil || strings.Contains(sealed.Error(), private.Error()) {
 		t.Fatalf("driver failure was not sealed: %v", sealed)
+	}
+}
+
+func TestVectorNormBoundIsTheSameOnEveryProvider(t *testing.T) {
+	for _, provider := range []ir.Provider{ir.SQLite, ir.PostgreSQL} {
+		manager := &Manager{provider: provider}
+		for _, test := range []struct {
+			scale float32
+			valid bool
+		}{{1, true}, {1.001e-9, true}, {0.999e9, true}, {9e-10, false}, {1.1e9, false}, {1e10, false}} {
+			vector, err := embedding.NewVector([]float32{0.6 * test.scale, 0.8 * test.scale, 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.vectorValue(vector); (err == nil) != test.valid {
+				t.Errorf("%s norm %g error=%v want valid=%v", provider, test.scale, err, test.valid)
+			}
+		}
+	}
+}
+
+var degenerateEmbeddings = map[string][]float32{"zeroed": {0, 0, 0}, "oversized": {1e10, 0, 0}}
+
+func TestSQLiteDrainQuarantinesOnlyTheRecordsWithAnInvalidVector(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	ids := []string{"g0", "zero", "g1", "huge", "g2"}
+	titles := map[string]string{"g0": "gamma g0", "zero": "zeroed z", "g1": "gamma g1", "huge": "oversized h", "g2": "gamma g2"}
+	for _, id := range ids {
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,?)`, id, titles[id]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.markStale(t, ids...)
+	fixture.embedder.degenerate = degenerateEmbeddings
+	seeded := fixture.embedder.calls()
+	pending, err := fixture.manager.Drain(ctx, "post", "related")
+	if err != nil || pending {
+		t.Fatalf("an invalid vector stalled the pass: pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - seeded; got != len(ids) {
+		t.Fatalf("embedded=%d want=%d", got, len(ids))
+	}
+	for _, id := range []string{"zero", "huge"} {
+		status, code, attempts := fixture.failure(t, id)
+		if status != "failed" || code.String != string(embedding.CodeProvider) || attempts != 1 {
+			t.Fatalf("record %q status=%q error_code=%#v attempt_count=%d", id, status, code, attempts)
+		}
+	}
+	for _, id := range []string{"g0", "g1", "g2"} {
+		if status := fixture.status(t, id); status != "ready" {
+			t.Fatalf("record %q status=%q", id, status)
+		}
+	}
+	if fixture.count(t, drainVectorTable) != 5 {
+		t.Fatalf("vectors=%d want=5", fixture.count(t, drainVectorTable))
+	}
+	ranked, err := fixture.manager.QueryOn(ctx, fixture.db, "post", "related", "gamma", textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, rank := range ranked {
+		found[rank.Key] = true
+	}
+	for _, id := range ids {
+		key, _ := semantickey.Encode([]any{id})
+		if want := id != "zero" && id != "huge"; found[key] != want {
+			t.Fatalf("record %q searchable=%t want=%t", id, found[key], want)
+		}
+	}
+	queried := fixture.embedder.calls()
+	if pending, err = fixture.manager.Drain(ctx, "post", "related"); err != nil || pending {
+		t.Fatalf("second pass pending=%t error=%v", pending, err)
+	}
+	if got := fixture.embedder.calls() - queried; got != 0 {
+		t.Fatalf("a quarantined record was sent to the provider again: embedded=%d", got)
+	}
+}
+
+func TestSemanticQueryRefusesAnInvalidQueryVector(t *testing.T) {
+	fixture := newDrainFixture(t)
+	fixture.embedder.degenerate = degenerateEmbeddings
+	for _, query := range []string{"zeroed", "oversized"} {
+		_, err := fixture.manager.QueryOn(context.Background(), fixture.db, "post", "related", query, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+		if err == nil || !strings.Contains(err.Error(), "SEMANTIC_VECTOR_INVALID") {
+			t.Fatalf("query %q error=%v", query, err)
+		}
 	}
 }

@@ -4,13 +4,15 @@ import (
 	"database/sql/driver"
 	"fmt"
 
-	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces"
+	_ "github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	sqlite3 "github.com/ncruces/go-sqlite3"
+	"github.com/ncruces/go-sqlite3/ext/fts5"
 )
 
 const sqliteFunctionFlags = sqlite3.DETERMINISTIC | sqlite3.INNOCUOUS
 
 func init() {
+	sqlite3.AutoExtension(fts5.Register)
 	sqlite3.AutoExtension(registerSQLiteFunctions)
 }
 

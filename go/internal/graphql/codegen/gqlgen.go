@@ -345,7 +345,7 @@ func privateGQLGenModuleSource(modulePath string, resolved moduleResolution) ([]
 	}
 	source := fmt.Sprintf(`module golem.invalid/gqlgentmp
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/99designs/gqlgen %s

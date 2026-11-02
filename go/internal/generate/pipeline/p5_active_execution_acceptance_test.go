@@ -17,7 +17,7 @@ import (
 
 func TestFreshActiveExecutablePreservesComputedFailurePathsAndExactCustomResults(t *testing.T) {
 	root := t.TempDir()
-	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/activep5\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/activep5\n\ngo 1.26\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
 	writePipelineAcceptanceFile(t, root, "app/model.go", `package app
 
 import (

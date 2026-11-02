@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
@@ -19,7 +22,52 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 	if err != nil {
 		return Script{}, err
 	}
+	if err := requireExactSemanticVectors(normalized); err != nil {
+		return Script{}, err
+	}
 	return renderNormalizedInitial(normalized, false)
+}
+
+const legacyVectorTablePrefix = "CREATE VIRTUAL TABLE "
+
+func executableStatement(statement string) string {
+	name, rest, found := strings.Cut(strings.TrimPrefix(statement, legacyVectorTablePrefix), " USING vec0(")
+	if !found || !strings.HasPrefix(statement, legacyVectorTablePrefix) || !strings.HasSuffix(rest, ")") {
+		return statement
+	}
+	return "CREATE TABLE " + name + " (" + quote("record_key") + " TEXT PRIMARY KEY, " + quote("embedding") + " BLOB)"
+}
+
+func refuseLiveLegacyVectorTables(ctx context.Context, database catalogQuerier) error {
+	var tables []string
+	if err := database.SelectContext(ctx, &tables, `SELECT name FROM sqlite_schema WHERE type='table' AND sql LIKE '%USING vec0(%' ORDER BY name`); err != nil {
+		return fmt.Errorf("sqlite legacy vector table check: %w", err)
+	}
+	if len(tables) != 0 {
+		return sqlitevec.LegacyVectorTable(tables[0])
+	}
+	return nil
+}
+
+func requireExactSemanticVectors(schemas ...physical.PhysicalSchema) error {
+	for _, schema := range schemas {
+		if schema.Version == 1 && schema.CanonicalVersion == 1 {
+			continue
+		}
+		for _, extension := range schema.Extensions {
+			if extension.Kind != semanticcontract.IndexKind {
+				continue
+			}
+			descriptor, err := semanticstorage.Decode(extension)
+			if err != nil {
+				return fmt.Errorf("sqlite semantic extension %s: %w", extension.ID, err)
+			}
+			if err := sqlitevec.RequireExactVectors(string(extension.ID), descriptor.StateVersion); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }

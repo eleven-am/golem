@@ -151,7 +151,7 @@ func RunExternalBenchmark(b *testing.B, source []byte, target string, samples in
 	}
 	module := `module p8oracle.consumer
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/eleven-am/golem/go v0.0.0
@@ -168,7 +168,7 @@ require (
 	canonicalRoot := canonicalPath(b, root)
 	canonicalExample := canonicalPath(b, example)
 	workspace := filepath.Join(b.TempDir(), "go.work")
-	work := fmt.Sprintf(`go 1.25.0
+	work := fmt.Sprintf(`go 1.26.0
 
 use (
 	%s
@@ -214,7 +214,7 @@ func runExternalProfiles(t *testing.T, source []byte, execute externalProfileRun
 	}
 	module := `module p8oracle.consumer
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/eleven-am/golem/go v0.0.0
@@ -231,7 +231,7 @@ require (
 	canonicalRoot := canonicalPath(t, root)
 	canonicalExample := canonicalPath(t, example)
 	workspace := filepath.Join(t.TempDir(), "go.work")
-	work := fmt.Sprintf(`go 1.25.0
+	work := fmt.Sprintf(`go 1.26.0
 
 use (
 	%s

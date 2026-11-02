@@ -70,7 +70,7 @@ func sqliteOracleCandidates() Candidates {
 func exactSQLiteOraclePage(t *testing.T, fixture drainFixture, vector []byte, exclude string, take int) []Rank {
 	t.Helper()
 	index, _ := fixture.manager.index("post", "related")
-	statement := `SELECT golem_ov.record_key,vec_distance_cosine(vec_f32(golem_ov.embedding),vec_f32(?1)) AS distance,golem_os."id"` +
+	statement := `SELECT golem_ov.record_key,vec1_cos_distance(golem_ov.embedding,?1) AS distance,golem_os."id"` +
 		` FROM "` + drainVectorTable + `" AS golem_ov` +
 		` JOIN "` + drainStateTable + `" AS golem_os ON golem_os.record_key=golem_ov.record_key` +
 		` JOIN "posts" AS golem_od ON golem_od."id"=golem_os."id"` +

@@ -46,7 +46,7 @@ func TestQuickstartFromEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestGuideApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestQueueApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestSemanticApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestFullTextApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestRenderApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := "module example.com/site\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	module := "module example.com/site\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
 	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}

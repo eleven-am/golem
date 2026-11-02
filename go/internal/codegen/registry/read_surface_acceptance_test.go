@@ -642,7 +642,7 @@ func providerInput(t *testing.T, schema physical.PhysicalSchema) ProviderInput {
 func runFreshReadSurfaceModule(t *testing.T, files map[string]string, wantFailure bool, diagnostics []string) {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.26\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
 	writeRegistryTestFile(t, filepath.Join(root, "go.mod"), module)
 	for path, source := range files {
 		writeRegistryTestFile(t, filepath.Join(root, path), source)

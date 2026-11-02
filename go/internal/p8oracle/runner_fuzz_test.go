@@ -20,7 +20,7 @@ func TestExternalFuzzRunsEverySeedAndMutationsDespiteCachedCorpus(t *testing.T) 
 	)
 	module := "p8oracle.fuzzprobe" + hex.EncodeToString(randomTestBytes(t))
 	directory := t.TempDir()
-	writeTestFile(t, filepath.Join(directory, "go.mod"), "module "+module+"\n\ngo 1.25.0\n")
+	writeTestFile(t, filepath.Join(directory, "go.mod"), "module "+module+"\n\ngo 1.26.0\n")
 	writeTestFile(t, filepath.Join(directory, "probe_test.go"), `package probe
 
 import "testing"

@@ -345,11 +345,11 @@ func TestPrivateGQLGenResolutionUsesRequestWorkspaceEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	consumer := t.TempDir()
-	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte("module example.test/consumer\n\ngo 1.25.0\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte("module example.test/consumer\n\ngo 1.26.0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(t.TempDir(), "go.work")
-	work := "go 1.25.0\n\nuse (\n\t" + filepath.ToSlash(framework) + "\n\t" + filepath.ToSlash(consumer) + "\n)\n"
+	work := "go 1.26.0\n\nuse (\n\t" + filepath.ToSlash(framework) + "\n\t" + filepath.ToSlash(consumer) + "\n)\n"
 	if err := os.WriteFile(workspace, []byte(work), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -685,14 +685,14 @@ func TestEmitDerivesPublicGraphQLImportFromConfiguredGolemModule(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(fork, "graphql"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fork, "go.mod"), []byte("module example.test/golem\n\ngo 1.25.0\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(fork, "go.mod"), []byte("module example.test/golem\n\ngo 1.26.0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(fork, "graphql", "graphql.go"), []byte("package graphql\ntype PreparedObject map[string]any\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	consumer := t.TempDir()
-	consumerModule := "module example.test/app\n\ngo 1.25.0\n\nrequire example.test/golem v0.0.0\nreplace example.test/golem => " + filepath.ToSlash(fork) + "\n"
+	consumerModule := "module example.test/app\n\ngo 1.26.0\n\nrequire example.test/golem v0.0.0\nreplace example.test/golem => " + filepath.ToSlash(fork) + "\n"
 	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte(consumerModule), 0o600); err != nil {
 		t.Fatal(err)
 	}
