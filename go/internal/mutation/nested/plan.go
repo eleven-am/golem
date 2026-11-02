@@ -342,7 +342,7 @@ func (builder *builder) decorateWith(node mutationir.NodeInput, position *policy
 	if builder.request.Stance == mutationir.System {
 		return builder.finalizeImages(node)
 	}
-	policy, ok := builder.request.Policies.Policy(node.Model)
+	_, ok := builder.request.Policies.Policy(node.Model)
 	if !ok {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested model policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, node.Model))
 	}
@@ -350,7 +350,7 @@ func (builder *builder) decorateWith(node mutationir.NodeInput, position *policy
 	if readReach {
 		action = policyir.ActionRead
 	}
-	granted, err := mutationplan.RowConstraint(builder.request.Policies, policy, action, node.Model)
+	granted, err := mutationplan.RowConstraint(builder.request.Policies, action, node.Model)
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint could not resolve", err)
 	}
@@ -362,7 +362,7 @@ func (builder *builder) decorateWith(node mutationir.NodeInput, position *policy
 			return mutationir.NodeInput{}, err
 		}
 	}
-	row, err := mutationplan.RowReach(builder.request.Policies, node.Model, action, granted, builder.request.ReadRelationDepth)
+	row, err := mutationplan.RowReach(builder.request.Policies, node.Model, action, builder.request.ReadRelationDepth)
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint read reach could not resolve", err)
 	}
@@ -392,13 +392,13 @@ func (builder *builder) decorateWith(node mutationir.NodeInput, position *policy
 		if operation.HookAuthored() {
 			continue
 		}
-		condition, conditionErr := mutationplan.FieldCondition(builder.request.Policies, policy, action, node.Model, operation.FieldID())
+		condition, conditionErr := mutationplan.FieldCondition(builder.request.Policies, action, node.Model, operation.FieldID())
 		fieldID := operation.FieldID()
 		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &fieldID)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition could not resolve", conditionErr)
 		}
-		condition, conditionErr = mutationplan.FieldReach(builder.request.Policies, node.Model, action, fieldID, condition, builder.request.ReadRelationDepth)
+		condition, conditionErr = mutationplan.FieldReach(builder.request.Policies, node.Model, action, fieldID, builder.request.ReadRelationDepth)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition read reach could not resolve", conditionErr)
 		}
@@ -447,18 +447,18 @@ func (builder *builder) decorateOwnedFields(node mutationir.NodeInput, fields []
 	if builder.request.Stance == mutationir.System || len(fields) == 0 {
 		return node, nil
 	}
-	policy, ok := builder.request.Policies.Policy(node.Model)
+	_, ok := builder.request.Policies.Policy(node.Model)
 	if !ok {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), relationField, "runtime-owned field policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, node.Model))
 	}
 	for _, field := range fields {
-		condition, conditionErr := mutationplan.FieldCondition(builder.request.Policies, policy, action, node.Model, field)
+		condition, conditionErr := mutationplan.FieldCondition(builder.request.Policies, action, node.Model, field)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field condition could not resolve", conditionErr)
 		}
 		recorded := field
 		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &recorded)
-		condition, conditionErr = mutationplan.FieldReach(builder.request.Policies, node.Model, action, field, condition, builder.request.ReadRelationDepth)
+		condition, conditionErr = mutationplan.FieldReach(builder.request.Policies, node.Model, action, field, builder.request.ReadRelationDepth)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field condition read reach could not resolve", conditionErr)
 		}
@@ -544,7 +544,7 @@ func (builder *builder) classifyOne(condition policyir.Condition, fields []polic
 	if !ok {
 		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position model policy is absent", mutationplan.PolicyAbsence(builder.request.Policies, condition.ModelID()))
 	}
-	row, err := mutationplan.RowConstraint(builder.request.Policies, policy, selectingAction, condition.ModelID())
+	row, err := mutationplan.RowConstraint(builder.request.Policies, selectingAction, condition.ModelID())
 	if err != nil {
 		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position action constraint could not resolve", err)
 	}
@@ -554,7 +554,7 @@ func (builder *builder) classifyOne(condition policyir.Condition, fields []polic
 			return err
 		}
 	}
-	complete, err := mutationplan.ExistingActionConstraint(builder.request.Policies, condition.ModelID(), selectingAction, row, fields, builder.request.ReadRelationDepth, condition)
+	complete, err := mutationplan.ExistingActionConstraint(builder.request.Policies, condition.ModelID(), selectingAction, fields, builder.request.ReadRelationDepth, condition)
 	if err != nil {
 		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position constraint could not combine", err)
 	}
@@ -695,9 +695,9 @@ func (builder *builder) reach(model policyir.ModelID, condition policyir.Conditi
 
 func (builder *builder) existingConstraint(model policyir.ModelID, action policyir.Action, row policyir.Condition, position *policyir.Condition, fields []policyir.FieldID) (policyir.Condition, error) {
 	if position == nil {
-		return mutationplan.ExistingActionConstraint(builder.request.Policies, model, action, row, nil, builder.request.ReadRelationDepth)
+		return mutationplan.ExistingActionConstraint(builder.request.Policies, model, action, nil, builder.request.ReadRelationDepth)
 	}
-	return mutationplan.ExistingActionConstraint(builder.request.Policies, model, action, row, fields, builder.request.ReadRelationDepth, *position)
+	return mutationplan.ExistingActionConstraint(builder.request.Policies, model, action, fields, builder.request.ReadRelationDepth, *position)
 }
 
 func positionFields(position *policyir.Condition) []policyir.FieldID {

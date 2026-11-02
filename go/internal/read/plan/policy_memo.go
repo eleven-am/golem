@@ -29,30 +29,44 @@ func ReachDepth(maxDepth int) int {
 	return maxDepth
 }
 
-func RowConstraint(policies PolicySet, policy policyir.Policy, action policyir.Action, model policyir.ModelID) (policyir.Condition, error) {
+func RowConstraint(policies PolicySet, action policyir.Action, model policyir.ModelID) (policyir.Condition, error) {
 	key := policyruntime.MemoKey{Kind: policyruntime.MemoRowConstraint, Model: model, Action: action}
 	return Memoize(policies, key, func(source PolicySet) (policyir.Condition, error) {
-		resolved, ok := source.Policy(model)
-		if !ok {
-			return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", nil)
-		}
-		return resolve.RowConstraint(resolved, action, model)
+		return rowConstraint(source, action, model)
 	}, func() (policyir.Condition, error) {
-		return resolve.RowConstraint(policy, action, model)
+		return rowConstraint(policies, action, model)
 	})
 }
 
-func FieldCondition(policies PolicySet, policy policyir.Policy, action policyir.Action, model policyir.ModelID, field policyir.FieldID) (policyir.Condition, error) {
+func FieldCondition(policies PolicySet, action policyir.Action, model policyir.ModelID, field policyir.FieldID) (policyir.Condition, error) {
 	key := policyruntime.MemoKey{Kind: policyruntime.MemoFieldCondition, Model: model, Action: action, Field: field}
 	return Memoize(policies, key, func(source PolicySet) (policyir.Condition, error) {
-		resolved, ok := source.Policy(model)
-		if !ok {
-			return policyir.Condition{}, fail(CodePolicy, model, field, "model policy is absent", nil)
-		}
-		return resolve.FieldCondition(resolved, action, model, field)
+		return fieldCondition(source, action, model, field)
 	}, func() (policyir.Condition, error) {
-		return resolve.FieldCondition(policy, action, model, field)
+		return fieldCondition(policies, action, model, field)
 	})
+}
+
+func rowConstraint(policies PolicySet, action policyir.Action, model policyir.ModelID) (policyir.Condition, error) {
+	if policies == nil {
+		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is unavailable", nil)
+	}
+	policy, ok := policies.Policy(model)
+	if !ok {
+		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", policyAbsence(policies, model))
+	}
+	return resolve.RowConstraint(policy, action, model)
+}
+
+func fieldCondition(policies PolicySet, action policyir.Action, model policyir.ModelID, field policyir.FieldID) (policyir.Condition, error) {
+	if policies == nil {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "model policy is unavailable", nil)
+	}
+	policy, ok := policies.Policy(model)
+	if !ok {
+		return policyir.Condition{}, fail(CodePolicy, model, field, "model policy is absent", policyAbsence(policies, model))
+	}
+	return resolve.FieldCondition(policy, action, model, field)
 }
 
 func (expander *policyExpander) entry(model policyir.ModelID, depth int) (policyir.Condition, error) {

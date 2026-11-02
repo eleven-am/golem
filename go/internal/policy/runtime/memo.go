@@ -113,10 +113,11 @@ func (set *Set) Memoized(key MemoKey, compute func(Source) (ir.Condition, error)
 		}
 		source := &memoSource{set: set}
 		condition, err := compute(source)
-		if err == nil {
-			table.store(key, memoEntry{condition: condition, touched: source.touched})
+		if err != nil {
+			return ir.Condition{}, false, nil
 		}
-		return condition, true, err
+		table.store(key, memoEntry{condition: condition, touched: source.touched})
+		return condition, true, nil
 	case set.root == set.memo.owner && set.scope != nil:
 		value, ok := table.entries.Load(key)
 		if !ok {
