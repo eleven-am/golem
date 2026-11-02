@@ -34,6 +34,15 @@ func (failure *FieldAuthorizationError) Error() string {
 func (failure *FieldAuthorizationError) FieldID() golem.FieldID { return failure.field }
 func (failure *FieldAuthorizationError) LogicalName() string    { return failure.logicalName }
 
+type WhereError struct {
+	cause error
+}
+
+func (failure *WhereError) Error() string {
+	return "P6_ANALYTICS_PLAN_WHERE: " + failure.cause.Error()
+}
+func (failure *WhereError) Unwrap() error { return failure.cause }
+
 type Plan struct {
 	request  golem.FrozenAnalyticsRequest
 	read     readplan.Plan
@@ -73,7 +82,7 @@ func build(request golem.FrozenAnalyticsRequest, registry *schema.Registry, prov
 	if frozen, present := request.Where(); present {
 		where, err := policybind.Predicate(frozen, registry, providers)
 		if err != nil {
-			return Plan{}, fmt.Errorf("P6_ANALYTICS_PLAN_WHERE: %w", err)
+			return Plan{}, &WhereError{cause: err}
 		}
 		input.Where = &where
 	}

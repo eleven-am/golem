@@ -3,6 +3,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"sync"
@@ -35,9 +36,22 @@ func (policies plainPolicies) Policy(model policyir.ModelID) (policyir.Policy, b
 	return policies.set.Policy(model)
 }
 
+func (policies plainPolicies) PolicyError(model policyir.ModelID) error {
+	return policies.set.PolicyError(model)
+}
+
 var memoActions = []policyir.Action{policyir.ActionRead, policyir.ActionCreate, policyir.ActionUpdate, policyir.ActionDelete}
 
 func memoSet(t *testing.T, handles writeReachHandles, post func(*golem.Rules[reachPost]), user func(*golem.Rules[reachUser])) (*policyruntime.Set, golem.OperationID) {
+	t.Helper()
+	return memoSetWith(t, handles, post, func(memoActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[reachUser]()
+		user(rules)
+		return rules.Freeze(handles.fixture.User)
+	})
+}
+
+func memoSetWith(t *testing.T, handles writeReachHandles, post func(*golem.Rules[reachPost]), user func(memoActor) (golem.FrozenPolicy, error)) (*policyruntime.Set, golem.OperationID) {
 	t.Helper()
 	fixture := handles.fixture
 	generation := fixture.Registry.GenerationDigest()
@@ -46,11 +60,7 @@ func memoSet(t *testing.T, handles writeReachHandles, post func(*golem.Rules[rea
 		post(rules)
 		return rules.Freeze(fixture.Post)
 	})
-	userBinding := golem.GeneratedPolicyBinding[memoActor, reachUser](fixture.User, func(memoActor) (golem.FrozenPolicy, error) {
-		rules := golem.NewRules[reachUser]()
-		user(rules)
-		return rules.Freeze(fixture.User)
-	})
+	userBinding := golem.GeneratedPolicyBinding[memoActor, reachUser](fixture.User, user)
 	application, err := golem.GeneratedApplicationBindings(generation, golem.GeneratedStampedPackageBindings(generation, []golem.PolicyBinding[memoActor]{postBinding, userBinding}, nil))
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +175,7 @@ type memoResult struct {
 	name      string
 	condition policyir.Condition
 	err       error
+	raised    bool
 }
 
 func memoResults(t *testing.T, handles writeReachHandles, policies PolicySet) []memoResult {
@@ -175,39 +186,46 @@ func memoResults(t *testing.T, handles writeReachHandles, policies PolicySet) []
 		policyir.ModelID(fixture.User): {policyir.FieldID(fixture.UserID), policyir.FieldID(fixture.UserName)},
 	}
 	var results []memoResult
-	record := func(name string, condition policyir.Condition, err error) {
-		results = append(results, memoResult{name: name, condition: condition, err: err})
+	record := func(name string, run func() (policyir.Condition, error)) {
+		result := memoResult{name: name}
+		func() {
+			defer func() {
+				if recover() != nil {
+					result.raised = true
+				}
+			}()
+			result.condition, result.err = run()
+		}()
+		results = append(results, result)
 	}
 	for _, model := range []policyir.ModelID{policyir.ModelID(fixture.Post), policyir.ModelID(fixture.User)} {
-		policy, ok := policies.Policy(model)
-		if !ok {
-			t.Fatalf("policy for %x is absent", model)
-		}
 		for _, depth := range []int{0, 1, 4} {
-			reach, err := readplan.ReadReach(policies, model, depth)
-			record(fmt.Sprintf("read-reach/%x/%d", model[:2], depth), reach, err)
+			record(fmt.Sprintf("read-reach/%x/%d", model[:2], depth), func() (policyir.Condition, error) {
+				return readplan.ReadReach(policies, model, depth)
+			})
 		}
 		for _, action := range memoActions {
-			row, err := RowConstraint(policies, policy, action, model)
-			record(fmt.Sprintf("row/%x/%d", model[:2], action), row, err)
-			if err == nil {
-				for _, depth := range []int{0, 2} {
-					reached, reachErr := RowReach(policies, model, action, row, depth)
-					record(fmt.Sprintf("row-reach/%x/%d/%d", model[:2], action, depth), reached, reachErr)
-				}
+			record(fmt.Sprintf("row/%x/%d", model[:2], action), func() (policyir.Condition, error) {
+				return RowConstraint(policies, action, model)
+			})
+			for _, depth := range []int{0, 2} {
+				record(fmt.Sprintf("row-reach/%x/%d/%d", model[:2], action, depth), func() (policyir.Condition, error) {
+					return RowReach(policies, model, action, depth)
+				})
 			}
 			for _, field := range fields[model] {
-				condition, err := FieldCondition(policies, policy, action, model, field)
-				record(fmt.Sprintf("field/%x/%d/%x", model[:2], action, field[:2]), condition, err)
-				if err == nil {
-					reached, reachErr := FieldReach(policies, model, action, field, condition, 0)
-					record(fmt.Sprintf("field-reach/%x/%d/%x", model[:2], action, field[:2]), reached, reachErr)
-				}
+				record(fmt.Sprintf("field/%x/%d/%x", model[:2], action, field[:2]), func() (policyir.Condition, error) {
+					return FieldCondition(policies, action, model, field)
+				})
+				record(fmt.Sprintf("field-reach/%x/%d/%x", model[:2], action, field[:2]), func() (policyir.Condition, error) {
+					return FieldReach(policies, model, action, field, 0)
+				})
 			}
 		}
 		for _, field := range fields[model] {
-			reach, err := readplan.ReadFieldReach(policies, model, field, 0)
-			record(fmt.Sprintf("read-field-reach/%x/%x", model[:2], field[:2]), reach, err)
+			record(fmt.Sprintf("read-field-reach/%x/%x", model[:2], field[:2]), func() (policyir.Condition, error) {
+				return readplan.ReadFieldReach(policies, model, field, 0)
+			})
 		}
 	}
 	return results
@@ -222,12 +240,25 @@ func requireSameResults(t *testing.T, label string, got, want []memoResult) {
 		if got[index].name != want[index].name {
 			t.Fatalf("%s: result %d is %s want %s", label, index, got[index].name, want[index].name)
 		}
+		if got[index].raised != want[index].raised {
+			t.Fatalf("%s %s: raised %t want %t", label, want[index].name, got[index].raised, want[index].raised)
+		}
+		if want[index].raised {
+			continue
+		}
 		if (got[index].err == nil) != (want[index].err == nil) {
 			t.Fatalf("%s %s: error %v want %v", label, want[index].name, got[index].err, want[index].err)
 		}
 		if want[index].err != nil {
 			if got[index].err.Error() != want[index].err.Error() {
 				t.Fatalf("%s %s: error %q want %q", label, want[index].name, got[index].err, want[index].err)
+			}
+			if errors.Is(got[index].err, policyruntime.ErrPolicyUnavailable) != errors.Is(want[index].err, policyruntime.ErrPolicyUnavailable) {
+				t.Fatalf("%s %s: ErrPolicyUnavailable match differs: %v want %v", label, want[index].name, got[index].err, want[index].err)
+			}
+			var gotPlan, wantPlan *readplan.Error
+			if errors.As(got[index].err, &gotPlan) != errors.As(want[index].err, &wantPlan) {
+				t.Fatalf("%s %s: planner error type differs: %v want %v", label, want[index].name, got[index].err, want[index].err)
 			}
 			continue
 		}
@@ -294,27 +325,21 @@ func TestScopedViewNeverReadsBaseMemoizedWriteReachForGrantedModel(t *testing.T)
 	}, func(rules *golem.Rules[reachUser]) {
 		rules.CanRead(golem.All[reachUser]())
 	})
-	basePolicy, _ := set.Policy(post)
-	baseRow, err := RowConstraint(set, basePolicy, policyir.ActionUpdate, post)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseReach, err := RowReach(set, post, policyir.ActionUpdate, baseRow, 0)
+	baseReach, err := RowReach(set, post, policyir.ActionUpdate, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scoped, release := set.Within(operation)
 	defer release()
 	leased, lease := scoped.Lease()
-	scopedPolicy, ok := leased.Policy(post)
-	if !ok {
+	if _, ok := leased.Policy(post); !ok {
 		t.Fatal("scoped policy is absent")
 	}
-	scopedRow, err := RowConstraint(leased, scopedPolicy, policyir.ActionUpdate, post)
+	scopedRow, err := RowConstraint(leased, policyir.ActionUpdate, post)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scopedReach, err := RowReach(leased, post, policyir.ActionUpdate, scopedRow, 0)
+	scopedReach, err := RowReach(leased, post, policyir.ActionUpdate, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,5 +390,103 @@ func TestScopedViewSharesBaseMemoForModelsWithoutGrants(t *testing.T) {
 	RecordGrant(leased, user, policyir.ActionRead, nil)
 	if lease.Used() {
 		t.Fatal("reading an ungranted model marked the operation lease used")
+	}
+}
+
+func unavailableMemoSet(t *testing.T, handles writeReachHandles, panics bool) (*policyruntime.Set, golem.OperationID) {
+	t.Helper()
+	return memoSetWith(t, handles, func(rules *golem.Rules[reachPost]) {
+		rules.CanRead(handles.writer.Is(handles.userName.Eq("visible")))
+		rules.CanUpdate(handles.title.Eq("own"))
+		rules.CanDelete(handles.writer.Is(golem.All[reachUser]()))
+		golem.Within(rules, memoGrantOperation).CanUpdate(handles.title.Eq("granted"))
+		golem.Within(rules, memoGrantOperation).CanUpdateFields(handles.writer.Is(golem.All[reachUser]()), handles.title)
+	}, func(memoActor) (golem.FrozenPolicy, error) {
+		if panics {
+			panic("user factory exploded")
+		}
+		return golem.FrozenPolicy{}, errors.New("user factory refused")
+	})
+}
+
+func requireRaisedOnce(t *testing.T, label string, runs ...[]memoResult) {
+	t.Helper()
+	raised := 0
+	for _, results := range runs {
+		for _, result := range results {
+			if result.raised {
+				raised++
+			}
+		}
+	}
+	if raised != 1 {
+		t.Fatalf("%s: factory panic raised %d times want 1", label, raised)
+	}
+}
+
+func requireUnavailable(t *testing.T, label string, results []memoResult) {
+	t.Helper()
+	for _, result := range results {
+		if errors.Is(result.err, policyruntime.ErrPolicyUnavailable) {
+			return
+		}
+	}
+	t.Fatalf("%s: no result reported ErrPolicyUnavailable", label)
+}
+
+func TestPolicyMemoMatchesUncachedErrorsForFailingFactory(t *testing.T) {
+	handles := newWriteReachHandles(t)
+	set, operation := unavailableMemoSet(t, handles, false)
+	want := memoResults(t, handles, plainPolicies{set: set})
+	requireUnavailable(t, "uncached", want)
+	requireSameResults(t, "miss", memoResults(t, handles, set), want)
+	requireSameResults(t, "hit", memoResults(t, handles, set), want)
+	scoped, release := set.Within(operation)
+	leased, _ := scoped.Lease()
+	scopedWant := memoResults(t, handles, plainPolicies{set: leased})
+	requireSameResults(t, "scoped", memoResults(t, handles, leased), scopedWant)
+	release()
+	requireSameResults(t, "released", memoResults(t, handles, leased), want)
+}
+
+func TestPolicyMemoMatchesUncachedErrorsForPanickingFactory(t *testing.T) {
+	handles := newWriteReachHandles(t)
+	views := func(set *policyruntime.Set, operation golem.OperationID) (*policyruntime.Set, *policyruntime.Set, func()) {
+		scoped, release := set.Within(operation)
+		leased, _ := scoped.Lease()
+		return leased, scoped, release
+	}
+	for _, first := range []string{"root", "scoped", "released"} {
+		memoized, memoOperation := unavailableMemoSet(t, handles, true)
+		uncached, uncachedOperation := unavailableMemoSet(t, handles, true)
+		memoLeased, memoScoped, memoRelease := views(memoized, memoOperation)
+		plainLeased, plainScoped, plainRelease := views(uncached, uncachedOperation)
+		var memoRuns, plainRuns [][]memoResult
+		run := func(label string, memo, direct *policyruntime.Set) {
+			got := memoResults(t, handles, memo)
+			want := memoResults(t, handles, plainPolicies{set: direct})
+			requireSameResults(t, first+" first/"+label, got, want)
+			memoRuns, plainRuns = append(memoRuns, got), append(plainRuns, want)
+		}
+		switch first {
+		case "root":
+			run("root", memoized, uncached)
+			run("root again", memoized, uncached)
+			run("scoped", memoLeased, plainLeased)
+		case "scoped":
+			run("scoped", memoLeased, plainLeased)
+			run("root", memoized, uncached)
+		case "released":
+			memoRelease()
+			plainRelease()
+			run("released", memoScoped, plainScoped)
+			run("root", memoized, uncached)
+		}
+		memoRelease()
+		plainRelease()
+		run("released after", memoScoped, plainScoped)
+		requireRaisedOnce(t, first+" first memoized", memoRuns...)
+		requireRaisedOnce(t, first+" first uncached", plainRuns...)
+		requireUnavailable(t, first+" first", memoRuns[len(memoRuns)-1])
 	}
 }

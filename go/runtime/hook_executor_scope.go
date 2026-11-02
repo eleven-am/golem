@@ -156,7 +156,7 @@ func (transaction *SystemTx[P, A]) binding() transactionCall {
 	if transaction == nil {
 		return transactionCall{}
 	}
-	return transactionCall{binding: transaction.system.executor}
+	return transactionCall{binding: transaction.system.executor, scope: transaction.scope}
 }
 
 type foundRowResult[M any] struct {

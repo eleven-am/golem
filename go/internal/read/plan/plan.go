@@ -327,7 +327,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		if !ok {
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "model policy is absent", policyAbsence(policies, model))
 		}
-		rawRow, err = RowConstraint(policies, policy, policyir.ActionRead, model)
+		rawRow, err = RowConstraint(policies, policyir.ActionRead, model)
 	}
 	if err != nil {
 		return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "read row constraint could not be resolved", err)

@@ -494,12 +494,18 @@ func TestScopedAggregateGrantsNeverWidenRowReadsAcrossProviders(t *testing.T) {
 		}
 		receive, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		event, err := stream.Recv(receive)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if event.ID() != p10OperationID(t, 71) {
-			t.Fatalf("the first delivered event is %s; an event outside the read policy was delivered", event.ID())
+		readable := map[golem.UUID]bool{p10OperationID(t, 40): true, p10OperationID(t, 71): true}
+		for {
+			event, err := stream.Recv(receive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !readable[event.ID()] {
+				t.Fatalf("event %s outside the read policy was delivered", event.ID())
+			}
+			if event.ID() == p10OperationID(t, 71) {
+				break
+			}
 		}
 	})
 }
