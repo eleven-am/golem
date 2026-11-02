@@ -103,7 +103,7 @@ func TestMemoNeverStoresFailedLazyBuild(t *testing.T) {
 	key := MemoKey{Kind: MemoRowConstraint, Model: user, Action: policyir.ActionRead}
 	for attempt := range 2 {
 		_, served, err := set.Memoized(key, memoRowCompute(user, policyir.ActionRead, &calls))
-		if !served || err == nil {
+		if served || err != nil {
 			t.Fatalf("attempt %d: failed build answered served=%t err=%v", attempt, served, err)
 		}
 	}
@@ -132,8 +132,8 @@ func TestMemoNeverStoresPanickingLazyBuild(t *testing.T) {
 		t.Fatal("panicking build was memoized")
 	}
 	_, served, err := set.Memoized(key, memoRowCompute(user, policyir.ActionRead, &calls))
-	if !served || err == nil || set.memo.conditions[MemoRowConstraint-1].size() != 0 {
-		t.Fatalf("panicked build answered as success: served=%t err=%v", served, err)
+	if served || err != nil || set.memo.conditions[MemoRowConstraint-1].size() != 0 {
+		t.Fatalf("panicked build answered as served: served=%t err=%v", served, err)
 	}
 }
 
@@ -279,5 +279,80 @@ func TestMemoSourceReportsPolicyUnavailable(t *testing.T) {
 	})
 	if !errors.Is(cause, ErrPolicyUnavailable) {
 		t.Fatalf("memo source policy error = %v, want ErrPolicyUnavailable", cause)
+	}
+}
+
+func memoUnavailableSet(t *testing.T, panics bool) (*Set, policyir.ModelID) {
+	t.Helper()
+	return memoUserSet(t, func(runtimeFixture) func(runtimeActor) (golem.FrozenPolicy, error) {
+		return func(runtimeActor) (golem.FrozenPolicy, error) {
+			if panics {
+				panic("factory exploded")
+			}
+			return golem.FrozenPolicy{}, errors.New("factory refused")
+		}
+	})
+}
+
+func memoUnavailableCompute(model policyir.ModelID, calls *atomic.Int64) func(Source) (policyir.Condition, error) {
+	return func(source Source) (policyir.Condition, error) {
+		calls.Add(1)
+		if _, ok := source.Policy(model); !ok {
+			return policyir.Condition{}, source.(interface{ PolicyError(policyir.ModelID) error }).PolicyError(model)
+		}
+		return policyir.Condition{}, nil
+	}
+}
+
+func memoServeCatching(set *Set, key MemoKey, compute func(Source) (policyir.Condition, error)) (served bool, err error, raised bool) {
+	defer func() {
+		if recover() != nil {
+			raised = true
+		}
+	}()
+	_, served, err = set.Memoized(key, compute)
+	return served, err, raised
+}
+
+func TestMemoComputeErrorsAreNeverServed(t *testing.T) {
+	for _, panics := range []bool{false, true} {
+		set, user := memoUnavailableSet(t, panics)
+		key := MemoKey{Kind: MemoRowConstraint, Model: user, Action: policyir.ActionRead}
+		view, release := set.Within(golem.OperationID{})
+		leased, _ := view.Lease()
+		var calls atomic.Int64
+		raises := 0
+		for _, step := range []struct {
+			name string
+			set  *Set
+		}{{"root", set}, {"root again", set}, {"within", view}, {"leased", leased}, {"released", view}} {
+			if step.name == "released" {
+				release()
+			}
+			served, err, raised := memoServeCatching(step.set, key, memoUnavailableCompute(user, &calls))
+			if raised {
+				raises++
+				continue
+			}
+			if served || err != nil {
+				t.Fatalf("panics=%t %s: unavailable policy served=%t err=%v", panics, step.name, served, err)
+			}
+		}
+		if size := set.memo.conditions[MemoRowConstraint-1].size(); size != 0 {
+			t.Fatalf("panics=%t: failed compute was stored (%d)", panics, size)
+		}
+		want := 0
+		if panics {
+			want = 1
+		}
+		if raises != want {
+			t.Fatalf("panics=%t: factory panic raised %d times want %d", panics, raises, want)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("panics=%t: views computed through the memo: calls=%d want 2", panics, calls.Load())
+		}
+		if err := set.PolicyError(user); !errors.Is(err, ErrPolicyUnavailable) {
+			t.Fatalf("panics=%t: policy error %v is not ErrPolicyUnavailable", panics, err)
+		}
 	}
 }
