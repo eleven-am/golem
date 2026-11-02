@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.7.1
+go get github.com/eleven-am/golem/go@v0.7.2
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -13,6 +13,21 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
 
 ---
+
+## go/v0.7.2
+
+Unreleased.
+
+**SQLite on a network filesystem can keep write-ahead logging.**
+`sqlite.OpenNetworkFilesystemWAL` runs WAL with exclusive locking on a single
+connection, so SQLite keeps the WAL index in process memory and never creates
+the `-shm` file that NFS mounts cannot grow. Every connection sets exclusive
+locking before its first database access, and the profile verifies WAL,
+exclusive locking and `synchronous=FULL`. While the handle is open no other
+process can open the database. A non-empty `-shm` file next to the database is
+refused, and `locking_mode` is now a provider-owned pragma that no profile
+accepts from the data source name. `CheckpointForBackup` truncates and verifies
+the WAL for this profile. See [SQLite durability profiles](./SQLITE_DURABILITY.md).
 
 ## go/v0.7.1
 

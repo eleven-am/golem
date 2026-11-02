@@ -2,8 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +27,7 @@ type DurabilityProfile uint8
 const (
 	DurabilityWAL DurabilityProfile = iota
 	DurabilityNetworkFilesystem
+	DurabilityNetworkFilesystemWAL
 )
 
 const (
@@ -31,6 +35,8 @@ const (
 	journalModeDelete = "delete"
 	journalModeMemory = "memory"
 	synchronousFull   = 2
+
+	lockingModeExclusive = "exclusive"
 )
 
 func (provider *Provider) open(ctx context.Context, dataSourceName string, durability DurabilityProfile) (*sqlx.DB, CapabilityReport, error) {
@@ -38,12 +44,73 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string, durab
 	if err != nil {
 		return nil, CapabilityReport{}, err
 	}
-	standard, err := driver.Open(configured, initializeProviderConnection)
+	standard, err := driver.Open(configured, connectionInitializerForProfile(durability))
 	if err != nil {
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
 	}
 	database := sqlx.NewDb(standard, "sqlite3")
 	return provider.verifyOpenedDatabaseForProfile(ctx, database, durability)
+}
+
+func connectionInitializerForProfile(durability DurabilityProfile) func(*sqlite3.Conn) error {
+	if durability != DurabilityNetworkFilesystemWAL {
+		return initializeProviderConnection
+	}
+	return initializeExclusiveWALConnection
+}
+
+func initializeExclusiveWALConnection(connection *sqlite3.Conn) error {
+	if connection == nil {
+		return fmt.Errorf("sqlite open: provider connection initialization received no connection")
+	}
+	mode, err := connectionLockingMode(connection)
+	if err != nil {
+		return err
+	}
+	if mode != lockingModeExclusive {
+		return fmt.Errorf("sqlite open: network-filesystem write-ahead logging connection reported locking mode %q, want %q", mode, lockingModeExclusive)
+	}
+	location := connection.Filename("main").String()
+	if strings.TrimSpace(location) == "" {
+		return fmt.Errorf("sqlite open: network-filesystem write-ahead logging requires a file-backed database")
+	}
+	if err := refuseSharedMemoryIndex(location); err != nil {
+		return err
+	}
+	return initializeProviderConnection(connection)
+}
+
+func connectionLockingMode(connection *sqlite3.Conn) (string, error) {
+	statement, _, err := connection.Prepare("PRAGMA locking_mode")
+	if err != nil {
+		return "", fmt.Errorf("sqlite open: locking mode: %w", err)
+	}
+	defer statement.Close()
+	if !statement.Step() {
+		if err := statement.Err(); err != nil {
+			return "", fmt.Errorf("sqlite open: locking mode: %w", err)
+		}
+		return "", fmt.Errorf("sqlite open: locking mode reported no value")
+	}
+	return normalizeJournalMode(statement.ColumnText(0)), nil
+}
+
+func refuseSharedMemoryIndex(location string) error {
+	sharedMemory := location + "-shm"
+	info, err := os.Stat(sharedMemory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite open: inspect shared-memory index %s: %w", sharedMemory, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("sqlite open: shared-memory index %s is not a regular file", sharedMemory)
+	}
+	if info.Size() != 0 {
+		return fmt.Errorf("sqlite open: shared-memory index %s is non-empty (%d bytes); another process may hold this database in shared-memory write-ahead logging mode, so network-filesystem write-ahead logging refuses to open it", sharedMemory, info.Size())
+	}
+	return nil
 }
 
 func initializeProviderConnection(connection *sqlite3.Conn) error {
@@ -72,6 +139,8 @@ func (provider *Provider) verifyOpenedDatabaseForProfile(ctx context.Context, da
 	}
 	database.SetMaxOpenConns(width)
 	database.SetMaxIdleConns(width)
+	database.SetConnMaxLifetime(0)
+	database.SetConnMaxIdleTime(0)
 	if err := establishJournalModeForProfile(ctx, database, durability); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
@@ -209,6 +278,16 @@ func verifyProviderOwnedDurabilityForProfile(ctx context.Context, database *sqlx
 		if synchronous != synchronousFull {
 			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA synchronous=%d, want %d", index+1, synchronous, synchronousFull)
 		}
+		if durability != DurabilityNetworkFilesystemWAL {
+			continue
+		}
+		var lockingMode string
+		if err := connection.GetContext(ctx, &lockingMode, "PRAGMA locking_mode"); err != nil {
+			return fmt.Errorf("sqlite durability verification connection %d locking_mode: %w", index+1, err)
+		}
+		if normalizeJournalMode(lockingMode) != lockingModeExclusive {
+			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA locking_mode=%q, want %q", index+1, lockingMode, lockingModeExclusive)
+		}
 	}
 	if database.Stats().WaitCount != waitCount {
 		return fmt.Errorf("sqlite durability verification observed concurrent pool use")
@@ -226,25 +305,30 @@ func requiredJournalModeForProfile(ctx context.Context, connection *sqlx.Conn, d
 		return "", fmt.Errorf("sqlite open: main database location: %w", err)
 	}
 	if strings.TrimSpace(location) == "" {
-		if durability == DurabilityNetworkFilesystem {
+		if durability.requiresFile() {
 			return "", fmt.Errorf("sqlite open: network-filesystem durability requires a file-backed database")
 		}
 		return journalModeMemory, nil
 	}
-	if durability == DurabilityNetworkFilesystem {
+	switch durability {
+	case DurabilityNetworkFilesystem:
 		return journalModeDelete, nil
-	}
-	if durability != DurabilityWAL {
+	case DurabilityWAL, DurabilityNetworkFilesystemWAL:
+		return journalModeWAL, nil
+	default:
 		return "", fmt.Errorf("sqlite open: unsupported durability profile")
 	}
-	return journalModeWAL, nil
+}
+
+func (durability DurabilityProfile) requiresFile() bool {
+	return durability == DurabilityNetworkFilesystem || durability == DurabilityNetworkFilesystemWAL
 }
 
 func (durability DurabilityProfile) poolWidth() (int, error) {
 	switch durability {
 	case DurabilityWAL:
 		return VerifiedPoolWidth, nil
-	case DurabilityNetworkFilesystem:
+	case DurabilityNetworkFilesystem, DurabilityNetworkFilesystemWAL:
 		return NetworkFilesystemPoolWidth, nil
 	default:
 		return 0, fmt.Errorf("sqlite open: unsupported durability profile")
@@ -295,7 +379,7 @@ func configureDataSourceNameForProfile(dataSourceName string, durability Durabil
 		}
 		for _, value := range values {
 			if providerOwnedPragma(value) {
-				return "", fmt.Errorf("sqlite open: journal_mode, synchronous, foreign_keys and busy_timeout pragmas are provider-owned")
+				return "", fmt.Errorf("sqlite open: journal_mode, locking_mode, synchronous, foreign_keys and busy_timeout pragmas are provider-owned")
 			}
 		}
 	}
@@ -322,7 +406,7 @@ func configureDataSourceNameForProfile(dataSourceName string, durability Durabil
 		}
 	}
 	if modePresent && modes[0] == "memory" {
-		if durability == DurabilityNetworkFilesystem {
+		if durability.requiresFile() {
 			return "", fmt.Errorf("sqlite open: network-filesystem durability requires a file-backed database")
 		}
 		name := strings.TrimPrefix(base, "file:")
@@ -330,16 +414,18 @@ func configureDataSourceNameForProfile(dataSourceName string, durability Durabil
 			return "", fmt.Errorf("sqlite open: private in-memory databases are incompatible with the verified multi-connection pool; use a named file: DSN with mode=memory&cache=shared")
 		}
 	}
-	separator := "?"
-	if hasQuery && rawQuery != "" {
-		separator = "&"
-	} else if hasQuery {
-		separator = ""
-	}
 	if !strings.HasPrefix(base, "file:") {
-		dataSourceName = "file:" + dataSourceName
+		base = "file:" + base
 	}
-	return dataSourceName + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate", nil
+	parameters := make([]string, 0, 3)
+	if durability == DurabilityNetworkFilesystemWAL {
+		parameters = append(parameters, "_pragma=locking_mode(EXCLUSIVE)")
+	}
+	if hasQuery && rawQuery != "" {
+		parameters = append(parameters, rawQuery)
+	}
+	parameters = append(parameters, "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	return base + "?" + strings.Join(parameters, "&"), nil
 }
 
 func normalizedQueryValue(query map[string][]string, key string) ([]string, bool) {
@@ -364,7 +450,7 @@ func providerOwnedPragma(value string) bool {
 	}
 	value = strings.Trim(value, "\"'`[]")
 	switch value {
-	case "journal_mode", "synchronous", "foreign_keys", "busy_timeout":
+	case "journal_mode", "locking_mode", "synchronous", "foreign_keys", "busy_timeout":
 		return true
 	default:
 		return false

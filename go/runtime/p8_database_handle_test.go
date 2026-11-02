@@ -93,6 +93,35 @@ func TestRuntimeStartsWithNetworkFilesystemSQLiteLifecycle(t *testing.T) {
 	}
 }
 
+func TestRuntimeStartsWithNetworkFilesystemWALSQLiteLifecycle(t *testing.T) {
+	database, config := p8RuntimeDatabaseConfigWithOpen(t, providersqlite.OpenNetworkFilesystemWAL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	app, err := Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app == nil {
+		t.Fatal("runtime returned no application")
+	}
+	if got := database.Pool().MaximumOpen(); got != 1 {
+		t.Fatalf("verified maximum open=%d, want 1", got)
+	}
+	if got := database.UnsafeSQLX().Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("live maximum open=%d, want 1", got)
+	}
+	var journal, locking string
+	if err := database.UnsafeSQLX().GetContext(ctx, &journal, "PRAGMA journal_mode"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UnsafeSQLX().GetContext(ctx, &locking, "PRAGMA locking_mode"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ToLower(journal) != "wal" || strings.ToLower(locking) != "exclusive" {
+		t.Fatalf("journal=%q locking=%q, want wal and exclusive", journal, locking)
+	}
+}
+
 func TestRuntimeBorrowsVerifiedDatabaseAndDerivesProviderFromHandle(t *testing.T) {
 	database, config := p8RuntimeDatabaseConfig(t)
 	app, err := Open(context.Background(), config)
