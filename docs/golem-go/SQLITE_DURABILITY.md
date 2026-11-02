@@ -82,10 +82,9 @@ be using it. If the file is stale, for example after a crash of a process that
 used ordinary WAL, recover it by hand:
 
 1. Stop every process that uses the database.
-2. Confirm that none still holds it. For example, copy the database and its
-   sidecar files to a local disk and open the copy with `sqlite.Open`, or open
-   the database with the `sqlite3` command-line tool and confirm that a write
-   such as `BEGIN IMMEDIATE; ROLLBACK;` does not report a busy or locked error.
+2. Confirm that none still holds it: open the database with the `sqlite3`
+   command-line tool and check that `BEGIN IMMEDIATE; ROLLBACK;` does not
+   report a busy or locked error.
 3. Only then remove the `-shm` file, and open the database with the profile
    you need.
 
