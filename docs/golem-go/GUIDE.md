@@ -1790,7 +1790,59 @@ with `extensions.code`, plus `extensions.reason` when there is a reason and
 `Field` and `Model` are not sent. Any error that is not a golem or events
 error is reported to `ReportInternalError` and sent as
 `INTERNAL_SERVER_ERROR`. The GraphQL layer's own codes, such as
-`GRAPHQL_VALIDATION_FAILED` and `QUERY_LIMIT_EXCEEDED`, are unchanged.
+`GRAPHQL_VALIDATION_FAILED`, `QUERY_LIMIT_EXCEEDED` and `INPUT_LIMIT_EXCEEDED`,
+are described below.
+
+### Errors for a request the server refuses
+
+A request that fails before it reaches an operation gets the same errors over
+HTTP, server-sent events and `graphql-transport-ws`. Over WebSocket they arrive
+as the payload of the `error` message. An error never repeats text from the
+request: its message is fixed by golem, so a field, argument, variable or
+literal you sent cannot come back in it.
+
+**Validation.** Each problem the GraphQL validator finds is one error with code
+`GRAPHQL_VALIDATION_FAILED`, a fixed message for its rule, `extensions.rule`
+with the rule's name, and `locations`, the line and column in your document
+(`graphql.Error.Locations`, a list of `graphql.Location{Line, Column}`, at most
+four per error). At most eight errors are returned; when there are more, a last
+error reads `and 4 more validation errors`.
+
+```json
+{"message": "GraphQL field does not exist on the selected type",
+ "locations": [{"line": 1, "column": 3}],
+ "extensions": {"code": "GRAPHQL_VALIDATION_FAILED", "rule": "FieldsOnCorrectType"}}
+```
+
+These errors are the same whether `Introspection` is on or off. The flag only
+decides whether an operation that selects `__schema` or `__type` is allowed; if
+not, it is refused with `GRAPHQL_VALIDATION_FAILED` and the message
+`GraphQL introspection is disabled`.
+
+**Limits.** A limit error names the limit that tripped and its value, in the
+message and in `extensions.limit` and `extensions.max`, the same keys a runtime
+limit uses:
+
+```json
+{"message": "GraphQL query exceeds MaxDepth (12)",
+ "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxDepth", "max": 12}}
+```
+
+`INPUT_LIMIT_EXCEEDED` covers `MaxVariableBytes`, `MaxInputNodes`,
+`MaxInputDepth` and `MaxListItems`. `QUERY_LIMIT_EXCEEDED` covers
+`MaxRequestBytes`, `MaxTokens`, `MaxASTNodes`, `MaxFragments`, `MaxDepth`,
+`MaxSelectedFields`, `MaxAliases`, `MaxComplexity`, and the introspection
+repetition limits `MaxSchemaRoots` (1) and `MaxTypeRoots` (8). A complexity
+error also carries the operation's cost:
+
+```json
+{"message": "GraphQL query complexity 22 exceeds MaxComplexity (20)",
+ "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxComplexity", "max": 20, "cost": 22}}
+```
+
+The cost is exact; it stops at the largest integer if the operation's fan-out
+overflows it. A request with no `query` is `BAD_REQUEST`
+(`GraphQL request requires a query`), not a limit error.
 
 ## Errors you will meet early
 

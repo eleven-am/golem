@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"github.com/vektah/gqlparser/v2/lexer"
 	"github.com/vektah/gqlparser/v2/parser"
 	"github.com/vektah/gqlparser/v2/validator"
@@ -74,27 +76,142 @@ var hardLimits = Limits{
 }
 
 type limitBound struct {
-	name  string
-	field func(*Limits) *int
+	name    string
+	field   func(*Limits) *int
+	code    string
+	subject string
 }
 
+const (
+	queryLimitCode = "QUERY_LIMIT_EXCEEDED"
+	inputLimitCode = "INPUT_LIMIT_EXCEEDED"
+)
+
 var limitBounds = []limitBound{
-	{"MaxRequestBytes", func(limits *Limits) *int { return &limits.MaxRequestBytes }},
-	{"MaxVariableBytes", func(limits *Limits) *int { return &limits.MaxVariableBytes }},
-	{"MaxTokens", func(limits *Limits) *int { return &limits.MaxTokens }},
-	{"MaxASTNodes", func(limits *Limits) *int { return &limits.MaxASTNodes }},
-	{"MaxFragments", func(limits *Limits) *int { return &limits.MaxFragments }},
-	{"MaxDepth", func(limits *Limits) *int { return &limits.MaxDepth }},
-	{"MaxSelectedFields", func(limits *Limits) *int { return &limits.MaxSelectedFields }},
-	{"MaxAliases", func(limits *Limits) *int { return &limits.MaxAliases }},
-	{"MaxInputDepth", func(limits *Limits) *int { return &limits.MaxInputDepth }},
-	{"MaxInputNodes", func(limits *Limits) *int { return &limits.MaxInputNodes }},
-	{"MaxListItems", func(limits *Limits) *int { return &limits.MaxListItems }},
-	{"MaxComplexity", func(limits *Limits) *int { return &limits.MaxComplexity }},
-	{"MaxPageSize", func(limits *Limits) *int { return &limits.MaxPageSize }},
-	{"MaxResolverConcurrency", func(limits *Limits) *int { return &limits.MaxResolverConcurrency }},
-	{"MaxComputedBatchSize", func(limits *Limits) *int { return &limits.MaxComputedBatchSize }},
-	{"MaxGroups", func(limits *Limits) *int { return &limits.MaxGroups }},
+	{"MaxRequestBytes", func(limits *Limits) *int { return &limits.MaxRequestBytes }, queryLimitCode, "GraphQL request exceeds"},
+	{"MaxVariableBytes", func(limits *Limits) *int { return &limits.MaxVariableBytes }, inputLimitCode, "GraphQL variables exceed"},
+	{"MaxTokens", func(limits *Limits) *int { return &limits.MaxTokens }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxASTNodes", func(limits *Limits) *int { return &limits.MaxASTNodes }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxFragments", func(limits *Limits) *int { return &limits.MaxFragments }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxDepth", func(limits *Limits) *int { return &limits.MaxDepth }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxSelectedFields", func(limits *Limits) *int { return &limits.MaxSelectedFields }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxAliases", func(limits *Limits) *int { return &limits.MaxAliases }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxInputDepth", func(limits *Limits) *int { return &limits.MaxInputDepth }, inputLimitCode, "GraphQL input exceeds"},
+	{"MaxInputNodes", func(limits *Limits) *int { return &limits.MaxInputNodes }, inputLimitCode, "GraphQL input exceeds"},
+	{"MaxListItems", func(limits *Limits) *int { return &limits.MaxListItems }, inputLimitCode, "GraphQL input exceeds"},
+	{"MaxComplexity", func(limits *Limits) *int { return &limits.MaxComplexity }, queryLimitCode, "GraphQL query exceeds"},
+	{"MaxPageSize", func(limits *Limits) *int { return &limits.MaxPageSize }, "", ""},
+	{"MaxResolverConcurrency", func(limits *Limits) *int { return &limits.MaxResolverConcurrency }, "", ""},
+	{"MaxComputedBatchSize", func(limits *Limits) *int { return &limits.MaxComputedBatchSize }, "", ""},
+	{"MaxGroups", func(limits *Limits) *int { return &limits.MaxGroups }, "", ""},
+}
+
+var (
+	limitRequestBytes   = boundNamed("MaxRequestBytes")
+	limitVariableBytes  = boundNamed("MaxVariableBytes")
+	limitTokens         = boundNamed("MaxTokens")
+	limitASTNodes       = boundNamed("MaxASTNodes")
+	limitFragments      = boundNamed("MaxFragments")
+	limitDepth          = boundNamed("MaxDepth")
+	limitSelectedFields = boundNamed("MaxSelectedFields")
+	limitAliases        = boundNamed("MaxAliases")
+	limitInputDepth     = boundNamed("MaxInputDepth")
+	limitInputNodes     = boundNamed("MaxInputNodes")
+	limitListItems      = boundNamed("MaxListItems")
+	limitComplexity     = boundNamed("MaxComplexity")
+	limitSchemaRoots    = &limitBound{name: "MaxSchemaRoots", code: queryLimitCode, subject: "GraphQL query exceeds"}
+	limitTypeRoots      = &limitBound{name: "MaxTypeRoots", code: queryLimitCode, subject: "GraphQL query exceeds"}
+)
+
+func boundNamed(name string) *limitBound {
+	for index := range limitBounds {
+		if limitBounds[index].name == name {
+			return &limitBounds[index]
+		}
+	}
+	panic("unknown GraphQL limit " + name)
+}
+
+func (limits Limits) valueOf(bound *limitBound) int { return *bound.field(&limits) }
+
+func limitError(bound *limitBound, max int, cost *int) Error {
+	failure := publicError(bound.code, fmt.Sprintf("%s %s (%d)", bound.subject, bound.name, max))
+	if cost != nil {
+		failure.Message = fmt.Sprintf("GraphQL query complexity %d exceeds %s (%d)", *cost, bound.name, max)
+		failure.Extensions["cost"] = *cost
+	}
+	failure.Extensions["limit"] = bound.name
+	failure.Extensions["max"] = max
+	return failure
+}
+
+const (
+	maxValidationErrors = 8
+	maxErrorLocations   = 4
+)
+
+var validationTemplates = map[string]string{
+	"FieldsOnCorrectType":          "GraphQL field does not exist on the selected type",
+	"FragmentsOnCompositeTypes":    "GraphQL fragment must be on an object, interface or union type",
+	"KnownArgumentNames":           "GraphQL argument is not defined for this field or directive",
+	"KnownDirectives":              "GraphQL directive is unknown or not allowed here",
+	"KnownFragmentNames":           "GraphQL fragment is not defined",
+	"KnownRootType":                "GraphQL operation type is not supported by this schema",
+	"KnownTypeNames":               "GraphQL type is unknown",
+	"LoneAnonymousOperation":       "GraphQL anonymous operation must be the only operation",
+	"MaxIntrospectionDepth":        "GraphQL introspection selection is nested too deeply",
+	"NoFragmentCycles":             "GraphQL fragments must not form a cycle",
+	"NoUndefinedVariables":         "GraphQL variable is used but not defined",
+	"NoUnusedFragments":            "GraphQL fragment is defined but not used",
+	"NoUnusedVariables":            "GraphQL variable is defined but not used",
+	"OverlappingFieldsCanBeMerged": "GraphQL fields conflict and cannot be merged",
+	"PossibleFragmentSpreads":      "GraphQL fragment cannot be spread in this position",
+	"ProvidedRequiredArguments":    "GraphQL required argument is missing",
+	"ScalarLeafs":                  "GraphQL field selection does not match its type",
+	"SingleFieldSubscriptions":     "GraphQL subscription must select exactly one root field",
+	"UniqueArgumentNames":          "GraphQL argument is provided more than once",
+	"UniqueDirectivesPerLocation":  "GraphQL directive is repeated at one location",
+	"UniqueFragmentNames":          "GraphQL fragment name is defined more than once",
+	"UniqueInputFieldNames":        "GraphQL input object field is provided more than once",
+	"UniqueOperationNames":         "GraphQL operation name is defined more than once",
+	"UniqueVariableNames":          "GraphQL variable name is defined more than once",
+	"ValuesOfCorrectType":          "GraphQL value has the wrong type",
+	"VariablesAreInputTypes":       "GraphQL variable must have an input type",
+	"VariablesInAllowedPosition":   "GraphQL variable type does not fit its position",
+}
+
+func presentValidationErrors(list gqlerror.List) []Error {
+	shown := list
+	if len(shown) > maxValidationErrors {
+		shown = shown[:maxValidationErrors]
+	}
+	presented := make([]Error, 0, len(shown)+1)
+	for _, item := range shown {
+		failure := invalidDocumentError()
+		if message, known := validationTemplates[item.Rule]; known {
+			failure.Message = message
+			failure.Extensions["rule"] = item.Rule
+		}
+		for _, location := range item.Locations {
+			if len(failure.Locations) == maxErrorLocations {
+				break
+			}
+			failure.Locations = append(failure.Locations, Location{Line: location.Line, Column: location.Column})
+		}
+		presented = append(presented, failure)
+	}
+	if omitted := len(list) - len(shown); omitted != 0 {
+		noun := "errors"
+		if omitted == 1 {
+			noun = "error"
+		}
+		presented = append(presented, publicError("GRAPHQL_VALIDATION_FAILED", fmt.Sprintf("and %d more validation %s", omitted, noun)))
+	}
+	return presented
+}
+
+func invalidDocumentError() Error {
+	return publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL document is invalid")
 }
 
 func NormalizeLimits(input Limits) (Limits, error) {
@@ -138,8 +255,14 @@ type Operation struct {
 	Variables  map[string]any
 }
 
+type Location struct {
+	Line   int `json:"line"`
+	Column int `json:"column"`
+}
+
 type Error struct {
 	Message    string         `json:"message"`
+	Locations  []Location     `json:"locations,omitempty"`
 	Path       []any          `json:"path,omitempty"`
 	Extensions map[string]any `json:"extensions"`
 }
@@ -270,32 +393,34 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 }
 
 func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *Error) {
-	fail := func(code, message string) (Request, *Error) {
-		failure := publicError(code, message)
+	fail := func(failure Error) (Request, *Error) {
 		return Request{}, &failure
 	}
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
 	var envelope requestEnvelope
 	if err := decoder.Decode(&envelope); err != nil {
-		return fail("BAD_REQUEST", "invalid GraphQL request")
+		return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return fail("BAD_REQUEST", "invalid GraphQL request")
+		return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
 	}
-	if envelope.Query == "" || exceedsLexicalTokenLimit(envelope.Query, limits.MaxTokens) {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	if envelope.Query == "" {
+		return fail(publicError("BAD_REQUEST", "GraphQL request requires a query"))
+	}
+	if exceedsLexicalTokenLimit(envelope.Query, limits.MaxTokens) {
+		return fail(limitError(limitTokens, limits.MaxTokens, nil))
 	}
 	variables := map[string]any{}
 	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
 		if len(envelope.Variables) > limits.MaxVariableBytes {
-			return fail("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")
+			return fail(limitError(limitVariableBytes, limits.MaxVariableBytes, nil))
 		}
 		variableDecoder := json.NewDecoder(strings.NewReader(string(envelope.Variables)))
 		variableDecoder.UseNumber()
 		if err := variableDecoder.Decode(&variables); err != nil {
-			return fail("BAD_USER_INPUT", "invalid GraphQL variables")
+			return fail(publicError("BAD_USER_INPUT", "invalid GraphQL variables"))
 		}
 	}
 	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, nil
@@ -397,71 +522,98 @@ const (
 )
 
 func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool) (preparedRequest, *Response) {
-	fail := func(code, message string) (preparedRequest, *Response) {
-		response := Response{Errors: []Error{publicError(code, message)}}
+	fail := func(failures ...Error) (preparedRequest, *Response) {
+		response := Response{Errors: failures}
 		return preparedRequest{}, &response
 	}
+	limits := server.limits
+	invalidVariables := publicError("BAD_USER_INPUT", "GraphQL variables are invalid")
 	encodedVariables, err := json.Marshal(request.Variables)
 	if err != nil {
-		return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+		return fail(invalidVariables)
 	}
-	if !byteLimitsChecked && len(encodedVariables) > server.limits.MaxVariableBytes {
-		return fail("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")
+	if !byteLimitsChecked && len(encodedVariables) > limits.MaxVariableBytes {
+		return fail(limitError(limitVariableBytes, limits.MaxVariableBytes, nil))
 	}
 	ownedVariables := map[string]any{}
 	if string(encodedVariables) != "null" {
 		decoder := json.NewDecoder(bytes.NewReader(encodedVariables))
 		decoder.UseNumber()
 		if err := decoder.Decode(&ownedVariables); err != nil {
-			return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+			return fail(invalidVariables)
 		}
 	}
 	request.Variables = ownedVariables
 	if !byteLimitsChecked {
 		encodedEnvelope, err := json.Marshal(requestEnvelope{Query: request.Query, OperationName: request.OperationName, Variables: encodedVariables})
-		if err != nil || len(encodedEnvelope) > server.limits.MaxRequestBytes {
-			return fail("QUERY_LIMIT_EXCEEDED", "GraphQL request exceeds a configured limit")
+		if err != nil || len(encodedEnvelope) > limits.MaxRequestBytes {
+			return fail(limitError(limitRequestBytes, limits.MaxRequestBytes, nil))
 		}
 	}
-	if request.Query == "" || exceedsLexicalTokenLimit(request.Query, server.limits.MaxTokens) {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	if request.Query == "" {
+		return fail(publicError("BAD_REQUEST", "GraphQL request requires a query"))
+	}
+	if exceedsLexicalTokenLimit(request.Query, limits.MaxTokens) {
+		return fail(limitError(limitTokens, limits.MaxTokens, nil))
 	}
 	document, err := parser.ParseQuery(&ast.Source{Name: "request.graphql", Input: request.Query})
 	if err != nil {
-		return fail("GRAPHQL_PARSE_FAILED", "GraphQL parsing failed")
+		return fail(publicError("GRAPHQL_PARSE_FAILED", "GraphQL parsing failed"))
 	}
 	if validationErrors := validator.Validate(server.schema, document); len(validationErrors) != 0 {
-		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")
+		return fail(presentValidationErrors(validationErrors)...)
 	}
-	if len(document.Fragments) > server.limits.MaxFragments || documentASTNodesExceed(document, server.limits.MaxASTNodes) {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	if len(document.Fragments) > limits.MaxFragments {
+		return fail(limitError(limitFragments, limits.MaxFragments, nil))
+	}
+	if documentASTNodesExceed(document, limits.MaxASTNodes) {
+		return fail(limitError(limitASTNodes, limits.MaxASTNodes, nil))
 	}
 	definition := document.Operations.ForName(request.OperationName)
 	if definition == nil {
-		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL operation was not found")
+		return fail(publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL operation was not found"))
 	}
-	shape := boundedOperationShape(definition.SelectionSet, document.Fragments, server.limits)
-	if shape.exceeded {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	shape := boundedOperationShape(definition.SelectionSet, document.Fragments, limits)
+	if shape.malformed {
+		return fail(invalidDocumentError())
+	}
+	if shape.limit != nil {
+		return fail(limitError(shape.limit, limits.valueOf(shape.limit), nil))
 	}
 	if !server.config.Introspection && shape.introspection {
-		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")
+		return fail(publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL introspection is disabled"))
 	}
 	inputNodes, inputDepth, listItems, inputBytes := inputShape(request.Variables, 1)
-	if inputNodes > server.limits.MaxInputNodes || inputDepth > server.limits.MaxInputDepth || listItems > server.limits.MaxListItems || inputBytes > server.limits.MaxVariableBytes {
-		return fail("INPUT_LIMIT_EXCEEDED", "GraphQL input exceeds a configured limit")
+	switch {
+	case inputNodes > limits.MaxInputNodes:
+		return fail(limitError(limitInputNodes, limits.MaxInputNodes, nil))
+	case inputDepth > limits.MaxInputDepth:
+		return fail(limitError(limitInputDepth, limits.MaxInputDepth, nil))
+	case listItems > limits.MaxListItems:
+		return fail(limitError(limitListItems, limits.MaxListItems, nil))
+	case inputBytes > limits.MaxVariableBytes:
+		return fail(limitError(limitVariableBytes, limits.MaxVariableBytes, nil))
 	}
 	coerced, err := validator.VariableValues(server.schema, definition, request.Variables)
 	if err != nil {
-		return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+		return fail(invalidVariables)
 	}
-	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.limits.MaxPageSize, server.limits.MaxComplexity, map[string]bool{}, false)
-	if err != nil || complexity > server.limits.MaxComplexity {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, limits.MaxPageSize, map[string]bool{}, false)
+	if err != nil {
+		return fail(invalidDocumentError())
+	}
+	if complexity > limits.MaxComplexity {
+		return fail(limitError(limitComplexity, limits.MaxComplexity, &complexity))
 	}
 	meta := rootMetaSelection{schemas: map[string]bool{}, types: map[string]bool{}}
-	if err := meta.collect(definition.SelectionSet, document.Fragments, coerced, map[string]bool{}); err != nil || len(meta.schemas) > maxIntrospectionSchemaRoots || len(meta.types) > maxIntrospectionTypeRoots {
-		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	if err := meta.collect(definition.SelectionSet, document.Fragments, coerced, map[string]bool{}); err != nil {
+		return fail(invalidDocumentError())
+	}
+	if len(meta.schemas) > maxIntrospectionSchemaRoots {
+		return fail(limitError(limitSchemaRoots, maxIntrospectionSchemaRoots, nil))
+	}
+	if len(meta.types) > maxIntrospectionTypeRoots {
+		return fail(limitError(limitTypeRoots, maxIntrospectionTypeRoots, nil))
 	}
 	return preparedRequest{Operation: Operation{Document: document, Definition: definition, Variables: coerced}, rootMeta: len(meta.schemas) != 0 || len(meta.types) != 0 || meta.typename}, nil
 }
@@ -641,7 +793,7 @@ func inputShape(value any, depth int) (nodes, maximumDepth, listItems, bytes int
 	return
 }
 
-func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, defaultPage, limit int, stack map[string]bool, introspection bool) (int, error) {
+func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, defaultPage int, stack map[string]bool, introspection bool) (int, error) {
 	total := 0
 	for _, selection := range set {
 		switch value := selection.(type) {
@@ -650,7 +802,7 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				continue
 			}
 			nested := introspection || introspectionRoot(value)
-			child, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit, stack, nested)
+			child, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, stack, nested)
 			if err != nil {
 				return 0, err
 			}
@@ -666,27 +818,18 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			}
 			cost := 1
 			if child != 0 {
-				if child > limit/multiplier {
-					return limit + 1, nil
-				}
-				cost += child * multiplier
+				cost = saturatingAdd(cost, saturatingMultiply(child, multiplier))
 			}
-			if cost > limit-total {
-				return limit + 1, nil
-			}
-			total += cost
+			total = saturatingAdd(total, cost)
 		case *ast.InlineFragment:
 			if !graphqlIncluded(value.Directives, variables) {
 				continue
 			}
-			cost, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit-total, stack, introspection)
+			cost, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, stack, introspection)
 			if err != nil {
 				return 0, err
 			}
-			if cost > limit-total {
-				return limit + 1, nil
-			}
-			total += cost
+			total = saturatingAdd(total, cost)
 		case *ast.FragmentSpread:
 			if !graphqlIncluded(value.Directives, variables) {
 				continue
@@ -696,20 +839,34 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				return 0, fmt.Errorf("GraphQL fragment expansion is invalid")
 			}
 			stack[value.Name] = true
-			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, defaultPage, limit-total, stack, introspection)
+			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, defaultPage, stack, introspection)
 			delete(stack, value.Name)
 			if err != nil {
 				return 0, err
 			}
-			if cost > limit-total {
-				return limit + 1, nil
-			}
-			total += cost
+			total = saturatingAdd(total, cost)
 		default:
 			return 0, fmt.Errorf("GraphQL selection kind is invalid")
 		}
 	}
 	return total, nil
+}
+
+func saturatingAdd(left, right int) int {
+	if left > math.MaxInt-right {
+		return math.MaxInt
+	}
+	return left + right
+}
+
+func saturatingMultiply(left, right int) int {
+	if left == 0 || right == 0 {
+		return 0
+	}
+	if left > math.MaxInt/right {
+		return math.MaxInt
+	}
+	return left * right
 }
 
 func graphqlIncluded(directives ast.DirectiveList, variables map[string]any) bool {
@@ -755,27 +912,29 @@ func exactComplexityTake(value any) (int, bool) {
 
 type operationShapeStats struct {
 	nodes, depth, fields, aliases int
-	introspection, exceeded       bool
+	introspection, malformed      bool
+	limit                         *limitBound
 }
 
 func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitionList, limits Limits) operationShapeStats {
 	stats := operationShapeStats{}
+	exceed := func(bound *limitBound) { stats.limit = bound }
 	var walk func(ast.SelectionSet, int, map[string]bool, bool)
 	walk = func(current ast.SelectionSet, depth int, stack map[string]bool, introspection bool) {
-		if stats.exceeded {
+		if stats.limit != nil || stats.malformed {
 			return
 		}
 		if !introspection && depth > stats.depth {
 			stats.depth = depth
 		}
 		if stats.depth > limits.MaxDepth {
-			stats.exceeded = true
+			exceed(limitDepth)
 			return
 		}
 		for _, selection := range current {
 			stats.nodes++
 			if stats.nodes > limits.MaxASTNodes {
-				stats.exceeded = true
+				exceed(limitASTNodes)
 				return
 			}
 			switch value := selection.(type) {
@@ -787,30 +946,30 @@ func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitio
 				if introspectionRoot(value) {
 					stats.introspection = true
 				}
-				if stats.fields > limits.MaxSelectedFields || stats.aliases > limits.MaxAliases {
-					stats.exceeded = true
+				if stats.fields > limits.MaxSelectedFields {
+					exceed(limitSelectedFields)
+					return
+				}
+				if stats.aliases > limits.MaxAliases {
+					exceed(limitAliases)
 					return
 				}
 				walk(value.SelectionSet, depth+1, stack, introspection || introspectionRoot(value))
 			case *ast.InlineFragment:
 				walk(value.SelectionSet, depth, stack, introspection)
 			case *ast.FragmentSpread:
-				if stack[value.Name] {
-					stats.exceeded = true
-					return
-				}
 				fragment := fragments.ForName(value.Name)
-				if fragment == nil {
-					stats.exceeded = true
+				if stack[value.Name] || fragment == nil {
+					stats.malformed = true
 					return
 				}
 				stack[value.Name] = true
 				walk(fragment.SelectionSet, depth, stack, introspection)
 				delete(stack, value.Name)
 			default:
-				stats.exceeded = true
+				stats.malformed = true
 			}
-			if stats.exceeded {
+			if stats.limit != nil || stats.malformed {
 				return
 			}
 		}

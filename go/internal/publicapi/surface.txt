@@ -3498,8 +3498,9 @@ graphql.CustomResultEncoder[R any] type func(R) (any, error)
 graphql.CustomResultError comparable
 graphql.CustomResultError type struct
 graphql.Error type struct
-graphql.Error unkeyed literal {Message, Path, Extensions}
+graphql.Error unkeyed literal {Message, Locations, Path, Extensions}
 graphql.Error.Extensions field map[string]any tag "json:\"extensions\""
+graphql.Error.Locations field []Location tag "json:\"locations,omitempty\""
 graphql.Error.Message field string tag "json:\"message\""
 graphql.Error.Path field []any tag "json:\"path,omitempty\""
 graphql.EventStream type interface {Close, Recv}
@@ -3540,6 +3541,11 @@ graphql.Limits.MaxResolverConcurrency field int
 graphql.Limits.MaxSelectedFields field int
 graphql.Limits.MaxTokens field int
 graphql.Limits.MaxVariableBytes field int
+graphql.Location comparable
+graphql.Location type struct
+graphql.Location unkeyed literal {Line, Column}
+graphql.Location.Column field int tag "json:\"column\""
+graphql.Location.Line field int tag "json:\"line\""
 graphql.NewCustomRegistry func(golem.SchemaBundle, ...CustomBinding) (*CustomRegistry, error)
 graphql.NewGeneratedEvent func(golem.EventMetadata, []any, *golem.RuntimeModelRow) (GeneratedEvent, error)
 graphql.NewGeneratedExecutor func[P any](GeneratedExecutorConfig[P]) (Executor[P], error)

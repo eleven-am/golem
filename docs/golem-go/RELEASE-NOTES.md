@@ -113,6 +113,27 @@ accepted both forms can be deleted. `golem.RuntimeMutationInputFromFields` and
 `BAD_USER_INPUT`, and the binder accepts a scalar list given as either a
 `golem.List[T]` or a plain `[]T`.
 
+**A request the GraphQL server refuses now says why.** Every limit error names
+the limit and its value: `GraphQL query exceeds MaxDepth (12)`, with
+`extensions.limit` and `extensions.max`, and `extensions.cost` for
+`MaxComplexity`. Before, they all read `GraphQL query exceeds a configured
+limit`. A validation failure used to be a bare `GraphQL validation failed`. It is
+now one error per problem, at most eight and then `and N more validation
+errors`, each with a fixed message for its rule, `extensions.rule`, and
+`locations` in the new `graphql.Error.Locations` (`[]graphql.Location`). The
+messages are fixed by golem and never repeat text from your request. They are the
+same over HTTP, server-sent events and WebSocket, and with `Introspection` on or
+off. A refused introspection query reads `GraphQL introspection is disabled`.
+- `graphql.Error` gains a field, so an unkeyed `graphql.Error{message, path,
+  extensions}` literal no longer compiles; use field names.
+- A request with an empty `query` is `BAD_REQUEST`, not `QUERY_LIMIT_EXCEEDED`.
+- A `graphql-transport-ws` subscribe message that is malformed or exceeds
+  `MaxVariableBytes` gets the HTTP decoder's error (`invalid GraphQL request`,
+  `GraphQL variables exceed MaxVariableBytes (N)`) instead of `invalid GraphQL
+  subscription request`.
+- A client that matches the old message text must match `extensions.code`, or
+  `extensions.limit`, instead.
+
 ---
 
 ## go/v0.7.3
