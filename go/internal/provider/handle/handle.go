@@ -52,17 +52,32 @@ const (
 type providerError struct {
 	code    Code
 	message string
+	cause   error
 }
 
 func failure(code Code, message string) error {
 	return &providerError{code: code, message: message}
 }
 
+func failureWithCause(code Code, message string, cause error) error {
+	return &providerError{code: code, message: message, cause: cause}
+}
+
 func (failure *providerError) Error() string {
 	if failure == nil {
 		return "provider operation failed"
 	}
+	if failure.cause != nil {
+		return failure.message + ": " + failure.cause.Error()
+	}
 	return failure.message
+}
+
+func (failure *providerError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.cause
 }
 
 func CodeOf(err error) (Code, bool) {
@@ -318,7 +333,7 @@ func OpenSQLiteWithDurability(ctx context.Context, dataSourceName string, durabi
 	}
 	database, report, err := internalsqlite.New().OpenWithDurability(ctx, dataSourceName, durability)
 	if err != nil {
-		return nil, failure(CodeOpen, "sqlite provider open failed")
+		return nil, failureWithCause(CodeOpen, "sqlite provider open failed", err)
 	}
 	result := newDatabase(database, golem.SQLite, Version{
 		Major: report.Version.Major,
