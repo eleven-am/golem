@@ -29,9 +29,6 @@ func NewHistorical(bundle golem.SchemaBundle) (*Registry, error) {
 	return newRegistry(bundle, true)
 }
 
-// DecodeActive is the single decoder of the active bundle's model and
-// contract documents. The runtime registry and the GraphQL executor both call
-// it, so they accept and refuse the same bundles with the same error.
 func DecodeActive(bundle golem.SchemaBundle) (compilerir.CompilationIR, error) {
 	return decodeBundle(bundle, false)
 }

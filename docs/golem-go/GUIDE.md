@@ -1234,7 +1234,9 @@ encoded, the root fails with `COMMITTED_RESULT_UNAVAILABLE`:
 `committed: true` is always present. `reason` is `RESULT_NOT_READABLE`, with the
 number of rows in `unreadable`, when the caller cannot read the result, and
 `LIMIT_EXCEEDED` when a list passed its limit. It is absent for any other
-failure, which is also reported through `ReportInternalError`. A list is never
+failure. A limit failure and an unclassified failure are also reported through
+`ReportInternalError`; a failure that is already a public `golem.Error`, such as
+`FORBIDDEN` from the hydration read, is returned without being reported. A list is never
 shortened: if one row is unreadable the whole root is `null` with this error. A
 nullable root is `null` and later mutation roots in the same document still
 run; a non-null root makes `data` `null` and later roots do not run. A resolver
@@ -1270,7 +1272,9 @@ has no maximum (`P5_GRAPHQL_LIST_MAX_REQUIRED`), when `MaxItems` gives a
 different number of values than the result has list levels
 (`P5_GRAPHQL_LIST_MAX_ARITY`), when a value is 0 (`P5_GRAPHQL_LIST_MAX_ZERO`),
 when it is not a constant (`P5_GRAPHQL_LIST_MAX_CONSTANT`), or when the result is
-not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). `[]byte` is a `Bytes` scalar, not a
+not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). A custom operation fails when an option
+is anything other than a direct `golem.MaxItems` call (`P5_CUSTOM_OPTION`) or
+when it declares `MaxItems` more than once (`P5_CUSTOM_OPTION_DUPLICATE`). `[]byte` is a `Bytes` scalar, not a
 list.
 
 The maximum is the most the resolver may return. It is not a page size and is

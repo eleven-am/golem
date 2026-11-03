@@ -26,12 +26,20 @@ type inflightEventExecutor struct {
 
 type completedEventExecutor struct{ closed, entered chan struct{} }
 
+func (completedEventExecutor) ListBounds() graphql.ListBounds {
+	return graphql.NewListBounds(nil)
+}
+
 func (completedEventExecutor) Execute(context.Context, int, graphql.Operation) graphql.Response {
 	return graphql.Response{}
 }
 
 func (executor completedEventExecutor) Subscribe(context.Context, int, graphql.Operation) (graphql.ResponseStream, error) {
 	return &inflightEventStream{cancelOperation: func() {}, waitForCancel: true, closed: executor.closed, entered: executor.entered}, nil
+}
+
+func (inflightEventExecutor) ListBounds() graphql.ListBounds {
+	return graphql.NewListBounds(nil)
 }
 
 func (inflightEventExecutor) Execute(context.Context, int, graphql.Operation) graphql.Response {

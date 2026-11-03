@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.7.3
+go get github.com/eleven-am/golem/go@v0.8.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -14,7 +14,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
-## go/v0.8.0 / Unreleased.
+## go/v0.8.0
 
 **GraphQL subscriptions no longer report a cancelled operation as an internal
 error.** When a client completed or dropped a subscription, or the server shut
