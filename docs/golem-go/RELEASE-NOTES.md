@@ -82,6 +82,18 @@ Two behaviours differ from v0.8.0:
 If the shared read fails, the streams that needed it end with
 `GOLEM_SUBSCRIPTION_REVALIDATION`.
 
+Measured with the `examples/loadmix` tool (one Article and one ChatMessage
+subscription per user, an owner rule, PostgreSQL, 180 s steady windows). On
+v0.8.0, every event ran a full principal resolution, hook pass and read for each
+of about 96 subscribers at 100 users and about 240 at 250 users. At 100 users
+delivery lag p99 was 13.8 s. At 250 users the stream fell 41,729 of 50,306
+events behind, with a lag p99 of 186.8 s. Now an event costs one shared read
+plus one full path for the one subscriber that owns the row (0.96 per event). At
+100 users, delivery lag p99 is 0.51 s. At 250 users it is 0.26 s, and every
+expected event arrives. At 500 users every event still arrives, but lag p99 is
+9.6 s because the Article hub is saturated, so about 250 to 400 subscribers per
+model hub is the comfortable range.
+
 ---
 
 ## go/v0.8.0

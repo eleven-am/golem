@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 	"syscall"
 )
@@ -42,6 +43,7 @@ func run(ctx context.Context, args []string, out io.Writer) (int, error) {
 	warmup := set.Duration("warmup", steadyWarmup, "steady warmup")
 	measure := set.Duration("measure", steadyMeasure, "steady measured window")
 	asJSON := set.Bool("json", false, "print the full result as JSON")
+	cpuProfile := set.String("cpuprofile", "", "write a CPU profile of the whole invocation to this file")
 	if err := set.Parse(args); err != nil {
 		return 2, err
 	}
@@ -61,6 +63,17 @@ func run(ctx context.Context, args []string, out io.Writer) (int, error) {
 		specs = []RunSpec{{Kind: KindSteady, Users: *users, Warmup: *warmup, Measure: *measure}, {Kind: KindBurst, Users: burstUsers}, {Kind: KindSaturation, Users: *writers}}
 	default:
 		return 2, fmt.Errorf("kind must be steady, burst, saturation or all, got %q", *kind)
+	}
+	if *cpuProfile != "" {
+		file, err := os.Create(*cpuProfile)
+		if err != nil {
+			return 2, err
+		}
+		defer file.Close()
+		if err := pprof.StartCPUProfile(file); err != nil {
+			return 2, err
+		}
+		defer pprof.StopCPUProfile()
 	}
 	code := 0
 	for _, spec := range specs {
@@ -124,7 +137,7 @@ func render(out io.Writer, detail RunDetail) {
 	}
 	counters := detail.Counters
 	fmt.Fprintf(out, "  publisher       claims %d notices %d claim size p50 %.0f p99 %.0f max %.0f\n", counters.Claims, counters.Claimed, counters.ClaimSize.P50, counters.ClaimSize.P99, counters.ClaimSize.Max)
-	fmt.Fprintf(out, "  evaluation      %d evaluations, %.2f per notice, judge %.3f ms per notice\n", counters.Evaluations, counters.EvaluationsPerNotice, counters.JudgeMsPerNotice)
+	fmt.Fprintf(out, "  evaluation      %d evaluations, %.2f per notice, judge+suppress %.3f ms per notice\n", counters.Evaluations, counters.EvaluationsPerNotice, counters.JudgeMsPerNotice)
 	reasons := make([]string, 0, len(counters.Suppressions))
 	for reason := range counters.Suppressions {
 		reasons = append(reasons, reason)
