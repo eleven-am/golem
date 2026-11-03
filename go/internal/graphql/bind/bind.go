@@ -220,9 +220,7 @@ func (b *Binder) query(input QueryInput) (readir.Request, error) {
 			if value == 0 {
 				return readir.Request{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerTakeNonZero, compileerr.Path("take"))
 			}
-			maximum := readir.NarrowCap(0, int(contract.Limits.MaxPageSize))
-			maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxTake))
-			maximum = readir.NarrowCap(maximum, b.limits.MaxPageSize)
+			maximum := readir.NarrowCap(int(contract.Limits.PageMaximum()), b.limits.MaxPageSize)
 			if maximum != 0 && absInt(value) > maximum {
 				return readir.Request{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerTake, compileerr.Path("take"), compileerr.Bounds(-maximum, maximum))
 			}
@@ -230,8 +228,8 @@ func (b *Binder) query(input QueryInput) (readir.Request, error) {
 				return readir.Request{}, compileerr.New(compileerr.KindNegativeTakeRequiresOrderBy, compileerr.DetailNone, compileerr.Path("take"))
 			}
 			request.Take = &value
-		} else if contract.Limits.DefaultPageSize != 0 {
-			value := int(contract.Limits.DefaultPageSize)
+		} else if contract.Limits.DefaultTake() != 0 {
+			value := int(contract.Limits.DefaultTake())
 			request.Take = &value
 		}
 	}

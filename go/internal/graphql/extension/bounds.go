@@ -14,10 +14,8 @@ const (
 
 func SearchMaximum(contract ir.ModelContractIR) uint32 {
 	maximum := uint32(semanticruntime.MaximumResults)
-	for _, candidate := range []uint32{contract.Limits.MaxPageSize, contract.Limits.MaxTake} {
-		if candidate > 0 && candidate < maximum {
-			maximum = candidate
-		}
+	if page := contract.Limits.PageMaximum(); page != 0 && page < maximum {
+		maximum = page
 	}
 	return maximum
 }
@@ -78,8 +76,8 @@ func SearchTakeDefault(compilation ir.CompilationIR, operation ir.CustomOperatio
 			continue
 		}
 		maximum := SearchMaximum(contract)
-		if contract.Limits.DefaultPageSize < maximum {
-			return contract.Limits.DefaultPageSize, true
+		if contract.Limits.DefaultTake() < maximum {
+			return contract.Limits.DefaultTake(), true
 		}
 		return maximum, true
 	}

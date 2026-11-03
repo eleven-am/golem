@@ -14,6 +14,16 @@ type ListBoundViolation struct {
 	Level int
 }
 
+func (limits LimitContractIR) DefaultTake() uint32 { return limits.DefaultPageSize }
+
+func (limits LimitContractIR) PageMaximum() uint32 {
+	maximum := limits.MaxPageSize
+	if limits.MaxTake != 0 && (maximum == 0 || limits.MaxTake < maximum) {
+		maximum = limits.MaxTake
+	}
+	return maximum
+}
+
 func (value GraphQLTypeIR) ListDepth() int {
 	depth := 0
 	for current := &value; current != nil && current.Kind == GraphQLTypeList; current = current.Element {

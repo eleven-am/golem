@@ -67,9 +67,7 @@ func (c *Compiler) newHydration(typ compilerir.GraphQLTypeIR, modelID compilerir
 	if !ok {
 		return nil, fmt.Errorf("hydration model contract is absent")
 	}
-	chunk := readir.NarrowCap(0, int(contract.Limits.MaxPageSize))
-	chunk = readir.NarrowCap(chunk, int(contract.Limits.MaxTake))
-	chunk = readir.NarrowCap(chunk, c.limits.Bind.MaxPageSize)
+	chunk := readir.NarrowCap(int(contract.Limits.PageMaximum()), c.limits.Bind.MaxPageSize)
 	return &Hydration{
 		typ: typ, publicModel: publicModel, model: policyir.ModelID(publicModel), selection: append([]readir.Selection(nil), selection...),
 		where: where, distinct: distinct, chunk: chunk, requested: map[golem.RuntimeSemanticIdentityToken]struct{}{},

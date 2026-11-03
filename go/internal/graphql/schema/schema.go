@@ -362,7 +362,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			many := field.Relation.Kind == ir.RelationHasMany
 			if readable {
 				if many {
-					fmt.Fprintf(&output, "  %s(where: %sWhereInput, orderBy: [%sOrderByInput!], cursor: %sWhereUniqueInput, distinct: [%sScalarField!], skip: Int, take: Int = %d): [%s!]\n", fc.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.Limits.DefaultPageSize, target.GraphQLName)
+					fmt.Fprintf(&output, "  %s(where: %sWhereInput, orderBy: [%sOrderByInput!], cursor: %sWhereUniqueInput, distinct: [%sScalarField!], skip: Int, take: Int = %d): [%s!]\n", fc.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.Limits.DefaultTake(), target.GraphQLName)
 					countFields = append(countFields, fmt.Sprintf("  %s(where: %sWhereInput): Int", fc.GraphQLName, target.GraphQLName))
 					fmt.Fprintf(&where, "  %s: %sListRelationFilter\n", fc.GraphQLName, target.GraphQLName)
 				} else {
@@ -532,7 +532,7 @@ func renderRoots(views []modelView, compilation ir.CompilationIR) (string, strin
 		for _, operation := range view.contract.Operations {
 			enabled[operation] = true
 		}
-		name, roots, limit := view.contract.GraphQLName, view.contract.Roots, view.contract.Limits.DefaultPageSize
+		name, roots, limit := view.contract.GraphQLName, view.contract.Roots, view.contract.Limits.DefaultTake()
 		hasCreate, hasUpdate, hasUpdateMany := modelInputCapabilities(view.model, view.contract, view.relations)
 		if (enabled[ir.OperationCreate] || enabled[ir.OperationUpsert]) && !hasCreate {
 			return "", "", "", fmt.Errorf("P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE: model %s enables create or upsert but its GraphQL create input has no client-owned fields", name)

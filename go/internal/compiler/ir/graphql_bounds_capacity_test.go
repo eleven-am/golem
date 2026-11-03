@@ -37,3 +37,21 @@ func TestCompositeListCapacityMultipliesEveryLevelAndSaturates(t *testing.T) {
 		})
 	}
 }
+
+func TestPageMaximumIsTheSmallestSetPageLimit(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		limits LimitContractIR
+		want   uint32
+	}{
+		{"nothing set", LimitContractIR{}, 0},
+		{"page only", LimitContractIR{MaxPageSize: 500}, 500},
+		{"take only", LimitContractIR{MaxTake: 30}, 30},
+		{"take below page", LimitContractIR{MaxPageSize: 500, MaxTake: 30}, 30},
+		{"page below take", LimitContractIR{MaxPageSize: 20, MaxTake: 30}, 20},
+	} {
+		if got := testCase.limits.PageMaximum(); got != testCase.want {
+			t.Fatalf("%s: PageMaximum = %d, want %d", testCase.name, got, testCase.want)
+		}
+	}
+}

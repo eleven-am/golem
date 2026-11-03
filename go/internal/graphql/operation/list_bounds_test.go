@@ -1,10 +1,14 @@
 package operation
 
 import (
+	"fmt"
 	"testing"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func modelList(maxima ...uint32) compilerir.GraphQLTypeIR {
@@ -82,5 +86,95 @@ func TestListBoundsLeaveSearchOperationsToTheirSDLDefault(t *testing.T) {
 		if _, present := compiler.ListBounds()["Query."+operation.Name]; present {
 			t.Fatalf("search operation %s has a list bound beside its take default", operation.Name)
 		}
+	}
+}
+
+func TestAdvertisedTakeDefaultIsTheTakeBindApplies(t *testing.T) {
+	compilation := social(t)
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range compilation.Contract.Models {
+		compilation.Contract.Models[index].Limits.DefaultPageSize = uint32(10 * (index + 1))
+		compilation.Contract.Models[index].Limits.MaxPageSize = 1000
+	}
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := New(compilation, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk := func(contract compilerir.ModelContractIR) string {
+		model := modelByIDForTest(t, compilation.Model, contract.ModelID)
+		return fieldContractByIDForTest(t, contract, model.PrimaryKey.Fields[0]).GraphQLName
+	}
+	byName := map[string]compilerir.ModelContractIR{}
+	for _, contract := range compilation.Contract.Models {
+		byName[contract.GraphQLName] = contract
+	}
+	advertised := func(field *ast.FieldDefinition) (int64, bool) {
+		take := field.Arguments.ForName("take")
+		if take == nil || take.DefaultValue == nil || field.Type.Elem == nil {
+			return 0, false
+		}
+		value, err := take.DefaultValue.Value(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(int64), true
+	}
+	checked := 0
+	for _, root := range schema.Types["Query"].Fields {
+		want, ok := advertised(root)
+		target, listsModel := byName[root.Type.Name()]
+		if !ok || !listsModel {
+			continue
+		}
+		query, errs := gqlparser.LoadQuery(schema, fmt.Sprintf("query { %s { %s } }", root.Name, pk(target)))
+		if len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		result, err := compiler.Compile(query, query.Operations[0], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if take, present := result.Reads[0].Request.Take(); !present || int64(take) != want {
+			t.Fatalf("%s advertises take %d but bind applies %d/%v", root.Name, want, take, present)
+		}
+		checked++
+		for _, relation := range schema.Types[root.Type.Name()].Fields {
+			want, ok := advertised(relation)
+			child, listsModel := byName[relation.Type.Name()]
+			if !ok || !listsModel {
+				continue
+			}
+			query, errs := gqlparser.LoadQuery(schema, fmt.Sprintf("query { %s { %s %s { %s } } }", root.Name, pk(target), relation.Name, pk(child)))
+			if len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			result, err := compiler.Compile(query, query.Operations[0], nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			applied := int64(-1)
+			for _, selection := range result.Reads[0].Frozen.Selection() {
+				if request, nested := selection.Request(); nested {
+					if take, present := request.Take(); present {
+						applied = int64(take)
+					}
+				}
+			}
+			if applied != want {
+				t.Fatalf("%s.%s advertises take %d but bind applies %d", root.Type.Name(), relation.Name, want, applied)
+			}
+			checked++
+		}
+	}
+	if checked < 4 {
+		t.Fatalf("only %d advertised defaults were compared", checked)
 	}
 }

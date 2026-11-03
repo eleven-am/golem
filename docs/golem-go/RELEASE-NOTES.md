@@ -136,7 +136,10 @@ its default page, else its declared bound, so `me { ... }` over a list declared
 `MaxPageSize` is no longer a cost multiplier. A `groupBy` or `relationGroupBy`
 without `take` is costed at `MaxGroups`, so some such queries now exceed
 `MaxComplexity` and need a `take`. A relation list now advertises the listed
-model's default page size in `take: Int = N`; it showed the parent's. Generated
+model's default page size in `take: Int = N`; it showed the parent's, while the
+query applied the listed model's. The printed default now matches what the query
+returns, so a client that relied on the old printed number may see a different
+one (in `examples/social`, `User.posts` and `User.comments` change from 25 to 50). Generated
 semantic and full-text searches advertise their `take` default, the model's
 default page size narrowed to the search maximum.
 - Breaking for code that builds a server by hand: `graphql.Executor` has a new
