@@ -66,8 +66,15 @@ func (app *App[P, A]) initializeEventRuntime(adapters []events.CDCAdapter, audit
 	}
 
 	workers := make([]eventCDCWorker, len(adapters))
+	var recorder *cdcOutboxRecorder
+	if len(adapters) != 0 {
+		recorder, err = app.cdcOutboxRecorder()
+		if err != nil {
+			return events.Failure(events.CodeEventConfig)
+		}
+	}
 	for index, adapter := range adapters {
-		emitter, emitterErr := eventcdc.NewEmitter(eventcdc.Config{Adapter: adapter, Transport: app.eventTransport, Encoder: encoder, Observer: app.eventObserver, MaxBatchBytes: app.eventLimits.MaxEncodedBatchBytes})
+		emitter, emitterErr := eventcdc.NewEmitter(eventcdc.Config{Adapter: adapter, Transport: app.eventTransport, Encoder: encoder, Recorder: recorder, Observer: app.eventObserver, MaxBatchBytes: app.eventLimits.MaxEncodedBatchBytes})
 		if emitterErr != nil {
 			return events.Failure(events.CodeEventConfig)
 		}

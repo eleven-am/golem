@@ -56,6 +56,14 @@ func RenderInserts(provider policyir.Provider, rows []OutboxRow, maxParameters i
 }
 
 func RenderInsertsAt(provider policyir.Provider, namespace string, rows []OutboxRow, maxParameters int) ([]InsertStatement, error) {
+	return renderInsertsAt(provider, namespace, rows, maxParameters, false)
+}
+
+func RenderIdempotentInsertsAt(provider policyir.Provider, namespace string, rows []OutboxRow, maxParameters int) ([]InsertStatement, error) {
+	return renderInsertsAt(provider, namespace, rows, maxParameters, true)
+}
+
+func renderInsertsAt(provider policyir.Provider, namespace string, rows []OutboxRow, maxParameters int, idempotent bool) ([]InsertStatement, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -72,7 +80,7 @@ func RenderInsertsAt(provider policyir.Provider, namespace string, rows []Outbox
 		if end > len(rows) {
 			end = len(rows)
 		}
-		statement, err := renderInsert(provider, namespace, rows[start:end])
+		statement, err := renderInsert(provider, namespace, rows[start:end], idempotent)
 		if err != nil {
 			return nil, fmt.Errorf("P4_FACT_INSERT: row %d: %w", start, err)
 		}
@@ -86,6 +94,14 @@ func RenderInsertsAt(provider policyir.Provider, namespace string, rows []Outbox
 // same mutation transaction as the application data and immutable facts.
 // Existing legacy state is never replaced or reinterpreted.
 func RenderDeliveryInsertAt(provider policyir.Provider, namespace string, rows []OutboxRow) (InsertStatement, error) {
+	return renderDeliveryInsertAt(provider, namespace, rows, false)
+}
+
+func RenderDeliveredInsertAt(provider policyir.Provider, namespace string, rows []OutboxRow) (InsertStatement, error) {
+	return renderDeliveryInsertAt(provider, namespace, rows, true)
+}
+
+func renderDeliveryInsertAt(provider policyir.Provider, namespace string, rows []OutboxRow, delivered bool) (InsertStatement, error) {
 	if provider != policyir.ProviderSQLite && provider != policyir.ProviderPostgreSQL {
 		return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: unsupported provider %d", provider)
 	}
@@ -111,6 +127,18 @@ func RenderDeliveryInsertAt(provider policyir.Provider, namespace string, rows [
 	}
 
 	table := `"` + namespace + `"."_golem_outbox_delivery"`
+	if delivered {
+		now := `clock_timestamp()`
+		marks := []string{"$1", "$2"}
+		if provider == policyir.ProviderSQLite {
+			now = `CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)`
+			marks = []string{"?", "?"}
+		}
+		return InsertStatement{
+			sql:  `INSERT INTO ` + table + ` ("causation_id", "status", "first_recorded_at", "attempt_count", "available_at", "delivered_at", "updated_at") VALUES (` + marks[0] + `, 'delivered', ` + marks[1] + `, 0, ` + now + `, ` + now + `, ` + now + `) ON CONFLICT ("causation_id") DO NOTHING`,
+			args: []any{causation, providerRecordedAt(provider, firstRecordedAt)},
+		}, nil
+	}
 	arguments := []any{
 		causation,
 		providerRecordedAt(provider, firstRecordedAt),
@@ -129,7 +157,7 @@ func RenderDeliveryInsertAt(provider policyir.Provider, namespace string, rows [
 	}, nil
 }
 
-func renderInsert(provider policyir.Provider, namespace string, rows []OutboxRow) (InsertStatement, error) {
+func renderInsert(provider policyir.Provider, namespace string, rows []OutboxRow, idempotent bool) (InsertStatement, error) {
 	if err := validateSystemNamespace(namespace); err != nil {
 		return InsertStatement{}, err
 	}
@@ -183,6 +211,9 @@ func renderInsert(provider policyir.Provider, namespace string, rows []OutboxRow
 			cloneBytesOrNil(row.DeleteSnapshot),
 			providerRecordedAt(provider, row.RecordedAt),
 		)
+	}
+	if idempotent {
+		sql.WriteString(" ON CONFLICT DO NOTHING")
 	}
 	return InsertStatement{sql: sql.String(), args: args}, nil
 }

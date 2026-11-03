@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-
-	"github.com/eleven-am/golem/go/events"
 )
 
 type cursorRecordingEncoder struct {
@@ -14,7 +12,7 @@ type cursorRecordingEncoder struct {
 	cursors [][]byte
 }
 
-func (encoder *cursorRecordingEncoder) EncodeCDC(ctx context.Context, input EncodeInput) (events.Notice, error) {
+func (encoder *cursorRecordingEncoder) EncodeCDC(ctx context.Context, input EncodeInput) (Encoded, error) {
 	encoder.mu.Lock()
 	encoder.cursors = append(encoder.cursors, input.Cursor)
 	encoder.mu.Unlock()

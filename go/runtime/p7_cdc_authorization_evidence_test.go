@@ -43,8 +43,12 @@ func TestCDCUsesSameFreshSubscriptionAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recorder, err := fixture.app.cdcOutboxRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
 	emitter, err := eventcdc.NewEmitter(eventcdc.Config{
-		Adapter: p7AuthorizationCDCAdapter{}, Transport: fixture.transport, Encoder: encoder,
+		Adapter: p7AuthorizationCDCAdapter{}, Transport: fixture.transport, Encoder: encoder, Recorder: recorder,
 	})
 	if err != nil {
 		t.Fatal(err)

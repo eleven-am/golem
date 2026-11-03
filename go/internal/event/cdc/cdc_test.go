@@ -13,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/events/cdctest"
 	"github.com/eleven-am/golem/go/golem"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 )
 
 func TestCDCCommonAdapterConformance(t *testing.T) {
@@ -165,7 +166,7 @@ func TestCDCRejectsEncoderMetadataMismatch(t *testing.T) {
 
 func TestCDCRejectsAggregateEncodedBatchAboveLimit(t *testing.T) {
 	transport := &captureTransport{}
-	emitter, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: &fakeCorrelator{}}, Transport: transport, Encoder: &fakeEncoder{encodedBytes: 32}, MaxBatchBytes: 64})
+	emitter, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: &fakeCorrelator{}}, Transport: transport, Encoder: &fakeEncoder{encodedBytes: 32}, Recorder: &fakeRecorder{}, MaxBatchBytes: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,12 @@ func testCDCIdentity() events.CDCIdentity {
 }
 func testEmitter(t testing.TB, transport events.EventTransport, encoder Encoder, correlator Correlator) *Emitter {
 	t.Helper()
-	emitter, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: correlator}, Transport: transport, Encoder: encoder})
+	return testRecordingEmitter(t, transport, encoder, correlator, &fakeRecorder{})
+}
+
+func testRecordingEmitter(t testing.TB, transport events.EventTransport, encoder Encoder, correlator Correlator, recorder Recorder) *Emitter {
+	t.Helper()
+	emitter, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: correlator}, Transport: transport, Encoder: encoder, Recorder: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,17 +249,18 @@ type fakeEncoder struct {
 	mu           sync.Mutex
 	inputs       []EncodeInput
 	wrongEventID bool
+	wrongFact    bool
 	failure      error
 	encodedBytes int
 }
 
-func (encoder *fakeEncoder) EncodeCDC(_ context.Context, input EncodeInput) (events.Notice, error) {
+func (encoder *fakeEncoder) EncodeCDC(_ context.Context, input EncodeInput) (Encoded, error) {
 	encoder.calls.Add(1)
 	encoder.mu.Lock()
 	encoder.inputs = append(encoder.inputs, cloneEncodeInput(input))
 	encoder.mu.Unlock()
 	if encoder.failure != nil {
-		return events.Notice{}, encoder.failure
+		return Encoded{}, encoder.failure
 	}
 	eventID := input.EventID
 	if encoder.wrongEventID {
@@ -263,7 +270,31 @@ func (encoder *fakeEncoder) EncodeCDC(_ context.Context, input EncodeInput) (eve
 	if encoder.encodedBytes > len(encoded) {
 		encoded = append(encoded, make([]byte, encoder.encodedBytes-len(encoded))...)
 	}
-	return eventvalue.NewNotice(eventID, golem.SchemaDigest{7}, input.Model, input.Action, input.CausationID, input.Ordinal, encoded)
+	notice, err := eventvalue.NewNotice(eventID, golem.SchemaDigest{7}, input.Model, input.Action, input.CausationID, input.Ordinal, encoded)
+	fact := mutationfact.OutboxRow{EventID: golem.UUID(input.EventID).String(), CausationID: golem.UUID(input.CausationID).String(), TransactionOrdinal: int64(input.Ordinal), Metadata: encoded, RecordedAt: input.RecordedAt}
+	if encoder.wrongFact {
+		fact.TransactionOrdinal++
+	}
+	return Encoded{Notice: notice, Fact: fact}, err
+}
+
+type fakeRecorder struct {
+	mu      sync.Mutex
+	batches [][]mutationfact.OutboxRow
+	failure error
+}
+
+func (recorder *fakeRecorder) RecordCDC(_ context.Context, rows []mutationfact.OutboxRow) error {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.batches = append(recorder.batches, append([]mutationfact.OutboxRow(nil), rows...))
+	return recorder.failure
+}
+
+func (recorder *fakeRecorder) snapshot() [][]mutationfact.OutboxRow {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([][]mutationfact.OutboxRow(nil), recorder.batches...)
 }
 func (encoder *fakeEncoder) snapshot() []EncodeInput {
 	encoder.mu.Lock()
