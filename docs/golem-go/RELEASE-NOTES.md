@@ -98,6 +98,21 @@ is gone is `null`, or `NOT_FOUND` when the field is non-null.
   `RuntimeIdentityHydrationRequest` replace them). They were generated-code
   plumbing, not application API.
 
+**Hooks see the same input values on every path.** `FrozenMutationField.Value()`
+returned an internal `policyir.Value` when a write came from a GraphQL mutation
+(or from a nested connect or disconnect), and a Go value when it came from the
+generated Go API, so a hook's type assertion worked on one path and failed on
+the other. It now returns a Go value on both: the field's Go type, an enum as
+its wire `string`, and a scalar list as a plain `[]T` of the element's type
+(`golem.List[T]` and typed enum values are converted when the input is frozen).
+An application that type-switched on `policyir.Value`, or that asserted
+`golem.List[T]` or a generated enum type on the value, must update that code;
+code that already handled plain Go values needs nothing, and a workaround that
+accepted both forms can be deleted. `golem.RuntimeMutationInputFromFields` and
+`RuntimeMutationInputFromValues` now refuse a `policyir.Value` operand with
+`BAD_USER_INPUT`, and the binder accepts a scalar list given as either a
+`golem.List[T]` or a plain `[]T`.
+
 ---
 
 ## go/v0.7.3

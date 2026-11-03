@@ -78,19 +78,6 @@ func bindLogicalValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.Ty
 	if raw == nil {
 		return policyir.Value{}, fmt.Errorf("nil is not a scalar value; use the explicit null operation")
 	}
-	// Nested membership hooks receive runtime-derived FK assignments which are
-	// already exact, validated policy values. They still pass through the
-	// declared TypeRef and ScalarOperation validation below; this narrow path
-	// avoids lossy conversion through an arbitrary public Go representation.
-	if exact, ok := raw.(policyir.Value); ok {
-		if err := exact.Validate(); err != nil {
-			return policyir.Value{}, err
-		}
-		if exact.Kind() != typ.Kind() {
-			return policyir.Value{}, fmt.Errorf("runtime value kind %d does not match field kind %d", exact.Kind(), typ.Kind())
-		}
-		return exact, nil
-	}
 	value := reflect.ValueOf(raw)
 	if !value.IsValid() || value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
 		return policyir.Value{}, fmt.Errorf("value has an unsupported indirection type %T", raw)
@@ -212,8 +199,8 @@ func bindLogicalValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.Ty
 		}
 		result, err = policyir.NewJSONValue(bound)
 	case compilerir.TypeScalarList:
-		if !isGolemGeneric(value.Type(), "List[") || value.Kind() != reflect.Slice || logical.Element == nil {
-			return result, wrongGoType(raw, "golem.List[T]")
+		if value.Kind() != reflect.Slice || logical.Element == nil {
+			return result, wrongGoType(raw, "[]T")
 		}
 		elementType, typeErr := bindType(*logical.Element, false)
 		if typeErr != nil {

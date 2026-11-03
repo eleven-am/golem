@@ -67,8 +67,11 @@ func RuntimeMutationInputFromValues(kind RuntimeMutationInputKind, model ModelID
 		if field.HasValue != needsValue {
 			return FrozenMutationInput{}, invalidMutation("runtime input", model, field.Field, "field operand shape is invalid")
 		}
+		if err := rejectEngineMutationValue("runtime input", model, field); err != nil {
+			return FrozenMutationInput{}, err
+		}
 		seenFields[field.Field] = struct{}{}
-		result.fields[index] = FrozenMutationField{field: field.Field, operation: field.Operation, value: cloneMutationValue(field.Value), hasValue: field.HasValue}
+		result.fields[index] = FrozenMutationField{field: field.Field, operation: field.Operation, value: freezeMutationValue(field.Value), hasValue: field.HasValue}
 	}
 	for index, relation := range relations {
 		frozen, err := runtimeFreezeNestedMutation(model, relation)

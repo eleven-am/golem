@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
+	"github.com/eleven-am/golem/go/internal/policy/publicvalue"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
@@ -1448,61 +1448,7 @@ func nestedBeforeHookRequest(node mutationir.Node, source mutationnested.HookSou
 }
 
 func runtimePublicPolicyValue[P, A any](app *App[P, A], value policyir.Value) (any, error) {
-	switch value.Kind() {
-	case policyir.ValueBool:
-		result, _ := value.Bool()
-		return result, nil
-	case policyir.ValueInt16:
-		result, _ := value.Signed()
-		return int16(result), nil
-	case policyir.ValueInt32:
-		result, _ := value.Signed()
-		return int32(result), nil
-	case policyir.ValueInt64:
-		result, _ := value.Signed()
-		return result, nil
-	case policyir.ValueFloat32:
-		result, _ := value.Float32Bits()
-		return math.Float32frombits(result), nil
-	case policyir.ValueFloat64:
-		result, _ := value.Float64Bits()
-		return math.Float64frombits(result), nil
-	case policyir.ValueDecimal:
-		coefficient, scale, _ := value.Decimal()
-		return golem.NewDecimal(coefficient, scale)
-	case policyir.ValueString:
-		result, _ := value.Text()
-		return result, nil
-	case policyir.ValueBytes:
-		result, _ := value.Bytes()
-		return result, nil
-	case policyir.ValueUUID:
-		result, _ := value.UUID()
-		return golem.NewUUID(result), nil
-	case policyir.ValueDate:
-		year, month, day, _ := value.Date()
-		return golem.NewDate(int(year), time.Month(month), int(day))
-	case policyir.ValueTime:
-		microseconds, _ := value.Time()
-		hour := int(microseconds / 3_600_000_000)
-		microseconds %= 3_600_000_000
-		minute := int(microseconds / 60_000_000)
-		microseconds %= 60_000_000
-		second := int(microseconds / 1_000_000)
-		return golem.NewTime(hour, minute, second, int(microseconds%1_000_000))
-	case policyir.ValueDateTime:
-		seconds, nanos, _ := value.DateTime()
-		return time.Unix(seconds, int64(nanos)).UTC(), nil
-	case policyir.ValueEnum:
-		enum, member, _ := value.Enum()
-		wire, ok := policysql.SchemaResolver(app.registry).EnumWire(enum, member)
-		if !ok {
-			return nil, fmt.Errorf("enum identity has no active wire value")
-		}
-		return wire, nil
-	default:
-		return nil, fmt.Errorf("identity value kind %d is not a portable unique-selector scalar", value.Kind())
-	}
+	return publicvalue.Value(value, policysql.SchemaResolver(app.registry).EnumWire)
 }
 
 func nestedExactTarget[P, A any](app *App[P, A], work mutationnested.RuntimeWork) (golem.FrozenMutationTarget, error) {
@@ -1925,7 +1871,7 @@ func nestedMembershipOperation(operation mutationir.Operation) bool {
 	return operation == mutationir.Connect || operation == mutationir.Disconnect || operation == mutationir.SetRelation
 }
 
-func membershipFrozenInput(model policyir.ModelID, operations []mutationir.ScalarOperation) (golem.FrozenMutationInput, error) {
+func membershipFrozenInput[P, A any](app *App[P, A], model policyir.ModelID, operations []mutationir.ScalarOperation) (golem.FrozenMutationInput, error) {
 	fields := make([]golem.RuntimeMutationFieldValue, len(operations))
 	for index, operation := range operations {
 		value, present := operation.Value()
@@ -1938,7 +1884,15 @@ func membershipFrozenInput(model policyir.ModelID, operations []mutationir.Scala
 		default:
 			return golem.FrozenMutationInput{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: membership assignment is not set/null")
 		}
-		fields[index] = golem.RuntimeMutationFieldValue{Field: golem.FieldID(operation.FieldID()), Operation: kind, Value: value, HasValue: present}
+		var public any
+		if present {
+			converted, err := runtimePublicPolicyValue(app, value)
+			if err != nil {
+				return golem.FrozenMutationInput{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: membership assignment value: %w", err)
+			}
+			public = converted
+		}
+		fields[index] = golem.RuntimeMutationFieldValue{Field: golem.FieldID(operation.FieldID()), Operation: kind, Value: public, HasValue: present}
 	}
 	return golem.RuntimeMutationInputFromFields(golem.ModelID(model), fields)
 }
@@ -2000,7 +1954,7 @@ func (transaction *systemNestedTransaction[P, A]) transformMembership(ctx contex
 			authoredRequired = append(authoredRequired, operation)
 		}
 	}
-	input, err := membershipFrozenInput(work.ModelID(), authoredRequired)
+	input, err := membershipFrozenInput(transaction.app, work.ModelID(), authoredRequired)
 	if err != nil {
 		return mutationnested.SubtreeReplacement{}, false, err
 	}

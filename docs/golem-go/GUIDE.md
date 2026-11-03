@@ -956,6 +956,16 @@ code.
   `Open` requires when any after-commit hook exists. Its result has no
   executor.
 
+A `Before` hook that reads a write's input (`golem.RuntimeFreezeCreateInput`,
+`RuntimeFreezeUpdateInput`, then `FrozenMutationField.Value()`) sees the same Go
+value whether the write came from a GraphQL mutation, the generated Go API or a
+nested write: the field's Go type (`string`, `int16`, `int32`, `int64`,
+`float32`, `float64`, `bool`, `golem.Decimal`, `golem.UUID`, `golem.Date`,
+`golem.Time`, `time.Time`, `[]byte`), an enum as its wire `string`, and a scalar
+list as a plain `[]T` of the element's type (a list of enums is `[]string`). A
+field written to null reports `MutationFieldNull` and no value. The value is a
+copy, so changing it does not change the write.
+
 Names such as `BeforeUpsert` and `BeforeAggregate` are refused. A panic in a
 hook becomes an error, `generated hook panicked`, and its value is not kept.
 `golem.ActorFrom[Actor](ctx)` returns the actor of the caller the hook runs

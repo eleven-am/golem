@@ -6,7 +6,6 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
-	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -209,13 +208,12 @@ func TestGraphQLCreateOmittedExplicitNullAndDefaultRemainDistinct(t *testing.T) 
 			t.Fatalf("explicit null acquired value %#v", authored)
 		}
 		if index == 2 {
-			exact, ok := authored.(policyir.Value)
+			uuid, ok := authored.(golem.UUID)
 			if !ok {
-				t.Fatalf("default value type = %T, want exact policy value", authored)
+				t.Fatalf("default value type = %T, want golem.UUID", authored)
 			}
-			uuid, ok := exact.UUID()
-			if !ok || uuid != (golem.UUID{15: 0x22}) {
-				t.Fatalf("default UUID = %x/%v", uuid, ok)
+			if uuid != (golem.UUID{15: 0x22}) {
+				t.Fatalf("default UUID = %x", uuid)
 			}
 		}
 	}

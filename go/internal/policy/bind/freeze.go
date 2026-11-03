@@ -4,12 +4,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/publicvalue"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
@@ -249,7 +249,7 @@ func freezeValue(value ir.Value, labels EnumLabels) (golem.RuntimePredicateValue
 		return runtimeValue(golem.FrozenValueString, label), nil
 	case ir.ValueJSON:
 		json, _ := value.JSON()
-		public, err := publicJSON(json)
+		public, err := publicvalue.JSON(json)
 		return runtimeValue(golem.FrozenValueJSON, public), err
 	default:
 		return golem.RuntimePredicateValue{}, fmt.Errorf("P5_BIND_FREEZE: unsupported value kind %d", value.Kind())
@@ -284,51 +284,4 @@ func frozenOperator(value ir.OperatorID) (golem.FrozenOperator, error) {
 		return 0, fmt.Errorf("P5_BIND_FREEZE: unsupported operator %d", value)
 	}
 	return operator, nil
-}
-
-func publicJSON(value ir.JSONValue) (golem.JSONValue, error) {
-	switch value.Kind() {
-	case ir.JSONNull:
-		return golem.JSONNull, nil
-	case ir.JSONBool:
-		boolean, _ := value.Bool()
-		return golem.JSONBool(boolean), nil
-	case ir.JSONNumber:
-		number, _ := value.Number()
-		text := string(number.Coefficient())
-		if number.Negative() {
-			text = "-" + text
-		}
-		if number.Exponent() != 0 {
-			text += "e" + strconv.FormatInt(int64(number.Exponent()), 10)
-		}
-		return golem.ParseJSONNumber(text)
-	case ir.JSONString:
-		text, _ := value.Text()
-		return golem.JSONString(text), nil
-	case ir.JSONArray:
-		items, _ := value.Array()
-		public := make([]golem.JSONValue, len(items))
-		for index, item := range items {
-			var err error
-			public[index], err = publicJSON(item)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return golem.JSONArray(public...), nil
-	case ir.JSONObject:
-		members, _ := value.Object()
-		public := make(map[string]golem.JSONValue, len(members))
-		for _, member := range members {
-			converted, err := publicJSON(member.Value())
-			if err != nil {
-				return nil, err
-			}
-			public[member.Key()] = converted
-		}
-		return golem.JSONObject(public), nil
-	default:
-		return nil, fmt.Errorf("P5_BIND_FREEZE: unknown JSON kind %d", value.Kind())
-	}
 }

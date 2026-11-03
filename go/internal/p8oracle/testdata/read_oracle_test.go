@@ -928,12 +928,17 @@ func (f *fixture) assertLoaderIsolation() {
 
 func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	f.t.Helper()
-	assertTrace := func(label string, trace *readTrace) {
+	assertTrace := func(label string, trace *readTrace, reads int) {
 		f.t.Helper()
 		phases, rows := trace.snapshot()
-		wantPhases := []social.PostReadHookPhase{social.PostHookBeforeFindMany, social.PostHookAfterFindMany}
-		if !reflect.DeepEqual(phases, wantPhases) || !reflect.DeepEqual(rows, []int{0, expectedRows}) {
-			f.t.Fatalf("%s shared read classification phases=%v rows=%v", label, phases, rows)
+		var wantPhases []social.PostReadHookPhase
+		var wantRows []int
+		for read := 0; read < reads; read++ {
+			wantPhases = append(wantPhases, social.PostHookBeforeFindMany, social.PostHookAfterFindMany)
+			wantRows = append(wantRows, 0, expectedRows)
+		}
+		if !reflect.DeepEqual(phases, wantPhases) || !reflect.DeepEqual(rows, wantRows) {
+			f.t.Fatalf("%s shared read classification phases=%v rows=%v want %d read(s)", label, phases, rows, reads)
 		}
 	}
 	callerTrace := &readTrace{}
@@ -942,7 +947,7 @@ func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	if _, err := f.caller.Posts.FindMany(callerContext, social.Posts.Take(50)); err != nil {
 		f.t.Fatal(err)
 	}
-	assertTrace("caller", callerTrace)
+	assertTrace("caller", callerTrace, 1)
 	f.assertObservedRead("caller", false)
 
 	txTrace := &readTrace{}
@@ -954,7 +959,7 @@ func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	assertTrace("caller transaction", txTrace)
+	assertTrace("caller transaction", txTrace, 1)
 	f.assertObservedRead("caller transaction", true)
 
 	customTrace := &readTrace{}
@@ -963,7 +968,7 @@ func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	if _, err := social.SearchPosts(customContext, f.caller, social.SearchPostsArgs{Where: golem.All[social.Post](), Take: 50}); err != nil {
 		f.t.Fatal(err)
 	}
-	assertTrace("custom direct", customTrace)
+	assertTrace("custom direct", customTrace, 1)
 	f.assertObservedRead("custom direct", false)
 
 	ordinaryGraphTrace := &readTrace{}
@@ -971,7 +976,7 @@ func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	f.observed.reset()
 	response := f.graphQLContext(ordinaryContext, `query { posts(take: 50) { id } }`)
 	assertNoGraphErrors(f.t, response)
-	assertTrace("ordinary GraphQL", ordinaryGraphTrace)
+	assertTrace("ordinary GraphQL", ordinaryGraphTrace, 1)
 	f.assertObservedGraphQLRead("ordinary GraphQL", false)
 
 	customGraphTrace := &readTrace{}
@@ -979,7 +984,7 @@ func (f *fixture) assertSharedReadClassification(expectedRows int) {
 	f.observed.reset()
 	response = f.graphQLContext(customGraphContext, `query { searchPosts(where: {all: true}, take: 50) { id } }`)
 	assertNoGraphErrors(f.t, response)
-	assertTrace("custom GraphQL", customGraphTrace)
+	assertTrace("custom GraphQL", customGraphTrace, 2)
 	f.assertObservedGraphQLRead("custom GraphQL", true)
 }
 
@@ -995,10 +1000,14 @@ func (f *fixture) assertObservedRead(label string, transaction bool) {
 func (f *fixture) assertObservedGraphQLRead(label string, custom bool) {
 	f.t.Helper()
 	values := f.observed.snapshot()
-	assertSingleObservation(f.t, label, values, observe.KindRead, observe.OperationReadFindMany, 1)
-	assertSingleObservation(f.t, label, values, observe.KindGraphQL, observe.OperationGraphQLQuery, 1)
+	reads := 1
 	if custom {
-		assertSingleObservation(f.t, label, values, observe.KindGraphQL, observe.OperationGraphQLCustomQuery, 1)
+		reads = 2
+	}
+	assertObservationCount(f.t, label, values, observe.KindRead, observe.OperationReadFindMany, 1, reads)
+	assertSingleObservation(f.t, label, values, observe.KindGraphQL, observe.OperationGraphQLQuery, reads)
+	if custom {
+		assertSingleObservation(f.t, label, values, observe.KindGraphQL, observe.OperationGraphQLCustomQuery, reads)
 	}
 }
 
