@@ -4,6 +4,10 @@ import "fmt"
 
 const MaxBoundedDeleteSnapshotStringLength uint32 = 1024
 
+func snapshotStoredScalar(field FieldIR) bool {
+	return field.Kind != FieldRelation && field.Scalar != nil && !IsRowVersionField(field)
+}
+
 func RequiredDeleteSnapshotFields(model ModelDeclIR, relations []RelationIR) map[FieldID]bool {
 	required := map[FieldID]bool{}
 	if model.PrimaryKey != nil {
@@ -42,7 +46,7 @@ func DeleteSnapshotFields(model ModelDeclIR, relations []RelationIR, declared *[
 	}
 	stored := make(map[FieldID]FieldIR, len(model.Fields))
 	for _, field := range model.Fields {
-		if field.Kind != FieldRelation && field.Scalar != nil {
+		if snapshotStoredScalar(field) {
 			stored[field.ID] = field
 		}
 	}
@@ -77,7 +81,7 @@ func DeleteSnapshotFields(model ModelDeclIR, relations []RelationIR, declared *[
 func ValidateDeleteSnapshotFields(model ModelDeclIR, relations []RelationIR, snapshot []FieldID) error {
 	stored := make(map[FieldID]bool, len(model.Fields))
 	for _, field := range model.Fields {
-		if field.Kind != FieldRelation && field.Scalar != nil {
+		if snapshotStoredScalar(field) {
 			stored[field.ID] = true
 		}
 	}
@@ -102,7 +106,7 @@ func ValidateDeleteSnapshotFields(model ModelDeclIR, relations []RelationIR, sna
 func DeleteSnapshotIsFull(model ModelDeclIR, snapshot []FieldID) bool {
 	stored := 0
 	for _, field := range model.Fields {
-		if field.Kind != FieldRelation && field.Scalar != nil {
+		if snapshotStoredScalar(field) {
 			stored++
 		}
 	}

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
-	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
@@ -27,8 +26,6 @@ const (
 	ExpandRelatedRows RelationSQLRole = iota + 1
 	ExpandCurrentMembership
 	ExpandDesiredTarget
-	ApplyMembershipConnect
-	ApplyMembershipDisconnect
 )
 
 type RelationSQLColumn struct {
@@ -159,124 +156,6 @@ const (
 	MembershipConnect MembershipEffect = iota + 1
 	MembershipDisconnect
 )
-
-type MembershipSQLRequest struct {
-	Node          mutationir.Node
-	Anchor        mutationdecode.Row
-	Related       mutationdecode.Row
-	Effect        MembershipEffect
-	Registry      *schema.Registry
-	Provider      policyir.Provider
-	MaxParameters uint32
-}
-
-// RenderMembershipWrite updates the actual FK-owning row. Source endpoints
-// write parent correlation fields from the selected/created target row;
-// inverse endpoints write target correlation fields from the anchor row.
-func RenderMembershipWrite(request MembershipSQLRequest) (RelationSQLStatement, error) {
-	if request.Registry == nil || request.MaxParameters == 0 {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_INPUT: registry and parameter bound are required")
-	}
-	position, ok := request.Node.RelationPosition()
-	if !ok || position.ParentModelID() != request.Anchor.ModelID() {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_INPUT: membership node lacks its exact anchor")
-	}
-	endpoint, ok := request.Registry.RelationEndpoint(golem.ModelID(position.ParentModelID()), golem.FieldID(position.FieldID()), golem.RelationID(position.RelationID()))
-	if !ok || policyir.ModelID(endpoint.TargetModelID()) != position.TargetModelID() || request.Related.ModelID() != position.TargetModelID() {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: relation endpoint or related row is invalid")
-	}
-	dialect, err := relationDialect(request.Provider)
-	if err != nil {
-		return RelationSQLStatement{}, err
-	}
-	resolver := policysql.SchemaResolver(request.Registry)
-	ownerModel := request.Node.ModelID()
-	owner := request.Anchor
-	if endpoint.Role() == compilerir.RelationInverse {
-		owner = request.Related
-	}
-	if owner.ModelID() != ownerModel {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_INPUT: membership owner row belongs to another model")
-	}
-	model, ok := resolver.Model(request.Provider, ownerModel)
-	if !ok {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: membership owner physical model is absent")
-	}
-	pairs := endpoint.Correlation()
-	if len(pairs) == 0 {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: relation correlation is empty")
-	}
-	assignments := make([]string, len(pairs))
-	args := make([]any, 0, len(pairs))
-	for index, pair := range pairs {
-		ownerField, valueField := policyir.FieldID(pair.ParentFieldID()), policyir.FieldID(pair.ChildFieldID())
-		valueRow := request.Related
-		if endpoint.Role() == compilerir.RelationInverse {
-			ownerField, valueField, valueRow = policyir.FieldID(pair.ChildFieldID()), policyir.FieldID(pair.ParentFieldID()), request.Anchor
-		}
-		physicalField, found := resolver.Field(request.Provider, ownerModel, ownerField)
-		if !found {
-			return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: owner correlation field %x is absent", ownerField)
-		}
-		if request.Effect == MembershipDisconnect {
-			if !physicalField.Nullable {
-				return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_REQUIRED: non-null membership field %x cannot disconnect", ownerField)
-			}
-			assignments[index] = dialect.Quote(physicalField.Column) + " = NULL"
-			continue
-		}
-		cell, present := valueRow.Cell(valueField)
-		if !present || cell.IsNull() {
-			return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_INPUT: correlation value field %x is absent or NULL", valueField)
-		}
-		value, _ := cell.PolicyValue()
-		valuePhysical, found := resolver.Field(request.Provider, valueRow.ModelID(), valueField)
-		if !found {
-			return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: correlation value field %x is absent", valueField)
-		}
-		encoded, encodeErr := encodeRelationValue(dialect, resolver, valuePhysical.Type, value)
-		if encodeErr != nil {
-			return RelationSQLStatement{}, encodeErr
-		}
-		args = append(args, encoded)
-		assignments[index] = dialect.Quote(physicalField.Column) + " = " + dialect.Placeholder(len(args))
-	}
-	primary, err := primaryFields(request.Registry, ownerModel)
-	if err != nil {
-		return RelationSQLStatement{}, err
-	}
-	where := make([]string, len(primary))
-	for index, fieldID := range primary {
-		cell, present := owner.Cell(fieldID)
-		if !present || cell.IsNull() {
-			return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_INPUT: owner primary field %x is absent or NULL", fieldID)
-		}
-		value, _ := cell.PolicyValue()
-		field, found := resolver.Field(request.Provider, ownerModel, fieldID)
-		if !found {
-			return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_SCHEMA: owner primary field %x is absent", fieldID)
-		}
-		encoded, encodeErr := encodeRelationValue(dialect, resolver, field.Type, value)
-		if encodeErr != nil {
-			return RelationSQLStatement{}, encodeErr
-		}
-		args = append(args, encoded)
-		where[index] = dialect.Quote(field.Column) + " = " + dialect.Placeholder(len(args))
-	}
-	if uint32(len(args)) > request.MaxParameters {
-		return RelationSQLStatement{}, fmt.Errorf("P4_NESTED_SQL_LIMIT: membership write needs %d parameters; maximum is %d", len(args), request.MaxParameters)
-	}
-	returning, columns, err := returningAll(request.Registry, resolver, dialect, request.Provider, ownerModel)
-	if err != nil {
-		return RelationSQLStatement{}, err
-	}
-	role := ApplyMembershipConnect
-	if request.Effect == MembershipDisconnect {
-		role = ApplyMembershipDisconnect
-	}
-	text := "UPDATE " + dialect.Table(model) + " SET " + strings.Join(assignments, ", ") + " WHERE " + strings.Join(where, " AND ") + " RETURNING " + returning
-	return RelationSQLStatement{role: role, model: ownerModel, text: text, args: args, columns: columns, maxRows: 1}, nil
-}
 
 type relationRenderContext struct {
 	node          mutationir.Node
@@ -485,10 +364,6 @@ func selectAll(registry *schema.Registry, resolver policysql.Resolver, dialect p
 		return "", nil, fmt.Errorf("P4_NESTED_SQL_SCHEMA: model has no persisted scalar fields")
 	}
 	return strings.Join(selects, ", "), columns, nil
-}
-
-func returningAll(registry *schema.Registry, resolver policysql.Resolver, dialect policysql.Dialect, provider policyir.Provider, model policyir.ModelID) (string, []RelationSQLColumn, error) {
-	return selectAll(registry, resolver, dialect, provider, model, "")
 }
 
 func primaryFields(registry *schema.Registry, model policyir.ModelID) ([]policyir.FieldID, error) {

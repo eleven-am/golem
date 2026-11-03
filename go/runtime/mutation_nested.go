@@ -368,7 +368,7 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 			applied = append(applied, returned...)
 		case mutationbatch.RehydrateAfterImage:
 			after = append(after, returned...)
-		case mutationbatch.VerifyReference:
+		case mutationbatch.VerifyReference, mutationbatch.StampVersion:
 		default:
 			return mutationnested.ApplyResult{}, fmt.Errorf("P4_RUNTIME_NESTED_BATCH: unknown statement role %d", statement.Role())
 		}

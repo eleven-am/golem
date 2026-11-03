@@ -260,6 +260,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 
 	plan := IncrementalPlan{MigrationID: entry.ID}
+	if physical.HasRowVersion(entry.AfterSnapshot) && !physical.HasRowVersion(entry.BeforeSnapshot) {
+		plan.steps = append(plan.steps, migrationStep{statements: renderRowVersionCounter()})
+	}
 	guarded := map[ir.ModelID]bool{}
 	for _, operation := range semantic.Operations {
 		if operation.Kind != migration.DropTable && operation.Kind != migration.RenameTable && operation.Kind != migration.RenameColumn {

@@ -412,6 +412,10 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 				}
 				fact.relation, fact.relationRole = rid, logicalField.Relation.Role
 			}
+			if compilerir.IsRowVersionField(logicalField) {
+				version := fid
+				modelFact.rowVersion = &version
+			}
 			builder.registry.fields[mid][fid] = fact
 			modelFact.fields = append(modelFact.fields, fid)
 		}

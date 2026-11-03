@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"sort"
@@ -373,6 +374,9 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 		return physical.PhysicalSchema{}, err
 	}
 	actual.System, err = introspectSystem(ctx, query, expectedNormalized.System, allowed)
+	if err == nil && expectedNormalized.System.Version != 0 {
+		err = introspectRowVersionSequence(ctx, query, string(expectedNormalized.System.Namespace.Name), string(physical.RowVersionObject), physical.HasRowVersion(expectedNormalized))
+	}
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
@@ -1771,4 +1775,39 @@ func readSQLString(value string) (string, string, error) {
 		b.WriteByte(value[i])
 	}
 	return "", "", fmt.Errorf("unterminated string")
+}
+
+func introspectRowVersionSequence(ctx context.Context, q catalogQueryer, namespace, name string, required bool) error {
+	var storage string
+	var start, increment, minimum, maximum, cache int64
+	var cycle bool
+	rows, err := q.QueryxContext(ctx, `SELECT pg_catalog.format_type(s.seqtypid,NULL),s.seqstart,s.seqincrement,s.seqmin,s.seqmax,s.seqcache,s.seqcycle FROM pg_catalog.pg_sequence s JOIN pg_catalog.pg_class c ON c.oid=s.seqrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2`, namespace, name)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		found = true
+		if err := rows.Scan(&storage, &start, &increment, &minimum, &maximum, &cache, &cycle); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !found {
+		if required {
+			return providerdrift.New(providerdrift.Object{Type: "sequence", Name: name, Table: name}, "postgresql row version sequence %s is absent", name)
+		}
+		return nil
+	}
+	if storage != "bigint" || start != 1 || increment != 1 || minimum != 1 || maximum != math.MaxInt64 || cache != 1 || cycle {
+		return providerdrift.New(providerdrift.Object{Type: "sequence", Name: name, Table: name}, "postgresql row version sequence %s drift: type=%s start=%d increment=%d min=%d max=%d cache=%d cycle=%t; it must be bigint, increment 1, CACHE 1, no cycle so versions rise in commit order", name, storage, start, increment, minimum, maximum, cache, cycle)
+	}
+	return nil
 }

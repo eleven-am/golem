@@ -35,6 +35,24 @@ const (
 	QueueTerminalIndex PhysicalName = "golem_queue_terminal"
 )
 
+const RowVersionObject PhysicalName = PhysicalName(ir.RowVersionObject)
+const RowVersionColumn PhysicalName = PhysicalName(ir.RowVersionColumn)
+
+func RowVersionUnmanagedObjects() []UnmanagedObject {
+	return []UnmanagedObject{{Kind: "table", Name: RowVersionObject}}
+}
+
+func HasRowVersion(schema PhysicalSchema) bool {
+	for _, table := range schema.Tables {
+		for _, column := range table.Columns {
+			if column.Name == RowVersionColumn {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 const OutboxDeliveryClaimIndex PhysicalName = "golem_outbox_delivery_claim"
 
 func OutboxDeliveryUnmanagedObjects() []UnmanagedObject {

@@ -64,6 +64,7 @@ const (
 	RehydrateAfterImage
 	VerifyReference
 	CaptureDependents
+	StampVersion
 )
 
 type Cardinality uint8

@@ -194,6 +194,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			expectedObjectTables[vectorKey] = vectorName
 		}
 	}
+	_, counterPresent := actual["table\x00"+string(physical.RowVersionObject)]
 	for _, unmanaged := range normalized.Unmanaged {
 		key := unmanaged.Kind + "\x00" + string(unmanaged.Name)
 		if row, present := actual[key]; present && unmanaged.Kind == "index" && unmanaged.Name == physical.OutboxDeliveryClaimIndex && !sqliteOutboxDeliveryClaimMatches(row.Table, row.SQL) {
@@ -247,6 +248,9 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: row.Type, Name: row.Name, Table: row.Table}, "sqlite introspect drift: semantic definition changed for %s", key)
 		}
 	}
+	if err := inspectRowVersionCounter(ctx, database, counterPresent, physical.HasRowVersion(normalized)); err != nil {
+		return physical.PhysicalSchema{}, err
+	}
 	for _, table := range normalized.Tables {
 		if err := inspectColumns(ctx, database, table); err != nil {
 			return physical.PhysicalSchema{}, err
@@ -261,6 +265,26 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	// Stable IDs and registered expression identities are reattached only after
 	// every catalog fact and parsed semantic definition has matched.
 	return normalized, nil
+}
+
+func inspectRowVersionCounter(ctx context.Context, database catalogQuerier, present, required bool) error {
+	name := physical.RowVersionObject
+	if !present {
+		if required {
+			return providerdrift.New(providerdrift.Object{Type: "table", Name: string(name), Table: string(name)}, "sqlite introspect drift: row version counter %s is absent", name)
+		}
+		return nil
+	}
+	var rows []struct {
+		Value int64 `db:"value"`
+	}
+	if err := database.SelectContext(ctx, &rows, "SELECT "+quote("value")+" AS value FROM "+quote(name)); err != nil {
+		return providerdrift.New(providerdrift.Object{Type: "table", Name: string(name), Table: string(name)}, "sqlite introspect drift: row version counter %s is unreadable: %v", name, err)
+	}
+	if len(rows) != 1 || rows[0].Value < 0 {
+		return providerdrift.New(providerdrift.Object{Type: "table", Name: string(name), Table: string(name)}, "sqlite introspect drift: row version counter %s must hold exactly one non-negative value", name)
+	}
+	return nil
 }
 
 func firstUnexpectedSchemaObject(actual map[string]schemaRow, expected ...map[string]string) (schemaRow, bool) {

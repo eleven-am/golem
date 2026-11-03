@@ -1518,6 +1518,38 @@ If the shared read itself fails, the streams that needed it end with
 `GOLEM_SUBSCRIPTION_REVALIDATION`. A row that no longer exists when the event
 is judged is not delivered to anyone.
 
+### Row versions
+
+Every model with `Subscriptions` has a golem-owned version on each row. A write
+that goes through golem gives the row a version higher than every version that
+row key has ever committed: an update, a nested update, `UpdateMany` and the
+clearing of a reference by a delete action each draw a new one, and a row
+created after its key was deleted starts above the version the deleted row
+last held. A delete keeps the row's last version.
+
+- **Reading it.** Over GraphQL the model type has `_version: String!`, a decimal
+  string. In Go the model's namespace has a read-only `GolemVersion` handle that
+  works in `Select` and in predicates, including inside hooks. It is readable
+  whenever the row is readable: no field rule grants it and none can name it.
+  It is not in `where`, `orderBy` or `distinct` over GraphQL.
+- **Not writable.** No GraphQL input, Go create or update, hook, or nested write
+  accepts it. A field or column of your own named `GolemVersion`, `_version`,
+  `golem_version` or `_golem_version` on any model is refused when you
+  generate.
+- **One sequence for the database.** Versions come from a single source, not
+  one per model. A caller comparing two versions of a row it can read learns
+  roughly how many versioned writes the whole database made in between. Rows
+  that existed before the upgrade keep version 0 until their next write.
+- **Storage.** The model's table gets a `golem_version bigint NOT NULL DEFAULT
+  0` column. On PostgreSQL the source is the sequence `golem_row_version` in
+  golem's system schema, created with `CACHE 1`: with a larger cache two
+  sessions could draw out of commit order, so any other cache setting is
+  drift and the application refuses to start. On SQLite it is the one-row
+  table `golem_row_version`, advanced once per write statement; a missing
+  table or a second row is drift.
+- **Writes that bypass golem.** Only writes golem issues stamp a version. A row
+  changed by SQL outside golem keeps the version it had.
+
 ### Who receives a delete
 
 A deleted row cannot be read back, so golem judges a delete against the
@@ -1888,6 +1920,16 @@ derives constraint names from both) and making a column optional.
   provider: declare a default or make the field optional. Only when
   PostgreSQL is the schema's sole provider can one required field per
   migration be added with a reviewed backfill.
+
+### Adding row versions to an existing database
+
+The first migration after upgrading to a golem that has row versions adds the
+`golem_version` column to every model with `Subscriptions` and creates the
+version source (the `CACHE 1` sequence on PostgreSQL, the counter table on
+SQLite) before the first column is added. Adding the column is an ordinary
+additive change and needs no approval. On PostgreSQL it sets a constant default
+and does not rewrite the table; on SQLite it is an `ALTER TABLE ... ADD
+COLUMN`. Existing rows keep version 0.
 
 ### Events written before a regeneration
 

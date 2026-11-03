@@ -444,7 +444,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 			applied = append(applied, rows...)
 		case mutationbatch.RehydrateAfterImage:
 			after = append(after, rows...)
-		case mutationbatch.VerifyReference:
+		case mutationbatch.VerifyReference, mutationbatch.StampVersion:
 		default:
 			return 0, publicBatchExecutionError(program, fmt.Errorf("unknown prepared batch statement role %d", statement.Role()))
 		}
@@ -607,6 +607,9 @@ func batchRowScanner(registry *schema.Registry, provider policyir.Provider, mode
 }
 
 func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, statement mutationbatch.Statement, limit uint32) ([]mutationdecode.Row, [][]mutationbatch.FieldGrant, error) {
+	if statement.Role() == mutationbatch.StampVersion {
+		return nil, nil, executeVersionStamp(ctx, queryer, statement)
+	}
 	scan, err := batchRowScanner(registry, provider, model, statement)
 	if err != nil {
 		return nil, nil, err
@@ -640,6 +643,30 @@ func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerCont
 		return nil, nil, &batchCardinalityError{role: statement.Role(), got: uint32(len(result)), want: statement.ExpectedRows()}
 	}
 	return result, grantRows, nil
+}
+
+func executeVersionStamp(ctx context.Context, queryer sqlx.QueryerContext, statement mutationbatch.Statement) error {
+	recordQueryerStatement(ctx, queryer)
+	rows, err := queryer.QueryxContext(ctx, statement.SQL(), batchStatementArguments(statement)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var version int64
+		if err := rows.Scan(&version); err != nil {
+			return err
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count != 1 {
+		return &batchCardinalityError{role: statement.Role(), got: uint32(count), want: 1}
+	}
+	return nil
 }
 
 var errBatchReferenceUnreadable = errors.New("persisted foreign key names no readable row")

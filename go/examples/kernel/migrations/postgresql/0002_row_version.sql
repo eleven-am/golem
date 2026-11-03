@@ -1,0 +1,2 @@
+CREATE SEQUENCE IF NOT EXISTS "_golem"."golem_row_version" AS bigint INCREMENT BY 1 MINVALUE 1 START WITH 1 CACHE 1 NO CYCLE;
+ALTER TABLE "public"."notes" ADD COLUMN "golem_version" bigint DEFAULT 0 NOT NULL;

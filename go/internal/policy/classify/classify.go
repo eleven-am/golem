@@ -138,6 +138,9 @@ func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, f
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: invalid policy: %w", err)
 	}
+	if version, owned := policy.RowVersion(); owned {
+		policyCopy = policyCopy.WithRowVersion(version)
+	}
 	readConstraint, err := resolve.RowConstraint(policyCopy, ir.ActionRead, model)
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: resolve read constraint: %w", err)
@@ -325,6 +328,12 @@ func supportingConditions(policy ir.Policy, field ir.FieldID) []ir.Condition {
 			continue
 		}
 		fields, modelWide := rule.Fields()
+		if version, owned := policy.RowVersion(); owned && field == version {
+			if modelWide || rule.Effect() == ir.EffectGrant {
+				chain = append(chain, rule)
+			}
+			continue
+		}
 		if modelWide || contains(fields, field) {
 			chain = append(chain, rule)
 		}

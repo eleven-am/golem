@@ -57,6 +57,7 @@ const (
 	ApplyDelete
 	VerifyPostcondition
 	VerifyReference
+	StampVersion
 )
 
 type Cardinality uint8

@@ -96,6 +96,31 @@ expected event arrives. At 500 users every event still arrives, but lag p99 is
 9.6 s because the Article hub is saturated, so about 250 to 400 subscribers per
 model hub is the comfortable range.
 
+**Rows of models with `Subscriptions` carry a version.** Every write golem
+issues gives the row a version higher than any version that key has committed;
+a recreated key starts above its deleted row. GraphQL exposes it as
+`_version: String!` and Go as the read-only `GolemVersion` handle. See
+"Row versions" in the guide.
+
+**The migration that adds `golem_version` and the version source.** After you
+regenerate, `golem migration new` produces one migration that:
+
+- adds `golem_version bigint NOT NULL DEFAULT 0` (SQLite: `INTEGER NOT NULL
+  DEFAULT 0`) to the table of every model with `Subscriptions`; existing rows
+  keep version 0 until their next write;
+- creates the version source first. PostgreSQL: the sequence
+  `"<system schema>"."golem_row_version"` with `CACHE 1`, `NO CYCLE`. SQLite: the
+  one-row table `golem_row_version`.
+
+Nothing else is renamed or rewritten. The change needs no approval. Apply it
+before you start the new build: at startup the new build refuses a database
+that has versioned tables but no version source, a PostgreSQL sequence whose
+cache setting is not 1, and a SQLite counter that does not hold exactly one row.
+
+**Names reserved.** A field or column named `GolemVersion`, `_version`,
+`golem_version` or `_golem_version` is now refused at generation. Rename yours
+before regenerating. A GraphQL field called `version` is unaffected.
+
 ---
 
 ## go/v0.8.0
