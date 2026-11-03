@@ -2478,6 +2478,7 @@ golem.GroupPredicate[M any] type struct
 golem.GroupRequest[M any] type struct
 golem.GroupRow[M any] type struct
 golem.GroupValue func[M any, V any](GroupRow[M], GroupCell[M, V]) ReadValue[V]
+golem.HasNoCredentialExpiry func(context.Context) bool
 golem.HookAfter const HookPhase = "after"
 golem.HookAfterCommit const HookPhase = "afterCommit"
 golem.HookBefore const HookPhase = "before"
@@ -3307,6 +3308,7 @@ golem.Via func[M any, R any, V any](ToOneRelation[M, R], RelationDimensionPath[R
 golem.Virtual const GeneratedStorage = "virtual"
 golem.Where func[M any](Predicate[M]) ReadOption[M]
 golem.Within func[M any, R any](*Rules[M], R) *OperationRules[M]
+golem.WithoutCredentialExpiry func(context.Context) context.Context
 golem.WithoutGraphQL func(*Schema)
 golem.anyNullSentinel comparable
 golem.anyNullSentinel type uint8

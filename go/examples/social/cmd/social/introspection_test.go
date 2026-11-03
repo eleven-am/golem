@@ -202,7 +202,7 @@ func (world introspectionWorld) graph(t *testing.T, introspection bool) (*social
 	}
 	t.Cleanup(func() { _ = graph.Shutdown(context.Background()) })
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		graph.Handler().ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, world.principal)))
+		graph.Handler().ServeHTTP(writer, request.WithContext(testPrincipalContext(request.Context(), world.principal)))
 	})
 	return graph, handler
 }

@@ -798,7 +798,7 @@ func listValueEquals(row golem.Row[social.Post], want golem.List[string]) bool {
 func assertGraphQLSubscription(t *testing.T, graph http.Handler, caller *social.Caller[social.Principal], principal social.Principal, date golem.Date, clock golem.Time, metadata golem.JSON[any]) {
 	t.Helper()
 	host := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		ctx := context.WithValue(request.Context(), principalContextKey{}, principal)
+		ctx := testPrincipalContext(request.Context(), principal)
 		graph.ServeHTTP(writer, request.WithContext(ctx))
 	}))
 	defer host.Close()

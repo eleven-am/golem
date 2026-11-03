@@ -1,7 +1,9 @@
 package graphql_test
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -38,4 +40,12 @@ func readLiveAck(t *testing.T, connection *websocket.Conn, id string) {
 func liveBody(query string) []byte {
 	body, _ := json.Marshal(map[string]any{"query": query, "extensions": map[string]any{"golem": map[string]any{"protocol": 1, "contract": strings.Repeat("0", 64)}}})
 	return body
+}
+
+func withCredentialDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), time.Hour)
+		defer cancel()
+		next.ServeHTTP(writer, request.WithContext(ctx))
+	})
 }

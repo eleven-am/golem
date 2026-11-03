@@ -40,7 +40,7 @@ func TestHTTPQueriesMutationsRemainP5Equivalent(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		httpRequest := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
 		httpRequest.Header.Set("Content-Type", "application/json")
-		server.Handler().ServeHTTP(recorder, httpRequest)
+		withCredentialDeadline(server.Handler()).ServeHTTP(recorder, httpRequest)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("HTTP status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
@@ -75,7 +75,7 @@ func mustP7JSON(t testing.TB, value any) json.RawMessage {
 
 func TestUnsupportedLegacyProtocolIsRefusedAndSSEIsServed(t *testing.T) {
 	server, stream := newProtocolServer(t, events.Limits{})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	legacy := websocket.Dialer{Subprotocols: []string{"graphql-ws"}}
 	connection, response, err := legacy.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -90,7 +90,7 @@ func TestUnsupportedLegacyProtocolIsRefusedAndSSEIsServed(t *testing.T) {
 	request.Header.Set("Accept", "text/event-stream")
 	request = request.WithContext(context.WithValue(request.Context(), wsAuthKey{}, 41))
 	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
+	withCredentialDeadline(server.Handler()).ServeHTTP(recorder, request)
 	want := liveAckFrame + "event: next\ndata: {\"data\":{\"ticks\":7}}\n\nevent: complete\n\n"
 	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream" || recorder.Body.String() != want || !recorder.Flushed {
 		t.Fatalf("SSE subscription was not streamed: status=%d type=%q flushed=%t body=%q", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Flushed, recorder.Body.String())
@@ -100,7 +100,7 @@ func TestUnsupportedLegacyProtocolIsRefusedAndSSEIsServed(t *testing.T) {
 func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 	t.Run("authentication", func(t *testing.T) {
 		server, _ := newProtocolServer(t, events.Limits{})
-		host := httptest.NewServer(server.Handler())
+		host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 		defer host.Close()
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 		connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -115,7 +115,7 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 
 	t.Run("initialization bytes", func(t *testing.T) {
 		server, _ := newProtocolServer(t, events.Limits{ConnectionInitBytes: 8})
-		host := httptest.NewServer(server.Handler())
+		host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 		defer host.Close()
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 		connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -130,7 +130,7 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 
 	t.Run("active operations", func(t *testing.T) {
 		server, stream := newProtocolServer(t, events.Limits{MaxSubscriptionsPerConnection: 1})
-		host := httptest.NewServer(server.Handler())
+		host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 		defer host.Close()
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 		connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)

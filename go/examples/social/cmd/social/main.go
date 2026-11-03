@@ -354,6 +354,7 @@ func openApplicationWithScopedReport(ctx context.Context, database *provider.Dat
 	return social.Open(ctx, social.Config[social.Principal]{
 		Database:       database,
 		EventTransport: transport,
+		EventLimits:    events.Limits{RevalidateEvery: 5 * time.Minute},
 		ResolvePrincipal: func(ctx context.Context, principal social.Principal) (social.Actor, error) {
 			return resolveSessionActor(ctx, database, principal)
 		},
@@ -441,21 +442,29 @@ func openDatabase(ctx context.Context) (*provider.Database, error) {
 
 func principalMiddleware(application *social.App[social.Principal], next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		principal, err := authenticate(request.Context(), application, request)
+		principal, expiresAt, err := authenticate(request.Context(), application, request)
 		if err != nil {
 			http.Error(writer, "invalid principal", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		ctx := context.WithValue(request.Context(), principalContextKey{}, principal)
+		if expiresAt.IsZero() {
+			ctx = golem.WithoutCredentialExpiry(ctx)
+		} else {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, expiresAt)
+			defer cancel()
+		}
+		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
 }
 
-func authenticate(ctx context.Context, application *social.App[social.Principal], request *http.Request) (social.Principal, error) {
+func authenticate(ctx context.Context, application *social.App[social.Principal], request *http.Request) (social.Principal, time.Time, error) {
 	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
 	if authorization != "" {
 		const prefix = "Bearer "
 		if !strings.HasPrefix(authorization, prefix) || len(authorization) == len(prefix) {
-			return social.Principal{}, errors.New("invalid bearer token")
+			return social.Principal{}, time.Time{}, errors.New("invalid bearer token")
 		}
 		tokenHash := sha256.Sum256([]byte(strings.TrimSpace(strings.TrimPrefix(authorization, prefix))))
 		row, err := application.System().Sessions.FindUnique(ctx,
@@ -463,13 +472,13 @@ func authenticate(ctx context.Context, application *social.App[social.Principal]
 			social.Sessions.Select(social.Sessions.ExpiresAt),
 		)
 		if err != nil {
-			return social.Principal{}, errors.New("invalid bearer token")
+			return social.Principal{}, time.Time{}, errors.New("invalid bearer token")
 		}
 		expiresAt, expiryPresent := golem.Value(row, social.Sessions.ExpiresAt).Get()
 		if !expiryPresent || !expiresAt.After(time.Now().UTC()) {
-			return social.Principal{}, errors.New("invalid bearer token")
+			return social.Principal{}, time.Time{}, errors.New("invalid bearer token")
 		}
-		return social.Principal{TokenHash: tokenHash}, nil
+		return social.Principal{TokenHash: tokenHash}, expiresAt, nil
 	}
 
 	// This opt-in exists only for the local quickstart. It is mechanically
@@ -477,11 +486,11 @@ func authenticate(ctx context.Context, application *social.App[social.Principal]
 	if value := strings.TrimSpace(request.Header.Get("X-Golem-User")); value != "" && os.Getenv("GOLEM_ALLOW_INSECURE_HEADER_AUTH") == "1" {
 		id, err := golem.ParseUUID(value)
 		if err != nil {
-			return social.Principal{}, errors.New("invalid development principal")
+			return social.Principal{}, time.Time{}, errors.New("invalid development principal")
 		}
-		return social.Principal{Development: true, DevUserID: id}, nil
+		return social.Principal{Development: true, DevUserID: id}, time.Time{}, nil
 	}
-	return social.Principal{}, nil
+	return social.Principal{}, time.Time{}, nil
 }
 
 func principalFromContext(ctx context.Context) (social.Principal, bool) {

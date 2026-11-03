@@ -369,7 +369,8 @@ func newFixture(t *testing.T, limits events.Limits, adapter events.CDCAdapter) *
 		t.Fatal(err)
 	}
 	result.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		ctx := context.WithValue(request.Context(), principalKey{}, result.principal)
+		ctx, cancel := context.WithTimeout(context.WithValue(request.Context(), principalKey{}, result.principal), time.Hour)
+		defer cancel()
 		ctx = social.WithPostDisplayCodeLoaderObserver(ctx, result.display)
 		result.graph.Handler().ServeHTTP(writer, request.WithContext(ctx))
 	}))

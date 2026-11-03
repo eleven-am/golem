@@ -106,7 +106,7 @@ func newRecheckServerWith(t *testing.T, check func(context.Context, int, Operati
 
 func recheckHost(t *testing.T, server *Server[int]) *httptest.Server {
 	t.Helper()
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	t.Cleanup(host.Close)
 	return host
 }
@@ -199,7 +199,7 @@ func TestWebSocketSubscriptionRecheckKeepsAWhitelistedCode(t *testing.T) {
 
 func TestSSESubscriptionRecheckSendsAFinalErrorThenCompletes(t *testing.T) {
 	server, executor, grants := newRecheckServer(t)
-	host := httptest.NewServer(sseAuthenticated(server.Handler()))
+	host := httptest.NewServer(sseAuthenticated(withCredentialDeadline(server.Handler())))
 	t.Cleanup(host.Close)
 	connection := openSSE(t, context.Background(), host.URL, liveExtend(string(roomSubscription("3"))), true)
 	if connection.response.StatusCode != http.StatusOK {

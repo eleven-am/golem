@@ -43,7 +43,7 @@ func newProtocolFixture(t *testing.T) *protocolFixture {
 		t.Fatal(err)
 	}
 	fixture.server = server
-	fixture.host = httptest.NewServer(sseAuthenticated(server.Handler()))
+	fixture.host = httptest.NewServer(sseAuthenticated(withCredentialDeadline(server.Handler())))
 	t.Cleanup(fixture.host.Close)
 	return fixture
 }

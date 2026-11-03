@@ -135,7 +135,7 @@ func TestSSESubscriptionRefusalsFollowTheNegotiatedConvention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsubscribableHost := httptest.NewServer(sseAuthenticated(unsubscribable.Handler()))
+	unsubscribableHost := httptest.NewServer(sseAuthenticated(withCredentialDeadline(unsubscribable.Handler())))
 	defer unsubscribableHost.Close()
 	_, refusing, refusingHost := newSSEServer(t, events.Limits{}, newSSETestStream())
 	refusing.refusal = golem.RuntimeReadError(golem.CodeForbidden, "subscribe", golem.ModelID{1}, golem.FieldID{2}, "access denied", errors.New("private-cause"))

@@ -30,6 +30,20 @@ an optional `Extensions` field. A client that subscribes without the block must
 add it before upgrading to this version; see the GUIDE section "The live
 handshake and the subscription ack".
 
+**Sockets close at their credential's deadline.** A WebSocket or SSE
+subscription now needs a deadline derived from its principal's context: the
+context's own deadline (the credential expiry), or, for a context marked with
+the new `golem.WithoutCredentialExpiry` and with `EventLimits.RevalidateEvery`
+set, the open time plus `RevalidateEvery`. A principal with neither is refused
+at the handshake with `GOLEM_PRINCIPAL_DEADLINE_REQUIRED` (WebSocket close
+`4426`; SSE status 400); HTTP queries and mutations are unaffected. At the
+deadline the server closes the WebSocket with `4401` and a client reconnects;
+the principal is resolved fresh on the new socket. The marker is read only from
+the Go context, never from a client. Set the credential expiry as the context
+deadline where you resolve the principal, or mark API-key principals and set
+`RevalidateEvery`; see the GUIDE section "The socket deadline". New public API:
+`golem.WithoutCredentialExpiry` and `golem.HasNoCredentialExpiry`.
+
 ## go/v0.8.0
 
 **GraphQL subscriptions no longer report a cancelled operation as an internal
