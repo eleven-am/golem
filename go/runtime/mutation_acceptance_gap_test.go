@@ -2314,11 +2314,11 @@ func TestMutationArtifactsPlansSQLBindsAndFactsAreDeterministicUnderShuffle(t *t
 		t.Fatal(err)
 	}
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil)
-	first, err := mutationfact.New(fixture.Registry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &before)
+	first, err := newRuntimeTestFact(fixture.Registry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &before)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := mutationfact.New(fixture.Registry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &after)
+	second, err := newRuntimeTestFact(fixture.Registry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &after)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -712,7 +712,7 @@ func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) 
 			sections = append(sections, identity.String())
 			identityType = event.IdentityTypeName
 		}
-		sections = append(sections, fmt.Sprintf("type %s {\n  eventID: UUID!\n  causationID: UUID!\n  transactionOrdinal: Int!\n  recordedAt: DateTime!\n  type: GolemEventType!\n  id: %s!\n  entity: %s\n}", event.PayloadTypeName, identityType, view.contract.GraphQLName))
+		sections = append(sections, fmt.Sprintf("type %s {\n  eventID: UUID!\n  causationID: UUID!\n  transactionOrdinal: Int!\n  recordedAt: DateTime!\n  version: String!\n  type: GolemEventType!\n  id: %s!\n  entity: %s\n}", event.PayloadTypeName, identityType, view.contract.GraphQLName))
 	}
 	return sections, nil
 }

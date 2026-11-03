@@ -129,6 +129,43 @@ cache setting is not 1, and a SQLite counter that does not hold exactly one row.
 `golem_version` or `_golem_version` is now refused at generation. Rename yours
 before regenerating. A GraphQL field called `version` is unaffected.
 
+**Regenerate, and drain undelivered events on go/v0.8.0 first.** This release
+reads only the new event fact format (fact codec V3, which stores the row
+version with every fact). Facts written by go/v0.8.0 or earlier (format V1 or V2)
+cannot be read, and nothing converts them. Run the drain steps of the go/v0.8.0
+notes on go/v0.8.0, regenerate, and only then deploy this version. If you skip
+the drain, the publisher blocks each such delivery with
+`last_failure_code = 'format-retired'` (visible through `EventOperator().Inspect`)
+and its decode error is `GOLEM_EVENT_FORMAT_RETIRED: stored event fact (format
+V1) is no longer readable: drain undelivered events on go/v0.8.0 before
+upgrading` (`V2` for a V2 fact). Under this version such a delivery can only be
+retired with `EventOperator().Retire(ctx, causation)`; its events are lost.
+Bundles of contract format 4 and 5 are no longer accepted in
+`HistoricalEventBundles` either: startup stops with "historical contract format
+N is not supported by this golem: deliver or drain undelivered events before
+upgrading, then remove this bundle from HistoricalEventBundles".
+
+**Events carry `version`.** Every event type has `version: String!`, a decimal
+string. It is always the version of the write that produced the event, from the
+stored fact; for a deleted event, the row's last version. If a later write lands
+before delivery, the event keeps its own version and the selected entity carries
+the `_version` it was read at. `golem.EventMetadata` gains `Version() int64`. Use it to ignore an event
+older than a row you already hold.
+
+**For CDC adapter authors: row images carry `golem_version`.** The exact images
+an adapter hands to `Emit` hold every stored scalar of the model, and that now
+includes `golem_version` (the value your source database holds). When the
+emitter records a created or updated change it writes a new version into that
+row, in the same database transaction that stores the fact, and the event
+carries it, so your adapter must treat the transaction as a golem write through
+`CorrelatesGolemTransaction`, as it does for the fact inserts. A delete takes the
+version from its `Before` image; version 0 (a row never stamped) is published as
+0, and an image without the `golem_version` column fails with
+`GOLEM_CDC_INVALID`, as does a replay whose stored facts disagree with the
+rebuilt ones. `CorrelatesGolemTransaction` must be true for the stamp's own
+source transaction, or the stamp is captured as a new change and stamped again. A replay of a recorded batch
+reuses the versions it recorded.
+
 ---
 
 ## go/v0.8.0

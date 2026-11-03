@@ -374,7 +374,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 		t.Fatalf("denied hook-added field=%v err=%v", deniedOptional, err)
 	}
 	grantObservations := grantCollector.matching(observe.KindMutation, observe.OperationMutationUpdate)
-	if len(grantObservations) != 2 || grantObservations[0].statements != 5 || grantObservations[0].outcome != observe.OutcomeSuccess || grantObservations[1].statements != 3 || grantObservations[1].outcome != observe.OutcomeRefused {
+	if len(grantObservations) != 2 || grantObservations[0].statements != 6 || grantObservations[0].outcome != observe.OutcomeSuccess || grantObservations[1].statements != 4 || grantObservations[1].outcome != observe.OutcomeRefused {
 		t.Fatalf("hook-added field observations=%+v", grantObservations)
 	}
 	fixture.app.observer = nil
@@ -455,7 +455,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	}
 	retryOrdinalsMu.Unlock()
 	existingRetryObservations := retryCollector.matching(observe.KindMutation, observe.OperationMutationUpsert)
-	if len(existingRetryObservations) != 1 || existingRetryObservations[0].outcome != observe.OutcomeSuccess || existingRetryObservations[0].statements != 8 {
+	if len(existingRetryObservations) != 1 || existingRetryObservations[0].outcome != observe.OutcomeSuccess || existingRetryObservations[0].statements != 10 {
 		t.Fatalf("existing retry observations=%+v", existingRetryObservations)
 	}
 
@@ -501,7 +501,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	}
 	retryOrdinalsMu.Unlock()
 	absentRetryObservations := retryCollector.matching(observe.KindMutation, observe.OperationMutationUpsert)
-	if len(absentRetryObservations) != 1 || absentRetryObservations[0].outcome != observe.OutcomeSuccess || absentRetryObservations[0].statements != 18 {
+	if len(absentRetryObservations) != 1 || absentRetryObservations[0].outcome != observe.OutcomeSuccess || absentRetryObservations[0].statements != 20 {
 		t.Fatalf("absent retry observations=%+v", absentRetryObservations)
 	}
 	fixture.app.observer = nil
@@ -693,7 +693,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	_, err = SystemUpdateVersioned(ctx, system, fixture.postDescriptor, fixture.target(32), golem.ExpectVersion(1), fixture.updateTitle("stale"))
 	assertOptimisticConcurrencyError(t, err, golem.CodeConflict, "mutation conflicted")
 	updates := collector.matching(observe.KindMutation, observe.OperationMutationUpdate)
-	if len(updates) != 2 || updates[0].statements != 4 || updates[0].outcome != observe.OutcomeSuccess || updates[1].statements != 1 || updates[1].outcome != observe.OutcomeRefused || updates[1].reason != observe.ReasonConflict {
+	if len(updates) != 2 || updates[0].statements != 5 || updates[0].outcome != observe.OutcomeSuccess || updates[1].statements != 1 || updates[1].outcome != observe.OutcomeRefused || updates[1].reason != observe.ReasonConflict {
 		t.Fatalf("CAS update observations=%+v", updates)
 	}
 	if _, err := SystemUpsertVersioned(ctx, system, fixture.postDescriptor, fixture.target(32), golem.ExpectExisting(2), createPost(32, "unused"), fixture.updateTitle("observed-upsert")); err != nil {
@@ -702,7 +702,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	_, err = SystemUpsertVersioned(ctx, system, fixture.postDescriptor, fixture.target(32), golem.ExpectExisting(2), createPost(32, "unused"), fixture.updateTitle("stale"))
 	assertOptimisticConcurrencyError(t, err, golem.CodeConflict, "mutation conflicted")
 	upserts := collector.matching(observe.KindMutation, observe.OperationMutationUpsert)
-	if len(upserts) != 2 || upserts[0].statements != 4 || upserts[0].outcome != observe.OutcomeSuccess || upserts[1].statements != 1 || upserts[1].reason != observe.ReasonConflict {
+	if len(upserts) != 2 || upserts[0].statements != 5 || upserts[0].outcome != observe.OutcomeSuccess || upserts[1].statements != 1 || upserts[1].reason != observe.ReasonConflict {
 		t.Fatalf("CAS upsert observations=%+v", upserts)
 	}
 	var factsAfterObservations int

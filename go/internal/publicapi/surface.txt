@@ -457,6 +457,7 @@ golem.(*EventMetadata).GenerationDigest func() SchemaDigest
 golem.(*EventMetadata).ModelID func() ModelID
 golem.(*EventMetadata).RecordedAt func() time.Time
 golem.(*EventMetadata).TransactionOrdinal func() uint32
+golem.(*EventMetadata).Version func() int64
 golem.(*EventModelMetadata).EventSchemaDigest func() EventSchemaDigest
 golem.(*EventModelMetadata).IdentityFields func() []FieldID
 golem.(*EventModelMetadata).IdentityTypeName func() string
@@ -1212,6 +1213,7 @@ golem.(EventMetadata).GenerationDigest func() SchemaDigest
 golem.(EventMetadata).ModelID func() ModelID
 golem.(EventMetadata).RecordedAt func() time.Time
 golem.(EventMetadata).TransactionOrdinal func() uint32
+golem.(EventMetadata).Version func() int64
 golem.(EventModelMetadata).EventSchemaDigest func() EventSchemaDigest
 golem.(EventModelMetadata).IdentityFields func() []FieldID
 golem.(EventModelMetadata).IdentityTypeName func() string
@@ -3597,6 +3599,7 @@ internal/event/metadatavalue.(*Value).Generation func() [32]uint8
 internal/event/metadatavalue.(*Value).ModelID func() [16]uint8
 internal/event/metadatavalue.(*Value).Ordinal func() uint32
 internal/event/metadatavalue.(*Value).RecordedAt func() time.Time
+internal/event/metadatavalue.(*Value).Version func() int64
 internal/event/metadatavalue.(Value).Action func() string
 internal/event/metadatavalue.(Value).CausationID func() [16]uint8
 internal/event/metadatavalue.(Value).EventID func() [16]uint8
@@ -3605,6 +3608,7 @@ internal/event/metadatavalue.(Value).Generation func() [32]uint8
 internal/event/metadatavalue.(Value).ModelID func() [16]uint8
 internal/event/metadatavalue.(Value).Ordinal func() uint32
 internal/event/metadatavalue.(Value).RecordedAt func() time.Time
+internal/event/metadatavalue.(Value).Version func() int64
 internal/event/metadatavalue.Value comparable
 internal/event/metadatavalue.Value type struct
 internal/event/typedvalue.(*ValidatedEvent).Entity func() (golem.RuntimeModelRow, bool)

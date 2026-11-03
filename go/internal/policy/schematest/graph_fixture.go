@@ -1,10 +1,12 @@
 package schematest
 
 import (
+	"context"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	compilerrowversion "github.com/eleven-am/golem/go/internal/compiler/rowversion"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
@@ -27,6 +29,8 @@ type GraphFixture struct {
 	PostComments, CommentPost                  golem.FieldID
 	Authorship, Commenting                     golem.RelationID
 	UserKey, PostKey, CommentKey               golem.KeyID
+
+	UserRowVersion, PostRowVersion, CommentRowVersion golem.FieldID
 }
 
 func NewGraph(t testing.TB) GraphFixture {
@@ -98,6 +102,10 @@ func newGraphConfigured(t testing.TB, subscribed, runtimeDefaults bool, postgres
 		{ModelID: comment, Fields: fieldContracts(commentID, commentPostID, commentBody, commentPost), Subscriptions: subscribed},
 	}}
 	normalizeSubscribedEvents(t, model, &contract)
+	rowVersions := map[compilerir.ModelID]compilerir.FieldID{}
+	if subscribed {
+		rowVersions = applyRowVersions(t, &model, &contract)
+	}
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
 		if err != nil {
@@ -116,11 +124,17 @@ func newGraphConfigured(t testing.TB, subscribed, runtimeDefaults bool, postgres
 	})
 	sqliteSchema := graphPhysicalSchema(compilerir.SQLite, user, post, comment, userID, userName, postID, authorID, postTitle, postUpdatedAt, commentID, commentPostID, commentBody, userKey, postKey, commentKey, runtimeDefaults)
 	postgresSchema := graphPhysicalSchema(compilerir.PostgreSQL, user, post, comment, userID, userName, postID, authorID, postTitle, postUpdatedAt, commentID, commentPostID, commentBody, userKey, postKey, commentKey, runtimeDefaults)
-	postgresSchema.Namespace.Name = postgresNamespace
 	if subscribed {
-		sqliteSchema.System = graphSystemSchema("main")
-		postgresSchema.System = graphSystemSchema(postgresSystemNamespace)
+		var err error
+		if sqliteSchema, err = sqliteprovider.New().Lower(context.Background(), model, physical.LowerOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if postgresSchema, err = postgresprovider.New().Lower(context.Background(), model, physical.LowerOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		postgresSchema.System.Namespace.Name = postgresSystemNamespace
 	}
+	postgresSchema.Namespace.Name = postgresNamespace
 	bundle := golem.GeneratedSchemaBundle(golem.SchemaDigest{2}, "schematest", "p3-graph", modelDocument, contractDocument,
 		providerDocument(t, golem.SQLite, sqliteSchema), providerDocument(t, golem.PostgreSQL, postgresSchema))
 	registry, err := schema.New(bundle)
@@ -139,7 +153,30 @@ func newGraphConfigured(t testing.TB, subscribed, runtimeDefaults bool, postgres
 	if runtimeDefaults {
 		result.PostUpdatedAt = golem.FieldID(mustFixed(t, string(postUpdatedAt)))
 	}
+	if subscribed {
+		result.UserRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[user])))
+		result.PostRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[post])))
+		result.CommentRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[comment])))
+	}
 	return result
+}
+
+func applyRowVersions(t testing.TB, model *compilerir.ModelIR, contract *compilerir.ContractIR) map[compilerir.ModelID]compilerir.FieldID {
+	t.Helper()
+	compilation := compilerir.CompilationIR{Model: *model, Contract: *contract}
+	if diagnostics := compilerrowversion.Apply(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("row version fixture: %v", diagnostics)
+	}
+	*model, *contract = compilation.Model, compilation.Contract
+	versions := map[compilerir.ModelID]compilerir.FieldID{}
+	for _, declared := range model.Models {
+		for _, field := range declared.Fields {
+			if compilerir.IsRowVersionField(field) {
+				versions[declared.ID] = field.ID
+			}
+		}
+	}
+	return versions
 }
 
 func graphSystemSchema(namespace physical.PhysicalName) physical.SystemSchema {
@@ -204,7 +241,7 @@ func normalizeDeclaredSubscribedEvents(t testing.TB, model compilerir.ModelIR, c
 		}
 		entry.Event = &compilerir.EventContractIR{
 			PayloadTypeName: name + "Event", IdentityTypeName: identityType,
-			MetadataFields:     []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
+			MetadataFields:     []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"},
 			DeleteSnapshotFull: compilerir.DeleteSnapshotIsFull(logical, snapshot), Schema: shape, SchemaFingerprint: fingerprint,
 		}
 	}

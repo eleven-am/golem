@@ -899,8 +899,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		f.t.Fatalf("external SQL insert: %v", err)
 	}
 	fields := social.GolemGeneratedPostDescriptor.Metadata().ScanFields()
-	if len(fields) != 18 {
-		f.t.Fatalf("Post scan fields=%d want=18", len(fields))
+	if len(fields) != 19 {
+		f.t.Fatalf("Post scan fields=%d want=19", len(fields))
 	}
 	cells := []golem.RuntimeReadCell{
 		golem.RuntimePresentReadCell(fields[0], id, nil),
@@ -921,6 +921,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		golem.RuntimePresentReadCell(fields[15], topics, func(value golem.List[string]) golem.List[string] { return append(golem.List[string](nil), value...) }),
 		golem.RuntimePresentReadCell(fields[16], instant, nil),
 		golem.RuntimePresentReadCell(fields[17], instant, nil),
+		golem.RuntimePresentReadCell(fields[18], int64(0), nil),
 	}
 	row, err := golem.RuntimeCDCModelRow(social.GolemGeneratedPostDescriptor.Metadata().ModelID(), cells...)
 	if err != nil {

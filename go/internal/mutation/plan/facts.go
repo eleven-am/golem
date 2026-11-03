@@ -28,7 +28,7 @@ func ModelEventSchema(registry *schema.Registry, model policyir.ModelID) (mutati
 	if err != nil {
 		return mutationir.FactCodecRequirement{}, [32]byte{}, nil, err
 	}
-	codec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersionV2, mutationfact.CodecIdentityV2, [32]byte(registry.GenerationDigest()))
+	codec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(registry.GenerationDigest()))
 	if err != nil {
 		return mutationir.FactCodecRequirement{}, [32]byte{}, nil, err
 	}

@@ -96,6 +96,7 @@ func p7AuthorizationCDCRow(t testing.TB, fixture p7EventRuntimeFixture, title st
 		golem.RuntimePresentReadCell(fixture.schema.PostID, golem.UUID{15: 9}, nil),
 		golem.RuntimePresentReadCell(fixture.schema.AuthorID, golem.UUID{15: 1}, nil),
 		golem.RuntimePresentReadCell(fixture.schema.PostTitle, title, nil),
+		golem.RuntimePresentReadCell(fixture.schema.PostRowVersion, int64(1), nil),
 	)
 	if err != nil {
 		t.Fatal(err)

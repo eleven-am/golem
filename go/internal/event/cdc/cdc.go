@@ -27,7 +27,7 @@ type Encoded struct {
 }
 
 type Recorder interface {
-	RecordCDC(context.Context, []mutationfact.OutboxRow) error
+	RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func(versions []int64) ([]mutationfact.OutboxRow, error)) error
 }
 
 type Correlator interface {
@@ -42,6 +42,7 @@ type EncodeInput struct {
 	EventID             golem.EventID
 	CausationID         golem.CausationID
 	Ordinal             uint32
+	Version             int64
 	Model               golem.ModelID
 	Action              golem.EventAction
 	Before              *golem.RuntimeModelRow
@@ -103,28 +104,36 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 	}
 	causation := deriveCausationID(identity, owned.SourceTransactionID)
 	notices := make([]events.Notice, len(owned.Changes))
-	facts := make([]mutationfact.OutboxRow, len(owned.Changes))
-	for index, change := range owned.Changes {
-		eventID := deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)
-		encoded, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
-			Adapter: identity, SourceTransactionID: owned.SourceTransactionID,
-			RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: eventID, CausationID: causation,
-			Ordinal: change.Ordinal, Model: change.Model, Action: change.Action,
-			Before: cloneRowPointer(change.Before), After: cloneRowPointer(change.After),
-		})
-		notice, fact := encoded.Notice, encoded.Fact
-		if encodeErr != nil || !notice.Valid() || !factMatches(fact, eventID, causation, change.Ordinal) || notice.EventID() != eventID || notice.CausationID() != causation || notice.TransactionOrdinal() != change.Ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
-			return events.Failure(events.CodeCDCInvalid)
+	var batch events.EventBatch
+	build := func(versions []int64) ([]mutationfact.OutboxRow, error) {
+		if len(versions) != len(owned.Changes) {
+			return nil, events.Failure(events.CodeCDCInvalid)
 		}
-		notices[index] = notice
-		facts[index] = fact
-		events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCReceive, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
+		facts := make([]mutationfact.OutboxRow, len(owned.Changes))
+		for index, change := range owned.Changes {
+			eventID := deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)
+			encoded, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
+				Adapter: identity, SourceTransactionID: owned.SourceTransactionID,
+				RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: eventID, CausationID: causation,
+				Ordinal: change.Ordinal, Version: versions[index], Model: change.Model, Action: change.Action,
+				Before: cloneRowPointer(change.Before), After: cloneRowPointer(change.After),
+			})
+			notice, fact := encoded.Notice, encoded.Fact
+			if encodeErr != nil || !notice.Valid() || !factMatches(fact, eventID, causation, change.Ordinal) || notice.EventID() != eventID || notice.CausationID() != causation || notice.TransactionOrdinal() != change.Ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
+				return nil, events.Failure(events.CodeCDCInvalid)
+			}
+			notices[index] = notice
+			facts[index] = fact
+			events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCReceive, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
+		}
+		built, batchErr := eventvalue.NewEventBatchBounded(causation, notices, emitter.config.MaxBatchBytes)
+		if batchErr != nil {
+			return nil, events.Failure(events.CodeCDCInvalid)
+		}
+		batch = built
+		return facts, nil
 	}
-	batch, err := eventvalue.NewEventBatchBounded(causation, notices, emitter.config.MaxBatchBytes)
-	if err != nil {
-		return events.Failure(events.CodeCDCInvalid)
-	}
-	if err := emitter.config.Recorder.RecordCDC(ctx, facts); err != nil {
+	if err := emitter.config.Recorder.RecordCDC(ctx, causation, owned.Changes, build); err != nil {
 		if code, ok := events.CodeOf(err); ok && code == events.CodeCDCInvalid {
 			return events.Failure(events.CodeCDCInvalid)
 		}

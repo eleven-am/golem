@@ -27,6 +27,7 @@ type Metadata struct {
 	// it; V2 must resolve to the digest carried on wire.
 	ResolvedEventSchema golem.EventSchemaDigest
 	ModelID             golem.ModelID
+	Version             int64
 }
 
 type ValidatedEvent struct {
@@ -43,7 +44,7 @@ func New(metadata Metadata, identity []any, entity *golem.RuntimeModelRow) (Vali
 		CausationID: [16]byte(metadata.CausationID), Ordinal: metadata.Ordinal,
 		RecordedAt: metadata.RecordedAt, Generation: [32]byte(metadata.Generation),
 		EventSchema: [32]byte(metadata.EventSchema), HasEventSchema: metadata.HasEventSchema,
-		ModelID: [16]byte(metadata.ModelID),
+		ModelID: [16]byte(metadata.ModelID), Version: metadata.Version,
 	})
 	public, err := golem.RuntimeValidatedEventMetadata(value)
 	if err != nil {

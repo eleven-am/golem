@@ -78,7 +78,7 @@ func (fixture deleteEvalFixture) factRows(t *testing.T, causation uint16, facts 
 	t.Helper()
 	rows := make([]mutationfact.OutboxRow, 0, len(facts))
 	for _, fact := range facts {
-		row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(fact.model), fact.cells)
+		row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(fact.model), withTestRowVersion(fixture.schema.Registry, fact.model, fact.cells))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +106,7 @@ func (fixture deleteEvalFixture) factRows(t *testing.T, causation uint16, facts 
 		if err != nil {
 			t.Fatal(err)
 		}
-		envelope, err := mutationfact.NewV2(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(p7OracleID(fact.eventID)), requirement, mutationfact.CausationID(golem.CausationID(p7OracleID(causation))), fact.ordinal, &row, after)
+		envelope, err := mutationfact.New(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(p7OracleID(fact.eventID)), requirement, mutationfact.CausationID(golem.CausationID(p7OracleID(causation))), fact.ordinal, 7, &row, after)
 		if err != nil {
 			t.Fatal(err)
 		}

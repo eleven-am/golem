@@ -35,6 +35,7 @@ type EventMetadata struct {
 	eventSchema EventSchemaDigest
 	hasSchema   bool
 	model       ModelID
+	version     int64
 }
 
 // RuntimeValidatedEventMetadata consumes a representation-closed internal
@@ -53,11 +54,15 @@ func RuntimeValidatedEventMetadata(value metadatavalue.Value) (EventMetadata, er
 	if action != EventCreated && action != EventUpdated && action != EventDeleted {
 		return EventMetadata{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated metadata action is unknown")
 	}
+	version := value.Version()
+	if version < 0 {
+		return EventMetadata{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated metadata carries no row version")
+	}
 	recordedAt = recordedAt.UTC().Truncate(time.Microsecond)
 	if hasSchema && eventSchema == (EventSchemaDigest{}) || !hasSchema && eventSchema != (EventSchemaDigest{}) {
 		return EventMetadata{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated event-schema metadata is inconsistent")
 	}
-	return EventMetadata{eventID: eventID, action: action, causationID: causation, ordinal: ordinal, recordedAt: recordedAt, generation: generation, eventSchema: eventSchema, hasSchema: hasSchema, model: model}, nil
+	return EventMetadata{eventID: eventID, action: action, causationID: causation, ordinal: ordinal, recordedAt: recordedAt, generation: generation, eventSchema: eventSchema, hasSchema: hasSchema, model: model, version: version}, nil
 }
 
 func (metadata EventMetadata) EventID() EventID               { return metadata.eventID }
@@ -67,6 +72,7 @@ func (metadata EventMetadata) TransactionOrdinal() uint32     { return metadata.
 func (metadata EventMetadata) RecordedAt() time.Time          { return metadata.recordedAt }
 func (metadata EventMetadata) GenerationDigest() SchemaDigest { return metadata.generation }
 func (metadata EventMetadata) ModelID() ModelID               { return metadata.model }
+func (metadata EventMetadata) Version() int64                 { return metadata.version }
 func (metadata EventMetadata) EventSchemaDigest() (EventSchemaDigest, bool) {
 	return metadata.eventSchema, metadata.hasSchema
 }

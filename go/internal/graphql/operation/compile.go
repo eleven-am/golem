@@ -298,7 +298,7 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 	for _, field := range outer {
 		slot := EventSlot{ResponseName: field.responseName, FieldName: field.field.Name}
 		switch field.field.Name {
-		case "eventID", "causationID", "transactionOrdinal", "recordedAt", "type":
+		case "eventID", "causationID", "transactionOrdinal", "recordedAt", "version", "type":
 			if len(field.field.Arguments) != 0 || len(field.selections) != 0 {
 				return Result{}, compileerr.Root(eventFieldShape(field.field.Name, contract.GraphQLName), root.responseName)
 			}

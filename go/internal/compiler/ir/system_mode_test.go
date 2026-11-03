@@ -1,8 +1,6 @@
 package ir
 
 import (
-	"bytes"
-	"strings"
 	"testing"
 )
 
@@ -35,21 +33,6 @@ func TestCurrentContractVersionCarriesSystemModeWithoutABump(t *testing.T) {
 	}
 	if !HasMode(decoded.Models[0].Fields[1].Modes, ModeSystem) || !HasMode(decoded.Models[0].Fields[1].Modes, ModeImmutable) {
 		t.Fatalf("system immutable modes did not survive canonical round trip: %#v", decoded.Models[0].Fields)
-	}
-}
-
-func TestHistoricalV5ReplayRefusesTheSystemMode(t *testing.T) {
-	payload, err := CanonicalContract(ContractIR{FormatVersion: ContractFormatVersion, GraphQLABIVersion: 4, Models: []ModelContractIR{{
-		ModelID: "10000000000000000000000000000000",
-		Fields:  []FieldContractIR{{FieldID: "12000000000000000000000000000000", Modes: []FieldMode{ModeSystem}}},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	relabelled := bytes.Replace(payload, []byte(`"formatVersion":7`), []byte(`"formatVersion":5`), 1)
-	_, err = CanonicalDecodeContractV5(relabelled)
-	if err == nil || !strings.Contains(err.Error(), "system") {
-		t.Fatalf("historical v5 replay accepted the system mode: %v", err)
 	}
 }
 

@@ -209,6 +209,7 @@ func newFixtureWithDeleteAction(t testing.TB, userMaxTake, postMaxTake uint32, m
 
 func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID, fullPostDeleteSnapshot, rowVersion bool) Fixture {
 	t.Helper()
+	rowVersion = rowVersion || postSubscriptions
 	post := compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
 	userPosts := compilerir.FieldID(id(13))

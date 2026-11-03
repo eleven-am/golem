@@ -18,7 +18,6 @@ const (
 	ContractFormatVersion                           uint16 = 7
 	// OptimisticConcurrencyContractFormatVersionRequired freezes the first
 	// ContractIR format that carries the optimistic-concurrency projection.
-	// Released v5 documents remain owned by CanonicalDecodeContractV5.
 	OptimisticConcurrencyContractFormatVersionRequired uint16 = 6
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.

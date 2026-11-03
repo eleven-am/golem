@@ -25,7 +25,33 @@ import (
 type publisherTestResolver struct{ registry *schema.Registry }
 
 func (resolver publisherTestResolver) ResolveFactSchema(reference mutationfact.SchemaReference) (*schema.Registry, golem.SchemaDigest, bool) {
-	return resolver.registry, golem.SchemaDigest{}, reference.FormatVersion == mutationfact.FormatVersionV1 && reference.Generation == resolver.registry.GenerationDigest()
+	for _, model := range resolver.registry.EventModels() {
+		fingerprint, _, enabled := model.EventSchema()
+		parsed, err := mutationfact.ParseEventSchemaFingerprint(fingerprint)
+		if enabled && err == nil && parsed == reference.EventSchema {
+			return resolver.registry, parsed, reference.FormatVersion == mutationfact.FormatVersion
+		}
+	}
+	return nil, golem.SchemaDigest{}, false
+}
+
+func newPublisherFact(t testing.TB, fixture schematest.Fixture, event mutationfact.EventID, requirement mutationir.FactRequirement, cause mutationfact.CausationID, ordinal uint32, before, after *mutationdecode.Row) mutationfact.Envelope {
+	t.Helper()
+	model, _ := fixture.Registry.Model(fixture.Post)
+	fingerprint, _, _ := model.EventSchema()
+	digest, err := mutationfact.ParseEventSchemaFingerprint(fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement, err = requirement.WithEventSchema([32]byte(digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := mutationfact.New(fixture.Registry, digest, event, requirement, cause, ordinal, 7, before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope
 }
 
 func (resolver publisherTestResolver) CanDeliverEventSchema(modelID golem.ModelID, digest golem.EventSchemaDigest) bool {
@@ -476,10 +502,7 @@ func publisherValidLease(t *testing.T, fixture schematest.Fixture) eventprovider
 		t.Fatal(err)
 	}
 	cause := mutationfact.CausationID{8}
-	envelope, err := mutationfact.New(fixture.Registry, mutationfact.EventID{9}, requirement, cause, 1, nil, &row)
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelope := newPublisherFact(t, fixture, mutationfact.EventID{9}, requirement, cause, 1, nil, &row)
 	stored, err := envelope.OutboxRow(time.Unix(1_700_000_000, 123_456_000).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -619,10 +642,7 @@ func publisherCausalLease(t *testing.T, fixture schematest.Fixture, rows int) ev
 		if err != nil {
 			t.Fatal(err)
 		}
-		envelope, err := mutationfact.New(fixture.Registry, mutationfact.EventID{byte(ordinal)}, requirement, cause, uint32(ordinal), nil, &row)
-		if err != nil {
-			t.Fatal(err)
-		}
+		envelope := newPublisherFact(t, fixture, mutationfact.EventID{byte(ordinal)}, requirement, cause, uint32(ordinal), nil, &row)
 		stored, err := envelope.OutboxRow(time.Unix(1_700_000_000, 123_456_000).UTC())
 		if err != nil {
 			t.Fatal(err)

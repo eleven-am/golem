@@ -186,10 +186,7 @@ func p7EvidenceLease(t testing.TB, fixture schematest.Fixture, causeByte byte, r
 		if err != nil {
 			t.Fatal(err)
 		}
-		fact, err := mutationfact.New(fixture.Registry, mutationfact.EventID{14: causeByte, 15: byte(ordinal)}, requirement, causation, uint32(ordinal), nil, &row)
-		if err != nil {
-			t.Fatal(err)
-		}
+		fact := newPublisherFact(t, fixture, mutationfact.EventID{14: causeByte, 15: byte(ordinal)}, requirement, causation, uint32(ordinal), nil, &row)
 		stored, err := fact.OutboxRow(recordedAt.Add(time.Duration(ordinal-1) * time.Microsecond))
 		if err != nil {
 			t.Fatal(err)

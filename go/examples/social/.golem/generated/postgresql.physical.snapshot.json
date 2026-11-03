@@ -2,11 +2,11 @@
   "kind": "physical_snapshot",
   "formatVersion": 1,
   "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
-  "contractFingerprint": "97485267bfe97e4eb2fa454175b9f470e3a1b37f28b866deb0f9da4816c5a108",
+  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
   "provider": "postgresql",
   "physicalFingerprint": "7e8a6410722d0334686a5401333c34ae458da530483ea8c95ead5685bd5d8389",
   "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-  "generationDigest": "b900ed7cd5998b7d8dfeaaaae1f4f0fa7135befa94ec04e0db79df111fbba555",
+  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {

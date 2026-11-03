@@ -251,10 +251,6 @@ func TestP4IndependentMutationOraclePostgreSQLProfiles(t *testing.T) {
 	}
 }
 
-// independentFactHeaderValid intentionally does not call the production fact
-// decoder. It understands the persisted V1/V2 prefix well enough to prove the
-// exact version/codec pairing and that V2 carries a non-zero event-schema
-// digest, while retaining historical V1 acceptance for upgrade coverage.
 func independentFactHeaderValid(metadata []byte) bool {
 	if len(metadata) < 15 || !bytes.Equal(metadata[:9], []byte("GOLEMFACT")) {
 		return false
@@ -267,20 +263,13 @@ func independentFactHeaderValid(metadata []byte) bool {
 	offset := 15
 	codec := string(metadata[offset : offset+codecLength])
 	offset += codecLength
-	if version == 1 && codec != "golem.fact.v1" || version == 2 && codec != "golem.fact.v2" || version != 1 && version != 2 {
+	if version != 3 || codec != "golem.fact.v3" {
 		return false
 	}
-	// event ID + generation digest are common to both formats.
-	if len(metadata)-offset < 16+32 {
+	if len(metadata)-offset < 16+32+32 {
 		return false
 	}
 	offset += 16 + 32
-	if version == 1 {
-		return true
-	}
-	if len(metadata)-offset < 32 {
-		return false
-	}
 	var nonZero bool
 	for _, value := range metadata[offset : offset+32] {
 		nonZero = nonZero || value != 0

@@ -16,6 +16,7 @@ type Input struct {
 	EventSchema    [32]byte
 	HasEventSchema bool
 	ModelID        [16]byte
+	Version        int64
 }
 
 type Value struct{ input Input }
@@ -32,3 +33,4 @@ func (value Value) EventSchema() ([32]byte, bool) {
 	return value.input.EventSchema, value.input.HasEventSchema
 }
 func (value Value) ModelID() [16]byte { return value.input.ModelID }
+func (value Value) Version() int64    { return value.input.Version }

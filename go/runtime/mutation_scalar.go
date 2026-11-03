@@ -598,6 +598,10 @@ func scalarMutationFactImages(registry *schema.Registry, model policyir.ModelID,
 	switch action {
 	case mutationir.FactCreated:
 		after, err := decodeAt(verification.AfterStatement())
+		if err != nil {
+			return nil, nil, err
+		}
+		after, err = withStampedVersion(registry, model, after, execution)
 		return nil, after, err
 	case mutationir.FactUpdated:
 		beforeIndex, ok := verification.BeforeStatement()
@@ -620,6 +624,42 @@ func scalarMutationFactImages(registry *schema.Registry, model policyir.ModelID,
 	default:
 		return nil, nil, fmt.Errorf("unknown fact action %d", action)
 	}
+}
+
+func withStampedVersion(registry *schema.Registry, model policyir.ModelID, row *mutationdecode.Row, execution scalarMutationExecution) (*mutationdecode.Row, error) {
+	metadata, ok := registry.Model(golem.ModelID(model))
+	if !ok {
+		return row, nil
+	}
+	field, ok := metadata.RowVersion()
+	if !ok {
+		return row, nil
+	}
+	for _, statement := range execution.statements {
+		if statement.role != mutationsql.StampVersion {
+			continue
+		}
+		stamp, err := mutationdecode.FromReadCells(registry, model, statement.cells)
+		if err != nil {
+			return nil, err
+		}
+		cell, present := stamp.Cell(policyir.FieldID(field))
+		if !present {
+			return nil, fmt.Errorf("version stamp statement carries no version")
+		}
+		cells := make([]mutationdecode.Cell, 0, len(row.Cells())+1)
+		for _, existing := range row.Cells() {
+			if existing.FieldID() != policyir.FieldID(field) {
+				cells = append(cells, existing)
+			}
+		}
+		stamped, err := mutationdecode.NewRow(registry, model, append(cells, cell))
+		if err != nil {
+			return nil, err
+		}
+		return &stamped, nil
+	}
+	return row, nil
 }
 
 func scalarMutationArguments(operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, results []scalarMutationStatementResult) ([]any, error) {
