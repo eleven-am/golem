@@ -85,14 +85,13 @@ func TestUnsupportedLegacyProtocolIsRefusedAndSSEIsServed(t *testing.T) {
 
 	stream.values <- Response{Data: map[string]any{"ticks": int32(7)}}
 	close(stream.values)
-	body, _ := json.Marshal(Request{Query: `subscription { ticks }`})
-	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(liveBody(`subscription { ticks }`)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	request = request.WithContext(context.WithValue(request.Context(), wsAuthKey{}, 41))
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	want := "event: next\ndata: {\"data\":{\"ticks\":7}}\n\nevent: complete\n\n"
+	want := liveAckFrame + "event: next\ndata: {\"data\":{\"ticks\":7}}\n\nevent: complete\n\n"
 	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream" || recorder.Body.String() != want || !recorder.Flushed {
 		t.Fatalf("SSE subscription was not streamed: status=%d type=%q flushed=%t body=%q", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Flushed, recorder.Body.String())
 	}
@@ -108,7 +107,7 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"wrong"}`)})
+		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"wrong"`)})
 		if code := readCloseCode(t, connection); code != 4403 {
 			t.Fatalf("authentication close=%d", code)
 		}
@@ -123,7 +122,7 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 		if code := readCloseCode(t, connection); code != 4400 {
 			t.Fatalf("oversized init close=%d", code)
 		}
@@ -138,12 +137,13 @@ func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 		if ack := readWS(t, connection); ack.Type != "connection_ack" {
 			t.Fatalf("ack=%#v", ack)
 		}
 		payload := json.RawMessage(`{"query":"subscription { ticks }"}`)
 		writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: payload})
+		readAckWS(t, connection, "one")
 		writeWS(t, connection, wsMessage{ID: "two", Type: "subscribe", Payload: payload})
 		refused := readWS(t, connection)
 		var failures []Error

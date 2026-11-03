@@ -292,13 +292,14 @@ func orderSubscriptionFrame(t *testing.T, server *graphql.Server[int], query str
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInit("")}); err != nil {
 		t.Fatal(err)
 	}
 	readOrderFrame(t, connection)
 	if err := connection.WriteJSON(map[string]any{"id": "one", "type": "subscribe", "payload": map[string]any{"query": query}}); err != nil {
 		t.Fatal(err)
 	}
+	readLiveAck(t, connection, "one")
 	return readOrderFrame(t, connection)
 }
 

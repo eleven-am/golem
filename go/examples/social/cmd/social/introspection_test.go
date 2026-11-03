@@ -414,7 +414,7 @@ func (world introspectionWorld) assertSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveExtensions()}); err != nil {
 		t.Fatal(err)
 	}
 	readWSFrame(t, connection, "connection_ack")
@@ -427,6 +427,9 @@ func (world introspectionWorld) assertSubscriptions(t *testing.T) {
 	}
 	if err := connection.WriteJSON(map[string]any{"id": "nested", "type": "subscribe", "payload": map[string]any{"query": `subscription { postEvents { __typename type entity { __typename id } } }`}}); err != nil {
 		t.Fatal(err)
+	}
+	if ack := readWSFrame(t, connection, "next"); ack.ID != "nested" || string(ack.Payload) != `{"data":null,"extensions":{"golem":{"live":true}}}` {
+		t.Fatalf("nested ack id=%q payload=%s", ack.ID, ack.Payload)
 	}
 	postID := mustUUID(t, "22000000-0000-0000-0000-000000000001")
 	if _, err := world.caller.Posts.Create(context.Background(), social.Posts.Create(

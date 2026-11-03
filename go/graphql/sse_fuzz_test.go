@@ -33,7 +33,7 @@ func FuzzGraphQLSSERequestDecoder(f *testing.F) {
 			t.Skip()
 		}
 		server := newFuzzServer(t)
-		decoded, failure := decodeHTTPRequest(bytes.NewReader(body), server.limits)
+		decoded, _, failure := decodeHTTPRequest(bytes.NewReader(body), server.limits)
 		if failure == nil && (decoded.Query == "" || decoded.Variables == nil) {
 			t.Fatalf("decoder accepted an incomplete request: %#v", decoded)
 		}

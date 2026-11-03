@@ -80,7 +80,7 @@ func TestPublisherSubscriptionAndWebSocketErrorsAreSanitized(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": map[string]any{"golem": map[string]any{"protocol": 1, "contract": strings.Repeat("0", 64)}}}); err != nil {
 		t.Fatal(err)
 	}
 	p7ReadSanitizedFrame(t, connection)

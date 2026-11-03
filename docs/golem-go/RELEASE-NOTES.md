@@ -14,6 +14,22 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
+## go/v0.8.1 / Unreleased.
+
+**The live protocol.** WebSocket and SSE subscriptions now require the `golem`
+block `{"protocol": 1, "contract": "<hex>"}`: in `connection_init.payload.golem`
+on WebSocket, in `extensions.golem` on SSE. There is no live path for a client
+without it. A mismatch closes the WebSocket with `4426` (`golem:protocol` or
+`golem:contract`) and is refused on HTTP and SSE as `GOLEM_PROTOCOL_MISMATCH`
+or `GOLEM_CONTRACT_MISMATCH`. The `golem` key is removed from the payload before
+`WebSocketInit` sees it. Plain HTTP queries and mutations are unchanged; a block
+sent with one is checked. After a subscription is registered the server sends
+exactly one `next` frame, `{"data":null,"extensions":{"golem":{"live":true}}}`,
+before any event; a refused subscription gets no ack. `graphql.Response` gains
+an optional `Extensions` field. A client that subscribes without the block must
+add it before upgrading to this version; see the GUIDE section "The live
+handshake and the subscription ack".
+
 ## go/v0.8.0
 
 **GraphQL subscriptions no longer report a cancelled operation as an internal

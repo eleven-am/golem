@@ -125,13 +125,14 @@ func TestWebSocketEventInFlightWhenConnectionIsCancelledWritesNoFrameAndReportsN
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInit("")}); err != nil {
 		t.Fatal(err)
 	}
 	readActiveFrame(t, connection)
 	if err := connection.WriteJSON(map[string]any{"id": "one", "type": "subscribe", "payload": map[string]any{"query": inflightEventQuery}}); err != nil {
 		t.Fatal(err)
 	}
+	readLiveAck(t, connection, "one")
 	select {
 	case <-executor.closed:
 	case <-time.After(5 * time.Second):
@@ -166,7 +167,7 @@ func TestSSEEventInFlightWhenRequestIsCancelledWritesNoFrameAndReportsNothing(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(graphql.Request{Query: inflightEventQuery})
+	body := liveBody(inflightEventQuery)
 	for repetition := 0; repetition < repetitions; repetition++ {
 		requestContext, cancel := context.WithCancel(context.Background())
 		cancelRequest.Store(&cancel)
@@ -176,8 +177,8 @@ func TestSSEEventInFlightWhenRequestIsCancelledWritesNoFrameAndReportsNothing(t 
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
 		cancel()
-		if strings.Contains(recorder.Body.String(), "event: next") || strings.Contains(recorder.Body.String(), "event: complete") {
-			t.Fatalf("repetition %d: a cancelled stream wrote frames: %q", repetition, recorder.Body.String())
+		if recorder.Body.String() != "event: next\ndata: "+liveAckWire+"\n\n" {
+			t.Fatalf("repetition %d: a cancelled stream wrote more than its ack: %q", repetition, recorder.Body.String())
 		}
 	}
 	if messages := reported.snapshot(); len(messages) != 0 {
@@ -204,7 +205,7 @@ func TestWebSocketEventInFlightWhenClientCompletesReportsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInit("")}); err != nil {
 		t.Fatal(err)
 	}
 	readActiveFrame(t, connection)
@@ -213,6 +214,7 @@ func TestWebSocketEventInFlightWhenClientCompletesReportsNothing(t *testing.T) {
 		if err := connection.WriteJSON(map[string]any{"id": id, "type": "subscribe", "payload": map[string]any{"query": inflightEventQuery}}); err != nil {
 			t.Fatal(err)
 		}
+		readLiveAck(t, connection, id)
 		select {
 		case <-executor.entered:
 		case <-time.After(5 * time.Second):

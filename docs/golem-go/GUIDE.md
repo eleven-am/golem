@@ -1609,6 +1609,49 @@ ordinary JSON errors. Keep-alive comments are sent every
 values is refused with `GOLEM_EVENT_CONFIG`. A client disconnect ends the
 subscription, and `Shutdown` ends every stream.
 
+#### The live handshake and the subscription ack
+
+A subscription is served only to a client that declares the live protocol it
+speaks and the contract it was generated from. A client that does not is
+refused; there is no fallback live path. Plain HTTP queries and mutations need
+no declaration.
+
+The declaration is the `golem` block `{"protocol": 1, "contract": "<hex>"}`.
+`contract` is the server's contract fingerprint, the lowercase hex of
+`Server.ContractFingerprint()`, which a generated client carries.
+
+- **WebSocket.** Put the block in `connection_init.payload` under the key
+  `golem`. golem removes the key before it passes the rest of the payload to
+  `WebSocketInit`, so `WebSocketInit` sees only your own fields. The block is
+  checked before `WebSocketInit` runs. A `subscribe` message must not carry
+  `extensions`.
+- **SSE.** Put the block in the request's `extensions.golem`. The envelope
+  accepts no other extension key.
+- **Plain HTTP.** A query or mutation without the block runs unchanged. When
+  the block is present it is checked, and a mismatch is refused before the
+  operation runs.
+
+A block that is absent, not an object, has an unknown field, or names another
+protocol is a protocol mismatch. A well-formed block that names another
+contract is a contract mismatch, which means the client was generated from a
+different schema than this server and must be regenerated.
+
+| Mismatch | WebSocket | HTTP and SSE |
+|---|---|---|
+| protocol | close `4426`, reason `golem:protocol` | `GOLEM_PROTOCOL_MISMATCH` |
+| contract | close `4426`, reason `golem:contract` | `GOLEM_CONTRACT_MISMATCH` |
+
+SSE answers a mismatch with status 400 and a JSON error, like every refusal
+before a stream starts.
+
+Once a subscription is registered, the server sends one `next` frame before any
+event: `{"data":null,"extensions":{"golem":{"live":true}}}`. It is sent exactly
+once per operation, on WebSocket and SSE alike. A subscription that is refused
+(validation, authorization, the subscription cap) gets its error and no ack. A
+client that needs a consistent view subscribes, waits for the ack, and then
+fetches: a commit after the ack arrives as an event, and a commit before it is
+in the fetch.
+
 ## Event transports
 
 `EventTransport` decides which processes hear an event:

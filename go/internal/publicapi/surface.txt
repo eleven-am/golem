@@ -3574,9 +3574,10 @@ graphql.ResolvePreparedField func[T any](context.Context, PreparedObject) (T, er
 graphql.ResolvePreparedRoot func[T any](context.Context) (T, error)
 graphql.ResolvePreparedSubscriptionRoot func[T any](context.Context) (<-chan T, error)
 graphql.Response type struct
-graphql.Response unkeyed literal {Data, Errors}
+graphql.Response unkeyed literal {Data, Errors, Extensions}
 graphql.Response.Data field any tag "json:\"data,omitempty\""
 graphql.Response.Errors field []Error tag "json:\"errors,omitempty\""
+graphql.Response.Extensions field map[string]any tag "json:\"extensions,omitempty\""
 graphql.ResponseStream type interface {Close, Recv}
 graphql.ResponseStream.Close func() error
 graphql.ResponseStream.Recv func(context.Context) (Response, error)

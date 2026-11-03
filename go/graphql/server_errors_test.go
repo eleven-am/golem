@@ -195,7 +195,7 @@ func errorsTransports() []errorsTransport {
 				t.Fatal(err)
 			}
 			defer connection.Close()
-			writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{}`)})
+			writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit("")})
 			if ack := readWS(t, connection); ack.Type != "connection_ack" {
 				t.Fatalf("ack = %#v", ack)
 			}
