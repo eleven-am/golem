@@ -140,7 +140,7 @@ func TestStandaloneMutationDeliversObserverOnlyAfterConnectionRelease(t *testing
 		done <- err
 	}()
 	value := p8AssertPoolReleasedWhileObserverBlocked(t, fixture.app, observer.entered)
-	if value.outcome != observe.OutcomeSuccess || value.reason != observe.ReasonNone || value.statements != 3 {
+	if value.outcome != observe.OutcomeSuccess || value.reason != observe.ReasonNone || value.statements != 4 {
 		t.Fatalf("mutation observation=%+v", value)
 	}
 	close(observer.release)

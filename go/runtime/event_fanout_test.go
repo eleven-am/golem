@@ -150,7 +150,7 @@ func (fixture deleteEvalFixture) subscribeActor(t *testing.T, model golem.ModelI
 
 func (fixture deleteEvalFixture) publishRowEvent(t *testing.T, action golem.EventAction, eventID uint16, model golem.ModelID, cells []mutationdecode.Cell, identity golem.FieldID) {
 	t.Helper()
-	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), cells)
+	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), withTestRowVersion(fixture.schema.Registry, model, cells))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func (fixture deleteEvalFixture) publishRowEvent(t *testing.T, action golem.Even
 		t.Fatal(err)
 	}
 	id := p7OracleID(eventID)
-	fact, err := mutationfact.NewV2(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, before, &row)
+	fact, err := mutationfact.New(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, 7, before, &row)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 // cdcEventEncoder is the production bridge from one trusted adapter's exact
-// stored-scalar images into the same V2 mutation fact and golem.event.v1 codec
+// stored-scalar images into the same mutation fact and golem.event.v1 codec
 // path used by the transactional outbox publisher. It defines no CDC wire
 // format and accepts no caller-supplied schema, generation, or encoded bytes.
 type cdcEventEncoder struct {
@@ -72,13 +72,14 @@ func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.En
 		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_IMAGE: after: %w", err)
 	}
 
-	fact, err := mutationfact.NewV2(
+	fact, err := mutationfact.New(
 		encoder.registry,
 		golem.SchemaDigest(eventSchema),
 		mutationfact.EventID(input.EventID),
 		requirement,
 		mutationfact.CausationID(input.CausationID),
 		input.Ordinal,
+		input.Version,
 		before,
 		after,
 	)
@@ -108,7 +109,7 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 		len(input.SourceTransactionID) == 0 || len(input.SourceTransactionID) > events.MaximumCDCSourceTransactionBytes || !utf8.ValidString(input.SourceTransactionID) ||
 		input.RecordedAt.IsZero() || input.RecordedAt.Location() != time.UTC || input.RecordedAt.Nanosecond()%int(time.Microsecond) != 0 ||
 		len(input.Cursor) > events.MaximumCDCCursorBytes ||
-		input.EventID == (golem.EventID{}) || input.CausationID == (golem.CausationID{}) || input.Ordinal == 0 || input.Model == (golem.ModelID{}) {
+		input.EventID == (golem.EventID{}) || input.CausationID == (golem.CausationID{}) || input.Ordinal == 0 || input.Version < 0 || input.Model == (golem.ModelID{}) {
 		return fmt.Errorf("P7_CDC_ENCODER_INPUT: identity metadata is invalid")
 	}
 	providerEnabled := false

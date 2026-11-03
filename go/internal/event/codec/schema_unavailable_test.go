@@ -18,7 +18,17 @@ func TestResolveEventSchemaWithoutASchemaIsTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := mutationfact.New(fixture.Registry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &row)
+	model, _ := fixture.Registry.Model(fixture.Post)
+	fingerprint, _, _ := model.EventSchema()
+	digest, err := mutationfact.ParseEventSchemaFingerprint(fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement, err = requirement.WithEventSchema([32]byte(digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := mutationfact.New(fixture.Registry, digest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, 7, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +36,7 @@ func TestResolveEventSchemaWithoutASchemaIsTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := EncodeStoredRow(stored, testResolver{registry: fixture.Registry}, Limits{})
+	envelope, err := EncodeStoredRow(stored, testResolver{registry: fixture.Registry, digest: digest}, Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +45,7 @@ func TestResolveEventSchemaWithoutASchemaIsTyped(t *testing.T) {
 	if !errors.As(err, &failure) {
 		t.Fatalf("error is not *SchemaUnavailableError: %v", err)
 	}
-	want := mutationfact.SchemaReference{FormatVersion: mutationfact.FormatVersionV1, CodecIdentity: mutationfact.CodecIdentityV1, Generation: fixture.Registry.GenerationDigest()}
+	want := mutationfact.SchemaReference{FormatVersion: mutationfact.FormatVersion, CodecIdentity: mutationfact.CodecIdentity, Generation: fixture.Registry.GenerationDigest(), EventSchema: digest}
 	if failure.Reference() != want {
 		t.Fatalf("reference = %#v, want %#v", failure.Reference(), want)
 	}

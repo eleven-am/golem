@@ -397,7 +397,7 @@ func testBundle(t *testing.T) (golem.SchemaBundle, testIDs) {
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{
 		{ModelID: userID, Fields: []compilerir.FieldContractIR{{FieldID: userKey}, {FieldID: postsRelation}}},
 		{ModelID: postID, Fields: []compilerir.FieldContractIR{{FieldID: postKey}, {FieldID: author}, {FieldID: price}, {FieldID: authorRelation}}, Subscriptions: true, Event: &compilerir.EventContractIR{
-			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}, DeleteSnapshotFull: true,
+			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"}, DeleteSnapshotFull: true,
 			Schema: postEventSchema, SchemaFingerprint: postEventFingerprint,
 		}},
 	}}

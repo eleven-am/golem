@@ -317,7 +317,7 @@ func containsField(values []ir.FieldID, field ir.FieldID) bool {
 
 var eventMetadataFields = []string{
 	"eventID", "type", "id", "entity",
-	"causationID", "transactionOrdinal", "recordedAt",
+	"causationID", "transactionOrdinal", "recordedAt", "version",
 }
 
 func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, declared *[]ir.FieldID, span ir.SourceSpan) []ir.Diagnostic {

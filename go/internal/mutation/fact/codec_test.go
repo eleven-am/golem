@@ -14,6 +14,18 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
+var testEventSchema = golem.SchemaDigest{1, 2, 3, 4}
+
+const testRowVersion int64 = 41
+
+func newTestFact(registry *schema.Registry, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, before, after *mutationdecode.Row) (Envelope, error) {
+	bound, err := requirement.WithEventSchema([32]byte(testEventSchema))
+	if err != nil {
+		return Envelope{}, err
+	}
+	return New(registry, testEventSchema, event, bound, causation, ordinal, testRowVersion, before, after)
+}
+
 type testHistoricalResolver struct {
 	registry *schema.Registry
 	digest   golem.SchemaDigest
@@ -163,7 +175,7 @@ func TestEnvelopeRoundTripDeterministicUnderCellShuffle(t *testing.T) {
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactUpdated,
 		[]policyir.FieldID{policyir.FieldID(fixture.PostID)},
 		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil)
-	envelope, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &before, &after)
+	envelope, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &before, &after)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +183,7 @@ func TestEnvelopeRoundTripDeterministicUnderCellShuffle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := Decode(want, fixture.Registry)
+	decoded, err := Decode(want, fixture.Registry, testEventSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +201,7 @@ func TestEnvelopeRoundTripDeterministicUnderCellShuffle(t *testing.T) {
 		t.Fatal("fact metadata leaked non-required scalar fields")
 	}
 	changedExtra := mustRow(t, fixture, postCells(t, fixture, [16]byte{1}, "completely different secret", 1))
-	changedEnvelope, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &changedExtra, &after)
+	changedEnvelope, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &changedExtra, &after)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +217,7 @@ func TestEnvelopeRoundTripDeterministicUnderCellShuffle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partialEnvelope, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &partialBefore, &partialAfter)
+	partialEnvelope, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &partialBefore, &partialAfter)
 	if err != nil {
 		t.Fatalf("fact rejected requirement-sufficient partial images: %v", err)
 	}
@@ -222,7 +234,7 @@ func TestEnvelopeRoundTripDeterministicUnderCellShuffle(t *testing.T) {
 		random.Shuffle(len(shuffledAfter), func(i, j int) { shuffledAfter[i], shuffledAfter[j] = shuffledAfter[j], shuffledAfter[i] })
 		left := mustRow(t, fixture, shuffledBefore)
 		right := mustRow(t, fixture, shuffledAfter)
-		candidate, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &left, &right)
+		candidate, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 7, &left, &right)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +251,7 @@ func TestOutboxDeleteSnapshotIdentityAndSize(t *testing.T) {
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactDeleted,
 		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil,
 		[]policyir.FieldID{policyir.FieldID(fixture.PostTitle)})
-	envelope, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 9, &before, nil)
+	envelope, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 9, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +260,7 @@ func TestOutboxDeleteSnapshotIdentityAndSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.FactVersion != 1 || row.CodecIdentity != CodecIdentity || row.Action != "deleted" || row.AfterIdentity != nil || len(row.BeforeIdentity) == 0 || len(row.DeleteSnapshot) == 0 {
+	if row.FactVersion != int64(FormatVersion) || row.CodecIdentity != CodecIdentity || row.Action != "deleted" || row.AfterIdentity != nil || len(row.BeforeIdentity) == 0 || len(row.DeleteSnapshot) == 0 {
 		t.Fatalf("invalid delete outbox shape: %#v", row)
 	}
 	if row.RecordedAt.Location() != time.UTC || row.RecordedAt.Nanosecond()%1_000 != 0 {
@@ -265,7 +277,7 @@ func TestOutboxDeleteSnapshotIdentityAndSize(t *testing.T) {
 	if bytes.Contains(row.Metadata, []byte("deleted")) {
 		t.Fatal("private delete field leaked into public fact metadata")
 	}
-	joined, err := DecodeOutbox(row.Metadata, row.DeleteSnapshot, fixture.Registry)
+	joined, err := DecodeOutbox(row.Metadata, row.DeleteSnapshot, fixture.Registry, testEventSchema)
 	joinedSnapshot, joinedOK := joined.PrivateDeleteSnapshot()
 	if err != nil || !joinedOK || !mutationdecode.EqualRow(snapshot, joinedSnapshot) {
 		t.Fatalf("decode outbox join: ok=%v err=%v", joinedOK, err)
@@ -287,13 +299,13 @@ func TestCorruptCodecFailsClosed(t *testing.T) {
 	after := mustRow(t, fixture, postCells(t, fixture, [16]byte{1}, "created", 7))
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactCreated, nil,
 		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil)
-	envelope, err := New(fixture.Registry, EventID{1}, requirement, CausationID{2}, 0, nil, &after)
+	envelope, err := newTestFact(fixture.Registry, EventID{1}, requirement, CausationID{2}, 0, nil, &after)
 	if err != nil {
 		t.Fatal(err)
 	}
 	encoded, _ := Encode(envelope)
 	for length := 0; length < len(encoded); length++ {
-		if _, err := Decode(encoded[:length], fixture.Registry); err == nil {
+		if _, err := Decode(encoded[:length], fixture.Registry, testEventSchema); err == nil {
 			t.Fatalf("truncated envelope length %d was accepted", length)
 		}
 	}
@@ -303,11 +315,10 @@ func TestCorruptCodecFailsClosed(t *testing.T) {
 		append(append([]byte(nil), encoded...), 0),
 	}
 	corruptions[0][0] ^= 0xff
-	// Generation begins after magic, version, and codec length+text.
-	generationOffset := len(factMagic) + 2 + 4 + len(CodecIdentity) + 16
-	corruptions[1][generationOffset] ^= 0xff
+	eventSchemaOffset := len(factMagic) + 2 + 4 + len(CodecIdentity) + 16 + 32
+	corruptions[1][eventSchemaOffset] ^= 0xff
 	for index, corrupted := range corruptions {
-		if _, err := Decode(corrupted, fixture.Registry); err == nil {
+		if _, err := Decode(corrupted, fixture.Registry, testEventSchema); err == nil {
 			t.Fatalf("corruption %d was accepted", index)
 		}
 	}
@@ -325,7 +336,7 @@ func TestDeleteSnapshotCanBeUnconfiguredAndAbsent(t *testing.T) {
 	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{4}, "must-not-leak", 99))
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactDeleted,
 		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil, nil)
-	envelope, err := New(fixture.Registry, EventID{4}, requirement, CausationID{5}, 1, &before, nil)
+	envelope, err := newTestFact(fixture.Registry, EventID{4}, requirement, CausationID{5}, 1, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,12 +347,12 @@ func TestDeleteSnapshotCanBeUnconfiguredAndAbsent(t *testing.T) {
 	if row.DeleteSnapshot != nil || bytes.Contains(row.Metadata, []byte("must-not-leak")) {
 		t.Fatal("unconfigured delete snapshot or unrelated scalar leaked into outbox")
 	}
-	if _, err := DecodeOutbox(row.Metadata, nil, fixture.Registry); err != nil {
+	if _, err := DecodeOutbox(row.Metadata, nil, fixture.Registry, testEventSchema); err != nil {
 		t.Fatalf("absent unconfigured delete snapshot was rejected: %v", err)
 	}
 }
 
-func TestFactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
+func TestFactEventSchemaCodecMatrix(t *testing.T) {
 	fixture := schematest.NewIndexedExact(t)
 	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{7}, "private", 101))
 	digest := golem.SchemaDigest{1, 2, 3, 4}
@@ -357,12 +368,10 @@ func TestFactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := NewV2(fixture.Registry, digest, EventID{9}, requirement, CausationID{8}, 1, &before, nil)
+	envelope, err := New(fixture.Registry, digest, EventID{9}, requirement, CausationID{8}, 1, testRowVersion, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A contract-only deployment has a different generation while retaining the
-	// exact event schema. V2 resolution keys on the latter, not the former.
 	envelope.generation = golem.SchemaDigest{99}
 	row, err := envelope.OutboxRow(time.Unix(3, 0))
 	if err != nil {
@@ -373,11 +382,11 @@ func TestFactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.FormatVersion() != FormatVersionV2 || decoded.CodecIdentity() != CodecIdentityV2 || decoded.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
-		t.Fatalf("unexpected V2 fact shape: version=%d codec=%q snapshot=%d", decoded.FormatVersion(), decoded.CodecIdentity(), decoded.DeleteSnapshotState())
+	if decoded.FormatVersion() != FormatVersion || decoded.CodecIdentity() != CodecIdentity || decoded.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
+		t.Fatalf("unexpected fact shape: version=%d codec=%q snapshot=%d", decoded.FormatVersion(), decoded.CodecIdentity(), decoded.DeleteSnapshotState())
 	}
 	if snapshot, ok := decoded.PrivateDeleteSnapshot(); !ok || !mutationdecode.EqualRow(snapshot, mustSelect(t, fixture, before, []policyir.FieldID{policyir.FieldID(fixture.PostTitle)})) {
-		t.Fatal("historical V2 delete snapshot did not round-trip")
+		t.Fatal("historical delete snapshot did not round-trip")
 	}
 	if _, err := DecodeOutboxWithResolver(row.Metadata, row.DeleteSnapshot, testHistoricalResolver{registry: fixture.Registry, digest: digest}); err == nil {
 		t.Fatal("missing historical event schema was accepted")
@@ -390,20 +399,100 @@ func TestFactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
 	if _, err := ValidateStoredRow(tampered, resolver); err == nil {
 		t.Fatal("duplicated action column tamper was accepted")
 	}
+}
 
-	legacyRequirement, _ := mutationir.NewFactRequirement(mutationir.FactDeleted,
-		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil,
-		[]policyir.FieldID{policyir.FieldID(fixture.PostTitle)})
-	legacy, err := New(fixture.Registry, EventID{1}, legacyRequirement, CausationID{2}, 1, &before, nil)
+func TestFactCarriesVersion(t *testing.T) {
+	fixture := schematest.NewIndexedExact(t)
+	id := policyir.FieldID(fixture.PostID)
+	resolver := testHistoricalResolver{registry: fixture.Registry, digest: testEventSchema, enabled: true}
+	row := func(seed byte) mutationdecode.Row {
+		return mustRow(t, fixture, postCells(t, fixture, [16]byte{seed}, "title", 5))
+	}
+	created, _ := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{id}, nil)
+	updated, _ := mutationir.NewFactRequirement(mutationir.FactUpdated, []policyir.FieldID{id}, []policyir.FieldID{id}, nil)
+	deleted, _ := mutationir.NewDeleteFactRequirement([]policyir.FieldID{id}, mutationir.DeleteSnapshotStoredScalars, []policyir.FieldID{policyir.FieldID(fixture.PostTitle)})
+	for name, test := range map[string]struct {
+		requirement   mutationir.FactRequirement
+		before, after *mutationdecode.Row
+	}{
+		"created": {created, nil, ptr(row(1))},
+		"updated": {updated, ptr(row(2)), ptr(row(2))},
+		"deleted": {deleted, ptr(row(3)), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bound, err := test.requirement.WithEventSchema([32]byte(testEventSchema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			envelope, err := New(fixture.Registry, testEventSchema, EventID{1}, bound, CausationID{2}, 1, 9_007_199_254_740_993, test.before, test.after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if envelope.RowVersion() != 9_007_199_254_740_993 {
+				t.Fatalf("constructed version = %d", envelope.RowVersion())
+			}
+			stored, err := envelope.OutboxRow(time.Unix(5, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := DecodeOutboxWithResolver(stored.Metadata, stored.DeleteSnapshot, resolver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.RowVersion() != 9_007_199_254_740_993 {
+				t.Fatalf("decoded version = %d, want 9007199254740993", decoded.RowVersion())
+			}
+			other, err := New(fixture.Registry, testEventSchema, EventID{1}, bound, CausationID{2}, 1, 9_007_199_254_740_994, test.before, test.after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherRow, _ := other.OutboxRow(time.Unix(5, 0))
+			if bytes.Equal(stored.Metadata, otherRow.Metadata) {
+				t.Fatal("the version is not part of the fact bytes")
+			}
+		})
+	}
+	zeroDelete, _ := New(fixture.Registry, testEventSchema, EventID{1}, mustBind(t, deleted), CausationID{2}, 1, 0, ptr(row(3)), nil)
+	if zeroDelete.RowVersion() != 0 {
+		t.Fatal("a delete of a never-stamped row (version 0) was refused")
+	}
+	zeroRow, _ := zeroDelete.OutboxRow(time.Unix(5, 0))
+	if decoded, err := DecodeOutboxWithResolver(zeroRow.Metadata, zeroRow.DeleteSnapshot, resolver); err != nil || decoded.RowVersion() != 0 {
+		t.Fatalf("version-0 delete did not round-trip: %v", err)
+	}
+	for _, version := range []int64{0, -1} {
+		bound, _ := created.WithEventSchema([32]byte(testEventSchema))
+		after := row(1)
+		if _, err := New(fixture.Registry, testEventSchema, EventID{1}, bound, CausationID{2}, 1, version, nil, &after); err == nil {
+			t.Fatalf("a fact with version %d was built", version)
+		}
+	}
+}
+
+func TestOversizeDeleteSnapshotStillCarriesTheVersion(t *testing.T) {
+	fixture := schematest.NewIndexedExact(t)
+	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{4}, "title", 5))
+	requirement, _ := mutationir.NewDeleteFactRequirement([]policyir.FieldID{policyir.FieldID(fixture.PostID)}, mutationir.DeleteSnapshotStoredScalars, []policyir.FieldID{policyir.FieldID(fixture.PostTitle)})
+	bound, _ := requirement.WithEventSchema([32]byte(testEventSchema))
+	envelope, err := New(fixture.Registry, testEventSchema, EventID{1}, bound, CausationID{2}, 1, 77, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyBytes, _ := Encode(legacy)
-	legacyDecoded, err := Decode(legacyBytes, fixture.Registry)
-	if err != nil || legacyDecoded.FormatVersion() != FormatVersionV1 {
-		t.Fatalf("historical V1 decode regressed: version=%d err=%v", legacyDecoded.FormatVersion(), err)
+	dropped, err := envelope.WithUnverifiableDeleteSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := dropped.OutboxRow(time.Unix(5, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeOutbox(row.Metadata, row.DeleteSnapshot, fixture.Registry, testEventSchema)
+	if err != nil || decoded.RowVersion() != 77 || decoded.DeleteSnapshotState() != mutationir.DeleteSnapshotUnverifiable {
+		t.Fatalf("unverifiable delete: version=%d state=%d err=%v", decoded.RowVersion(), decoded.DeleteSnapshotState(), err)
 	}
 }
+
+func ptr(row mutationdecode.Row) *mutationdecode.Row { return &row }
 
 func mustSelect(t testing.TB, fixture schematest.Fixture, row mutationdecode.Row, fields []policyir.FieldID) mutationdecode.Row {
 	t.Helper()
@@ -472,4 +561,13 @@ func valueKindName(kind policyir.ValueKind) string {
 		policyir.ValueDateTime: "datetime", policyir.ValueEnum: "enum", policyir.ValueJSON: "json",
 		policyir.ValueScalarList: "scalar-list",
 	}[kind]
+}
+
+func mustBind(t testing.TB, requirement mutationir.FactRequirement) mutationir.FactRequirement {
+	t.Helper()
+	bound, err := requirement.WithEventSchema([32]byte(testEventSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bound
 }

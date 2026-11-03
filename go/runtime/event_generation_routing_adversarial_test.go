@@ -20,7 +20,7 @@ func (transport *p7SignalledTransport) TransportCapabilities() events.TransportC
 	return events.CapabilitiesOf(transport.EventTransport)
 }
 
-func TestPendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
+func TestPendingFactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	historicalGeneration := golem.SchemaDigest{31: 99}
 	historicalBundle := golem.GeneratedSchemaBundle(
@@ -35,12 +35,9 @@ func TestPendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	historicalRegistry, _, resolved := history.ResolveFactSchema(mutationfact.SchemaReference{
-		FormatVersion: mutationfact.FormatVersionV1,
-		Generation:    historicalGeneration,
-	})
-	if !resolved || historicalRegistry == nil {
-		t.Fatal("historical generation was not registered")
+	historicalRegistry, err := schema.NewHistorical(historicalBundle)
+	if err != nil {
+		t.Fatal(err)
 	}
 	fixture.app.eventSchemas = history
 
@@ -61,7 +58,7 @@ func TestPendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
 		t.Fatal("current-generation hub did not subscribe")
 	}
 
-	notice := historicalCompatibleV2Notice(t, fixture, historicalRegistry, history)
+	notice := historicalCompatibleNotice(t, fixture, historicalRegistry, history)
 	fixture.publish(t, notice)
 	receiveCtx, receiveCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer receiveCancel()
@@ -74,17 +71,17 @@ func TestPendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
 	}
 }
 
-func historicalCompatibleV2Notice(t testing.TB, fixture p7EventRuntimeFixture, registry *schema.Registry, history *eventSchemaHistory) events.Notice {
+func historicalCompatibleNotice(t testing.TB, fixture p7EventRuntimeFixture, registry *schema.Registry, history *eventSchemaHistory) events.Notice {
 	t.Helper()
 	title, err := policyir.StringValue("visible")
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := mutationdecode.NewCompleteRow(registry, policyir.ModelID(fixture.schema.Post), []mutationdecode.Cell{
+	row, err := mutationdecode.NewCompleteRow(registry, policyir.ModelID(fixture.schema.Post), withTestRowVersion(registry, fixture.schema.Post, []mutationdecode.Cell{
 		mutationdecode.Value(policyir.FieldID(fixture.schema.PostID), policyir.UUIDValue([16]byte{15: 9})),
 		mutationdecode.Value(policyir.FieldID(fixture.schema.AuthorID), policyir.UUIDValue([16]byte{15: 1})),
 		mutationdecode.Value(policyir.FieldID(fixture.schema.PostTitle), title),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +94,7 @@ func historicalCompatibleV2Notice(t testing.TB, fixture p7EventRuntimeFixture, r
 		t.Fatal(err)
 	}
 	eventID := p7OracleID(1900)
-	fact, err := mutationfact.NewV2(registry, golem.SchemaDigest(fixture.digest), mutationfact.EventID(eventID), requirement, mutationfact.CausationID(eventID), 1, nil, &row)
+	fact, err := mutationfact.New(registry, golem.SchemaDigest(fixture.digest), mutationfact.EventID(eventID), requirement, mutationfact.CausationID(eventID), 1, 7, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}

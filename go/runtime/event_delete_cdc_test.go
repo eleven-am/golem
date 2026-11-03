@@ -25,14 +25,19 @@ type deleteEvalCDCRecorder struct {
 	causations []string
 }
 
-func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
 	recorder.mu.Lock()
-	recorder.causations = append(recorder.causations, rows[0].CausationID)
+	recorder.causations = append(recorder.causations, golem.UUID(causation).String())
 	recorder.mu.Unlock()
 	if recorder.discard {
-		return nil
+		versions := make([]int64, len(changes))
+		for index := range versions {
+			versions[index] = 1
+		}
+		_, err := build(versions)
+		return err
 	}
-	if err := recorder.inner.RecordCDC(ctx, rows); err != nil {
+	if err := recorder.inner.RecordCDC(ctx, causation, changes, build); err != nil {
 		return err
 	}
 	if recorder.after != nil {
@@ -104,6 +109,7 @@ func (fixture deleteEvalFixture) cdcCommentRow(t *testing.T, comment, post byte,
 		golem.RuntimePresentReadCell(fixture.schema.CommentID, deleteEvalUUID(comment), nil),
 		golem.RuntimePresentReadCell(fixture.schema.CommentPostID, deleteEvalUUID(post), nil),
 		golem.RuntimePresentReadCell(fixture.schema.CommentBody, body, nil),
+		golem.RuntimePresentReadCell(fixture.schema.CommentRowVersion, int64(1), nil),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +123,7 @@ func (fixture deleteEvalFixture) cdcPostRow(t *testing.T, post, author byte, tit
 		golem.RuntimePresentReadCell(fixture.schema.PostID, deleteEvalUUID(post), nil),
 		golem.RuntimePresentReadCell(fixture.schema.AuthorID, deleteEvalUUID(author), nil),
 		golem.RuntimePresentReadCell(fixture.schema.PostTitle, title, nil),
+		golem.RuntimePresentReadCell(fixture.schema.PostRowVersion, int64(1), nil),
 	)
 	if err != nil {
 		t.Fatal(err)

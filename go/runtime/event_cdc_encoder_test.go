@@ -36,7 +36,7 @@ func TestProductionCDCEncoderUsesCanonicalV2FactAndEventPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Fact().FormatVersion() != mutationfact.FormatVersionV2 || envelope.Fact().CodecIdentity() != mutationfact.CodecIdentityV2 || envelope.RecordedAt() != input.RecordedAt {
+	if envelope.Fact().FormatVersion() != mutationfact.FormatVersion || envelope.Fact().CodecIdentity() != mutationfact.CodecIdentity || envelope.RecordedAt() != input.RecordedAt {
 		t.Fatalf("canonical CDC envelope fact=%d/%q recorded=%v", envelope.Fact().FormatVersion(), envelope.Fact().CodecIdentity(), envelope.RecordedAt())
 	}
 	if !bytes.Equal(envelope.Encoded(), notice.Encoded()) {
@@ -169,6 +169,7 @@ func TestProductionCDCEncoderDistinguishesTrustedStoredNullFromMaskedNull(t *tes
 		golem.RuntimePresentReadCell(fixture.PostID, golem.UUID{15: 1}, nil),
 		golem.RuntimeNullReadCell(fixture.AuthorID),
 		golem.RuntimePresentReadCell(fixture.PostTitle, "nullable-author", nil),
+		golem.RuntimePresentReadCell(fixture.PostRowVersion, int64(1), nil),
 	}
 	stored, err := golem.RuntimeCDCModelRow(fixture.Post, cells...)
 	if err != nil {
@@ -203,7 +204,7 @@ func testCDCEncodeInput(fixture schematest.Fixture, action golem.EventAction, be
 	return eventcdc.EncodeInput{
 		Adapter:             events.CDCIdentity{Name: "fixture-log", Version: "1.0.0", Provider: golem.SQLite},
 		SourceTransactionID: "fixture:transaction:1", RecordedAt: time.Date(2026, 8, 7, 9, 34, 56, 987654000, time.UTC), Cursor: []byte("fixture-cursor"),
-		EventID: golem.EventID{15: 1}, CausationID: golem.CausationID{15: 2}, Ordinal: 1,
+		EventID: golem.EventID{15: 1}, CausationID: golem.CausationID{15: 2}, Ordinal: 1, Version: 7,
 		Model: fixture.Post, Action: action, Before: before, After: after,
 	}
 }
@@ -228,5 +229,6 @@ func testCDCPostCells(fixture schematest.Fixture, title string) []golem.RuntimeR
 		golem.RuntimePresentReadCell(fixture.PostID, golem.UUID{15: 1}, nil),
 		golem.RuntimePresentReadCell(fixture.AuthorID, golem.UUID{15: 2}, nil),
 		golem.RuntimePresentReadCell(fixture.PostTitle, title, nil),
+		golem.RuntimePresentReadCell(fixture.PostRowVersion, int64(1), nil),
 	}
 }

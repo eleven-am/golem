@@ -284,7 +284,15 @@ type fakeRecorder struct {
 	failure error
 }
 
-func (recorder *fakeRecorder) RecordCDC(_ context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *fakeRecorder) RecordCDC(_ context.Context, _ golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
+	versions := make([]int64, len(changes))
+	for index := range versions {
+		versions[index] = int64(100 + index)
+	}
+	rows, err := build(versions)
+	if err != nil {
+		return err
+	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	recorder.batches = append(recorder.batches, append([]mutationfact.OutboxRow(nil), rows...))

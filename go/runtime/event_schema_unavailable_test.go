@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/graphql"
+	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
+	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
@@ -119,78 +122,95 @@ func requireUnavailableMessage(t *testing.T, err error, message string) {
 	}
 }
 
-func TestUndeliveredFactWithChangedEventSchemaFailsTyped(t *testing.T) {
-	registry, active := activeTeamEventSchema(t)
-	row := v073facts.ChangedEventSchemaV2()
-	_, err := mutationfact.DecodeOutboxV2(row.Metadata, row.DeleteSnapshot, registry, active)
-	requireUnavailableMessage(t, err, fmt.Sprintf("GOLEM_EVENT_SCHEMA_UNAVAILABLE: stored event fact (format V2) needs event schema %s, %s", v073facts.ChangedEventSchemaDigest, schemaUnavailableRemedy))
-
-	fixture := sqliteP10Fixture(t)
-	insertOutboxRow(t, fixture, policyir.ProviderSQLite, "main", row, true)
-	delivery := runPublisherUntilBlocked(t, fixture, p10CausationID(t, row.CausationID))
-	if delivery.FailureCode() != "schema-unavailable" {
-		t.Fatalf("failure code = %q, want schema-unavailable", delivery.FailureCode())
+func insertForProfile(t *testing.T, fixture *p10OperationFixture, row mutationfact.OutboxRow) {
+	t.Helper()
+	provider, namespace := policyir.ProviderSQLite, "main"
+	if fixture.database.DriverName() != "sqlite" {
+		provider, namespace = policyir.ProviderPostgreSQL, string(p10OperationSystemNamespace)
 	}
+	insertOutboxRow(t, fixture, provider, namespace, row, true)
 }
 
-func TestUndeliveredV1FactFailsTyped(t *testing.T) {
-	registry, _ := activeTeamEventSchema(t)
-	row := v073facts.GenerationBoundV1()
-	_, err := mutationfact.DecodeOutbox(row.Metadata, row.DeleteSnapshot, registry)
-	requireUnavailableMessage(t, err, fmt.Sprintf("GOLEM_EVENT_SCHEMA_UNAVAILABLE: stored event fact (format V1) needs generation digest %s, %s", v073facts.GenerationDigest, schemaUnavailableRemedy))
-
-	fixture := sqliteP10Fixture(t)
-	insertOutboxRow(t, fixture, policyir.ProviderSQLite, "main", row, true)
-	delivery := runPublisherUntilBlocked(t, fixture, p10CausationID(t, row.CausationID))
-	if delivery.FailureCode() != "schema-unavailable" {
-		t.Fatalf("failure code = %q, want schema-unavailable", delivery.FailureCode())
-	}
-}
-
-func TestUndeliveredV2FactWithUnchangedEventSchemaDecodes(t *testing.T) {
+func requireRetiredFactIsRefusedAndRetirable(t *testing.T, row mutationfact.OutboxRow, version uint16) {
+	t.Helper()
 	registry, active := activeTeamEventSchema(t)
-	if v073facts.UnchangedEventSchemaDigest != active.String() {
-		t.Fatalf("the frozen v0.7.3 Team event schema %s differs from the active %s", v073facts.UnchangedEventSchemaDigest, active)
+	want := fmt.Sprintf("GOLEM_EVENT_FORMAT_RETIRED: stored event fact (format V%d) is no longer readable: drain undelivered events on go/v0.8.0 before upgrading", version)
+	_, err := mutationfact.DecodeOutbox(row.Metadata, row.DeleteSnapshot, registry, active)
+	var retired *mutationfact.FormatRetiredError
+	if !errors.As(err, &retired) || retired.Version() != version || err.Error() != want {
+		t.Fatalf("decode error = %v, want retired V%d %q", err, version, want)
 	}
-	row := v073facts.UnchangedEventSchemaV2()
-	if _, err := mutationfact.ValidateStoredRow(row, activeResolver{registry: registry, digest: active}); err != nil {
-		t.Fatalf("a v0.7.3 V2 fact whose event schema is unchanged no longer decodes: %v", err)
-	}
-
-	fixture := sqliteP10Fixture(t)
-	insertOutboxRow(t, fixture, policyir.ProviderSQLite, "main", row, true)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- fixture.app.RunEventPublisher(ctx) }()
-	causation := p10CausationID(t, row.CausationID)
-	var status events.DeliveryStatus
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		inspected, err := fixture.app.EventOperator().Inspect(context.Background(), causation)
-		if err == nil {
-			status = inspected.Status()
-			if status == events.DeliveryDelivered || status == events.DeliveryBlocked {
-				break
-			}
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		insertForProfile(t, fixture, row)
+		causation := p10CausationID(t, row.CausationID)
+		delivery := runPublisherUntilBlocked(t, fixture, causation)
+		if delivery.FailureCode() != "format-retired" {
+			t.Fatalf("failure code = %q, want format-retired", delivery.FailureCode())
 		}
-		time.Sleep(10 * time.Millisecond)
+		if err := fixture.app.EventOperator().Retire(context.Background(), causation); err != nil {
+			t.Fatalf("a blocked retired-format delivery could not be retired: %v", err)
+		}
+		inspected, err := fixture.app.EventOperator().Inspect(context.Background(), causation)
+		if err != nil || inspected.Status() != events.DeliveryRetired {
+			t.Fatalf("after Retire the delivery is %v (%v), want retired", inspected, err)
+		}
+	})
+}
+
+func TestUndeliveredFactWithChangedEventSchemaFailsTyped(t *testing.T) {
+	registry, _ := activeTeamEventSchema(t)
+	var team schema.Model
+	for _, model := range registry.EventModels() {
+		if model.LogicalName() == "Team" {
+			team = model
+		}
 	}
-	cancel()
-	if err := <-done; err != nil {
+	changed := golem.SchemaDigest{0x99, 0x3c}
+	key := team.PrimaryKey()
+	if len(key) != 1 {
+		t.Fatalf("Team primary key has %d fields, want 1", len(key))
+	}
+	image, err := mutationdecode.NewRow(registry, policyir.ModelID(team.ID()), []mutationdecode.Cell{mutationdecode.Value(policyir.FieldID(key[0]), policyir.UUIDValue([16]byte{15: 1}))})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if status != events.DeliveryDelivered {
-		t.Fatalf("the v0.7.3 fact with an unchanged event schema ended %q, want delivered", status)
+	requirement, err := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{policyir.FieldID(key[0])}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement, err = requirement.WithEventSchema([32]byte(changed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := mutationfact.New(registry, changed, mutationfact.EventID{15: 7}, requirement, mutationfact.CausationID{15: 8}, 1, 5, nil, &image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := envelope.OutboxRow(time.Unix(1_700_000_000, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, decodeErr := mutationfact.DecodeOutbox(row.Metadata, row.DeleteSnapshot, registry, golem.SchemaDigest{1})
+	requireUnavailableMessage(t, decodeErr, fmt.Sprintf("GOLEM_EVENT_SCHEMA_UNAVAILABLE: stored event fact (format V3) needs event schema %s, %s", changed, schemaUnavailableRemedy))
+
+	fixture := sqliteP10Fixture(t)
+	insertOutboxRow(t, fixture, policyir.ProviderSQLite, "main", row, true)
+	delivery := runPublisherUntilBlocked(t, fixture, p10CausationID(t, row.CausationID))
+	if delivery.FailureCode() != "schema-unavailable" {
+		t.Fatalf("failure code = %q, want schema-unavailable", delivery.FailureCode())
 	}
 }
 
-type activeResolver struct {
-	registry *schema.Registry
-	digest   golem.SchemaDigest
+func TestUndeliveredV1FactRefusedTyped(t *testing.T) {
+	requireRetiredFactIsRefusedAndRetirable(t, v073facts.GenerationBoundV1(), 1)
 }
 
-func (resolver activeResolver) ResolveFactSchema(reference mutationfact.SchemaReference) (*schema.Registry, golem.SchemaDigest, bool) {
-	return resolver.registry, resolver.digest, reference.FormatVersion == mutationfact.FormatVersionV2 && reference.EventSchema == resolver.digest
+func TestUndeliveredV2FactRefusedTyped(t *testing.T) {
+	requireRetiredFactIsRefusedAndRetirable(t, v073facts.UnchangedEventSchemaV2(), 2)
+}
+
+func TestUndeliveredV2FactWithChangedEventSchemaIsRefusedAsRetired(t *testing.T) {
+	requireRetiredFactIsRefusedAndRetirable(t, v073facts.ChangedEventSchemaV2(), 2)
 }
 
 func openWithBundles(t *testing.T, bundle golem.SchemaBundle, historical []golem.SchemaBundle) error {
@@ -213,6 +233,25 @@ func TestHistoricalEventBundleV6FailsStartup(t *testing.T) {
 	const want = "GOLEM_EVENT_CONFIG: historical event bundle 0: P2_SCHEMA_DOCUMENT: contract.formatVersion: historical contract format 6 is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles"
 	if err == nil || err.Error() != want {
 		t.Fatalf("startup error = %v\nwant %s", err, want)
+	}
+}
+
+func TestHistoricalEventBundleV4AndV5FailStartupWithTheDrainInstruction(t *testing.T) {
+	old := v073facts.SchemaBundle()
+	for _, version := range []uint32{4, 5} {
+		payload := []byte(fmt.Sprintf(`{"formatVersion":%d,"graphqlAbiVersion":3,"models":[],"enums":[],"methods":[],"customOperations":[]}`, version))
+		hash := sha256.New()
+		_, _ = hash.Write([]byte("golem:contract-fingerprint:v1"))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(payload)
+		var digest golem.SchemaDigest
+		copy(digest[:], hash.Sum(nil))
+		bundle := golem.GeneratedSchemaBundle(old.GenerationDigest(), old.GeneratorVersion(), old.TemplateABIVersion(), old.Model(), golem.GeneratedSchemaDocument(version, 1, digest, payload), old.Providers()...)
+		err := openWithBundles(t, p10operations.GolemGeneratedSchemaBundle(), []golem.SchemaBundle{bundle})
+		want := fmt.Sprintf("GOLEM_EVENT_CONFIG: historical event bundle 0: P2_SCHEMA_DOCUMENT: contract.formatVersion: historical contract format %d is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles", version)
+		if err == nil || err.Error() != want {
+			t.Fatalf("v%d startup error = %v\nwant %s", version, err, want)
+		}
 	}
 }
 

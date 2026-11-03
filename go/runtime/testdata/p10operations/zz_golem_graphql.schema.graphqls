@@ -296,6 +296,7 @@ type InviteEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Invite
@@ -306,6 +307,7 @@ type TeamEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Team

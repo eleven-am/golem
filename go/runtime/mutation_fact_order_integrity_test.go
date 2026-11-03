@@ -87,11 +87,11 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	afterFirst := factOrderPostRow(t, schema, 61, "first-after")
 	beforeSecond := factOrderPostRow(t, schema, 61, "second-before")
 	afterSecond := factOrderPostRow(t, schema, 61, "second-after")
-	first, err := mutationfact.New(schema.Registry, mutationfact.EventID{1}, requirement, causation, 1, &beforeFirst, &afterFirst)
+	first, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{1}, requirement, causation, 1, &beforeFirst, &afterFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := mutationfact.New(schema.Registry, mutationfact.EventID{2}, requirement, causation, 2, &beforeSecond, &afterSecond)
+	second, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{2}, requirement, causation, 2, &beforeSecond, &afterSecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,11 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	// refuse that ambiguity rather than assigning either event to a graph node.
 	beforeDifferent := factOrderPostRow(t, schema, 62, "different-before")
 	afterShared := factOrderPostRow(t, schema, 63, "shared-after")
-	left, err := mutationfact.New(schema.Registry, mutationfact.EventID{3}, requirement, causation, 3, &beforeFirst, &afterShared)
+	left, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{3}, requirement, causation, 3, &beforeFirst, &afterShared)
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := mutationfact.New(schema.Registry, mutationfact.EventID{4}, requirement, causation, 4, &beforeDifferent, &afterShared)
+	right, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{4}, requirement, causation, 4, &beforeDifferent, &afterShared)
 	if err != nil {
 		t.Fatal(err)
 	}

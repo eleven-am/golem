@@ -89,26 +89,6 @@ func TestOptimisticConcurrencyContractFormatIsV6AndCurrentIsV7(t *testing.T) {
 	}
 }
 
-func TestContractV5HistoricalDecoderPreservesExactReleasedBytesAndFingerprint(t *testing.T) {
-	const (
-		payload         = `{"formatVersion":5,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`
-		wantFingerprint = Fingerprint("2d7094f2f88762e3129e946cdbf9f32b8734dd86035bbd3c753097146c232990")
-	)
-	contract, err := CanonicalDecodeContractV5([]byte(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contract.FormatVersion != ContractFormatVersion || contract.GraphQLABIVersion != 4 || len(contract.Models) != 0 {
-		t.Fatalf("decoded v5 contract = %#v", contract)
-	}
-	if got, err := ContractFingerprintV5([]byte(payload)); err != nil || got != wantFingerprint {
-		t.Fatalf("released v5 fingerprint changed: got %s want %s err=%v", got, wantFingerprint, err)
-	}
-	if _, err := decodeCurrentContractCanonicalFraming([]byte(payload)); err == nil || !strings.Contains(err.Error(), "expected 7") {
-		t.Fatalf("current framing seam accepted v5: %v", err)
-	}
-}
-
 func TestContractV7CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
 	const (
 		wantBytes       = `{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`
@@ -160,7 +140,7 @@ func TestCurrentContractCanonicalFramingIsPrivateAndHasNoAuthorityConsumer(t *te
 	}
 }
 
-func TestContractDecodersAreVersionExactAndHistoricalV5CannotConsumeV6Projection(t *testing.T) {
+func TestCurrentContractDecoderIsVersionExact(t *testing.T) {
 	fieldID := FieldID("12000000000000000000000000000000")
 	v6, err := CanonicalContract(ContractIR{FormatVersion: ContractFormatVersion, GraphQLABIVersion: 5, Models: []ModelContractIR{{
 		ModelID:               "10000000000000000000000000000000",
@@ -177,14 +157,6 @@ func TestContractDecodersAreVersionExactAndHistoricalV5CannotConsumeV6Projection
 	if decoded.Models[0].OptimisticConcurrency == nil || *decoded.Models[0].OptimisticConcurrency != fieldID {
 		t.Fatalf("current decoder omitted v6 projection: %#v", decoded.Models)
 	}
-	if _, err := CanonicalDecodeContractV5(v6); err == nil || !strings.Contains(err.Error(), "expected 5") {
-		t.Fatalf("historical v5 decoder accepted v6: %v", err)
-	}
-
-	relabelled := bytes.Replace(v6, []byte(`"formatVersion":7`), []byte(`"formatVersion":5`), 1)
-	if _, err := CanonicalDecodeContractV5(relabelled); err == nil || !strings.Contains(err.Error(), "optimisticConcurrency") {
-		t.Fatalf("historical v5 decoder reinterpreted a relabelled v6 projection: %v", err)
-	}
 	for _, payload := range [][]byte{
 		[]byte(`{"formatVersion":99,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`),
 		[]byte(`{"formatVersion":5,"formatVersion":6,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`),
@@ -193,33 +165,5 @@ func TestContractDecodersAreVersionExactAndHistoricalV5CannotConsumeV6Projection
 		if _, err := decodeCurrentContractCanonicalFraming(payload); err == nil {
 			t.Fatalf("current framing seam accepted unknown/mixed/noncanonical payload %s", payload)
 		}
-		if _, err := CanonicalDecodeContractV5(payload); err == nil {
-			t.Fatalf("historical decoder accepted unknown/mixed/noncanonical payload %s", payload)
-		}
-	}
-}
-
-func TestContractV5HistoricalDecoderValidatesWithFrozenV5Rules(t *testing.T) {
-	const canonical = `{"formatVersion":5,"graphqlAbiVersion":4,"models":[{"modelId":"10000000000000000000000000000000","graphqlName":"Post","graphqlPlural":"Posts","roots":{"findOne":"post","findMany":"posts","create":"createPost","update":"updatePost","upsert":"upsertPost","delete":"deletePost","updateMany":"updateManyPosts","deleteMany":"deleteManyPosts","aggregate":"aggregatePosts","groupBy":"groupByPosts","relationGroupBy":"relationGroupByPosts","events":"postEvents"},"fields":[{"fieldId":"12000000000000000000000000000000","graphqlName":"version","modes":["visible"]}],"hookOwnedCreateFields":[],"selectors":[],"operations":["findOne"],"subscriptions":false,"scopedReads":false,"limits":{},"computed":[],"exposed":true}],"enums":[],"methods":[],"customOperations":[]}`
-	if _, err := CanonicalDecodeContractV5([]byte(canonical)); err != nil {
-		t.Fatalf("exact v5 payload failed frozen validation: %v", err)
-	}
-	modelStart := strings.Index(canonical, `{"modelId"`)
-	modelEnd := strings.Index(canonical, `}],"enums"`)
-	if modelStart < 0 || modelEnd < 0 {
-		t.Fatal("v5 fixture does not expose its exact model boundary")
-	}
-	duplicateModel := canonical[:modelEnd] + `},` + canonical[modelStart:modelEnd+1] + canonical[modelEnd+1:]
-	for name, payload := range map[string]string{
-		"unknown root":    strings.Replace(canonical, `"graphqlAbiVersion":4`, `"future":true,"graphqlAbiVersion":4`, 1),
-		"unknown nested":  strings.Replace(canonical, `"graphqlPlural":"Posts"`, `"graphqlPlural":"Posts","optimisticConcurrency":"12000000000000000000000000000000"`, 1),
-		"open operation":  strings.Replace(canonical, `"operations":["findOne"]`, `"operations":["futureWrite"]`, 1),
-		"duplicate model": duplicateModel,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := CanonicalDecodeContractV5([]byte(payload)); err == nil {
-				t.Fatalf("historical v5 decoder accepted %s", payload)
-			}
-		})
 	}
 }

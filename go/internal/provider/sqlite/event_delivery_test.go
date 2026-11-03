@@ -440,7 +440,7 @@ func TestSQLiteNewCausalDeliveryInsertIsIdempotentAndConflictSpecific(t *testing
 	database := openEventDeliveryFixture(t, provider)
 	recordedAt := time.Unix(1_700_000_000, 123_456_789).UTC()
 	row := mutationfact.OutboxRow{
-		EventID: deliveryUUID(3_001), FactVersion: int64(mutationfact.FormatVersionV1), CodecIdentity: mutationfact.CodecIdentityV1,
+		EventID: deliveryUUID(3_001), FactVersion: int64(mutationfact.FormatVersion), CodecIdentity: mutationfact.CodecIdentity,
 		GenerationFingerprint: strings.Repeat("1", 64), ModelID: strings.Repeat("2", 32), Action: "created",
 		AfterIdentity: []byte{1}, CausationID: deliveryUUID(3_000), TransactionOrdinal: 1, Metadata: []byte{1}, RecordedAt: recordedAt,
 	}

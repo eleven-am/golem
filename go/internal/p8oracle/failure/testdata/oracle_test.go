@@ -933,8 +933,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		t.Fatalf("external CDC insert: %v", err)
 	}
 	fields := social.GolemGeneratedPostDescriptor.Metadata().ScanFields()
-	if len(fields) != 18 {
-		t.Fatalf("Post scan fields=%d want=18", len(fields))
+	if len(fields) != 19 {
+		t.Fatalf("Post scan fields=%d want=19", len(fields))
 	}
 	cells := []golem.RuntimeReadCell{
 		golem.RuntimePresentReadCell(fields[0], id, nil), golem.RuntimePresentReadCell(fields[1], authorID, nil),
@@ -946,6 +946,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		golem.RuntimePresentReadCell(fields[12], clock, nil), golem.RuntimePresentReadCell(fields[13], metadata, cloneFailureJSON),
 		golem.RuntimePresentReadCell(fields[14], social.VisibilityPublic, nil), golem.RuntimePresentReadCell(fields[15], topics, cloneFailureTopics),
 		golem.RuntimePresentReadCell(fields[16], instant, nil), golem.RuntimePresentReadCell(fields[17], instant, nil),
+		golem.RuntimePresentReadCell(fields[18], int64(0), nil),
 	}
 	row, err := golem.RuntimeCDCModelRow(social.GolemGeneratedPostDescriptor.Metadata().ModelID(), cells...)
 	if err != nil {

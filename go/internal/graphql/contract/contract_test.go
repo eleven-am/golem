@@ -203,7 +203,7 @@ func TestContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *tes
 		if value.Contract.GraphQLABIVersion != ABIVersion || !model.Subscriptions || model.Roots.Events != "postEvents" || model.Event == nil {
 			t.Fatalf("normalized subscription = %#v", model)
 		}
-		wantMetadata := []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}
+		wantMetadata := []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"}
 		if !reflect.DeepEqual(model.Event.MetadataFields, wantMetadata) || model.Event.SchemaFingerprint == "" || model.Limits.DefaultPageSize != DefaultPageSize || model.Limits.MaxPageSize != DefaultMaxPageSize {
 			t.Fatalf("event metadata/limits = %#v / %#v", model.Event, model.Limits)
 		}

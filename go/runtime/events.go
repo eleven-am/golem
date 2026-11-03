@@ -509,6 +509,7 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
 	var entity *golem.RuntimeModelRow
+	version := fact.RowVersion()
 	switch envelope.Action() {
 	case golem.EventCreated, golem.EventUpdated:
 		row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
@@ -535,11 +536,11 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 	default:
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
-	wireSchema, hasWireSchema := envelope.EventSchemaDigest()
+	wireSchema := envelope.EventSchemaDigest()
 	validated, err := typedvalue.New(typedvalue.Metadata{
 		EventID: envelope.EventID(), Action: envelope.Action(), CausationID: envelope.CausationID(),
 		Ordinal: envelope.TransactionOrdinal(), RecordedAt: envelope.RecordedAt(),
-		Generation: envelope.GenerationDigest(), EventSchema: wireSchema, HasEventSchema: hasWireSchema,
+		Generation: envelope.GenerationDigest(), EventSchema: wireSchema, HasEventSchema: true, Version: version,
 		ResolvedEventSchema: envelope.ResolvedEventSchemaDigest(), ModelID: envelope.ModelID(),
 	}, identityValues, entity)
 	if err != nil {

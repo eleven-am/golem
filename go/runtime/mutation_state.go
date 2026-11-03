@@ -385,12 +385,15 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
-	var envelope mutationfact.Envelope
-	if eventSchema, present := requirement.EventSchema(); present {
-		envelope, err = mutationfact.NewV2(registry, golem.SchemaDigest(eventSchema), event, requirement, state.causation, ordinal, before, after)
-	} else {
-		envelope, err = mutationfact.New(registry, event, requirement, state.causation, ordinal, before, after)
+	eventSchema, present := requirement.EventSchema()
+	if !present {
+		return mutationfact.OutboxRow{}, fmt.Errorf("P7_FACT_INPUT: fact requirement carries no event schema")
 	}
+	version, err := factRowVersion(registry, requirement, before, after)
+	if err != nil {
+		return mutationfact.OutboxRow{}, err
+	}
+	envelope, err := mutationfact.New(registry, golem.SchemaDigest(eventSchema), event, requirement, state.causation, ordinal, version, before, after)
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
@@ -419,6 +422,17 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	state.registry = registry
 	state.dirty = true
 	return cloneOutboxRow(row), nil
+}
+
+func factRowVersion(registry *schema.Registry, requirement mutationir.FactRequirement, before, after *mutationdecode.Row) (int64, error) {
+	image := after
+	if action, _ := requirement.Action(); action == mutationir.FactDeleted {
+		image = before
+	}
+	if image == nil {
+		return 0, fmt.Errorf("P4_FACT_INPUT: fact has no image to read the row version from")
+	}
+	return mutationfact.RowVersionOf(registry, *image)
 }
 
 type mutationDeleteSnapshotOversize struct {

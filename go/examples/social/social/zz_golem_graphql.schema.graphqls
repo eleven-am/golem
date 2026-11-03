@@ -1397,6 +1397,7 @@ type CommentEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Comment
@@ -1407,6 +1408,7 @@ type PostEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Post

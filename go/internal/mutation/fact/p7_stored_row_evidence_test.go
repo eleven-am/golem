@@ -26,7 +26,7 @@ func TestStoredFactCrossChecksEveryDuplicatedColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := NewV2(fixture.Registry, digest, EventID{9}, requirement, CausationID{8}, 1, &before, nil)
+	envelope, err := New(fixture.Registry, digest, EventID{9}, requirement, CausationID{8}, 1, testRowVersion, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +41,8 @@ func TestStoredFactCrossChecksEveryDuplicatedColumn(t *testing.T) {
 
 	mutations := map[string]func(*OutboxRow){
 		"event_id":               func(value *OutboxRow) { value.EventID = "00000000-0000-4000-8000-000000000099" },
-		"fact_version":           func(value *OutboxRow) { value.FactVersion = int64(FormatVersionV1) },
-		"codec_identity":         func(value *OutboxRow) { value.CodecIdentity = CodecIdentityV1 },
+		"fact_version":           func(value *OutboxRow) { value.FactVersion = int64(FormatVersion) + 1 },
+		"codec_identity":         func(value *OutboxRow) { value.CodecIdentity = "golem.fact.v2" },
 		"generation_fingerprint": func(value *OutboxRow) { value.GenerationFingerprint = string(make([]byte, 64)) },
 		"model_id":               func(value *OutboxRow) { value.ModelID = "00000000000000000000000000000099" },
 		"action":                 func(value *OutboxRow) { value.Action = "created" },

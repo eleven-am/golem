@@ -416,8 +416,8 @@ func assertCausalDeliveryReplayKeepsOneRow(t testing.TB, fixture mutationResultF
 	causation := mutationResultUUIDText(0x5c)
 	row := mutationfact.OutboxRow{
 		EventID:               mutationResultUUIDText(0x5d),
-		FactVersion:           int64(mutationfact.FormatVersionV1),
-		CodecIdentity:         mutationfact.CodecIdentityV1,
+		FactVersion:           int64(mutationfact.FormatVersion),
+		CodecIdentity:         mutationfact.CodecIdentity,
 		GenerationFingerprint: "replayfingerprint",
 		ModelID:               "Post",
 		Action:                "created",

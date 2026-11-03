@@ -24,17 +24,10 @@ func (resolver testResolver) ResolveFactSchema(reference mutationfact.SchemaRefe
 	if resolver.registry == nil {
 		return nil, golem.SchemaDigest{}, false
 	}
-	switch reference.FormatVersion {
-	case mutationfact.FormatVersionV1:
-		return resolver.registry, resolver.digest, reference.Generation == resolver.registry.GenerationDigest()
-	case mutationfact.FormatVersionV2:
-		return resolver.registry, resolver.digest, reference.EventSchema == resolver.digest
-	default:
-		return nil, golem.SchemaDigest{}, false
-	}
+	return resolver.registry, resolver.digest, reference.FormatVersion == mutationfact.FormatVersion && reference.EventSchema == resolver.digest
 }
 
-func TestCanonicalEventV2PreservesFactBytesAndRecordedTime(t *testing.T) {
+func TestCanonicalEventPreservesFactBytesAndRecordedTime(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	model, _ := fixture.Registry.Model(fixture.Post)
 	fingerprint, snapshotFields, enabled := model.EventSchema()
@@ -62,7 +55,7 @@ func TestCanonicalEventV2PreservesFactBytesAndRecordedTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := mutationfact.NewV2(fixture.Registry, digest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, &row, nil)
+	fact, err := mutationfact.New(fixture.Registry, digest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, 7, &row, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +96,7 @@ func TestCanonicalEventV2PreservesFactBytesAndRecordedTime(t *testing.T) {
 	}
 }
 
-func TestCanonicalEventV2PreservesCompositeIdentityAndResolvedSchema(t *testing.T) {
+func TestCanonicalEventPreservesCompositeIdentityAndResolvedSchema(t *testing.T) {
 	fixture := schematest.NewCompositeRelation(t)
 	region, id := [16]byte{3}, [16]byte{4}
 	row, err := mutationdecode.NewRow(fixture.Registry, policyir.ModelID(fixture.Item), []mutationdecode.Cell{
@@ -124,7 +117,7 @@ func TestCanonicalEventV2PreservesCompositeIdentityAndResolvedSchema(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := mutationfact.NewV2(fixture.Registry, digest, mutationfact.EventID{9}, requirement, mutationfact.CausationID{8}, 1, nil, &row)
+	fact, err := mutationfact.New(fixture.Registry, digest, mutationfact.EventID{9}, requirement, mutationfact.CausationID{8}, 1, 7, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,11 +130,11 @@ func TestCanonicalEventV2PreservesCompositeIdentityAndResolvedSchema(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wire, present := envelope.EventSchemaDigest(); !present || wire != golem.EventSchemaDigest(digest) {
-		t.Fatal("V2 event schema is absent or changed")
+	if envelope.EventSchemaDigest() != golem.EventSchemaDigest(digest) {
+		t.Fatal("event schema is absent or changed")
 	}
 	if envelope.ResolvedEventSchemaDigest() != golem.EventSchemaDigest(digest) {
-		t.Fatal("V2 resolution did not retain the logical event schema")
+		t.Fatal("resolution did not retain the logical event schema")
 	}
 	identity, ok := envelope.Fact().AfterIdentity()
 	if !ok {
@@ -175,7 +168,7 @@ func TestEventCodecRejectsHostileBoundsTruncationAndMalformedWire(t *testing.T) 
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{policyir.FieldID(fixture.ItemRegion), policyir.FieldID(fixture.ItemID)}, nil)
 	digest := golem.SchemaDigest{7}
 	requirement, _ = requirement.WithEventSchema([32]byte(digest))
-	fact, err := mutationfact.NewV2(fixture.Registry, digest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &row)
+	fact, err := mutationfact.New(fixture.Registry, digest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, 7, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}

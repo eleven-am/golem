@@ -2,8 +2,8 @@
   "kind": "contract_metadata",
   "formatVersion": 1,
   "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
-  "contractFingerprint": "4d7b24562a3b9494fb2fcfe0dc0b931c2b89b5497f55769f25a8c79f4f061540",
-  "generationDigest": "bfd817577fb3f03eda7886bfc90f01d5d26d783cf64731ba477b6e7a5f6b8f6b",
+  "contractFingerprint": "d23df1d5186f040385f2b1ad781906c940965e23af092c4d8ba5e17b289c5697",
+  "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -106,7 +106,8 @@
             "entity",
             "causationID",
             "transactionOrdinal",
-            "recordedAt"
+            "recordedAt",
+            "version"
           ],
           "deleteSnapshotFull": true,
           "schema": {

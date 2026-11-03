@@ -158,7 +158,7 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		},
 	))
 	commentDescriptor := golem.GeneratedModelDescriptor[deleteEvalComment](schemaFixture.Comment, golem.GeneratedDescriptorShape(
-		[]golem.FieldID{schemaFixture.CommentID, schemaFixture.CommentPostID, schemaFixture.CommentBody}, nil, []golem.IdentityMetadata{commentIdentity},
+		[]golem.FieldID{schemaFixture.CommentID, schemaFixture.CommentPostID, schemaFixture.CommentBody, schemaFixture.CommentRowVersion}, nil, []golem.IdentityMetadata{commentIdentity},
 		[]golem.RelationMetadata{golem.GeneratedRelationMetadata(schemaFixture.Comment, schemaFixture.Post, schemaFixture.CommentPost, schemaFixture.Commenting, golem.RelationSource, golem.RelationToOne)},
 	))
 	generation := schemaFixture.Bundle.GenerationDigest()
@@ -348,7 +348,7 @@ func (fixture deleteEvalFixture) deleteComment(t *testing.T, eventID uint16, com
 
 func (fixture deleteEvalFixture) publishDelete(t *testing.T, model golem.ModelID, identity golem.FieldID, eventID uint16, cells []mutationdecode.Cell) {
 	t.Helper()
-	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), cells)
+	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), withTestRowVersion(fixture.schema.Registry, model, cells))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func (fixture deleteEvalFixture) publishDelete(t *testing.T, model golem.ModelID
 		t.Fatal(err)
 	}
 	id := p7OracleID(eventID)
-	fact, err := mutationfact.NewV2(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, &row, nil)
+	fact, err := mutationfact.New(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, 7, &row, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

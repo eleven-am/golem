@@ -8,9 +8,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
-// eventSchemaHistory is the immutable startup-built resolver joining the
-// active schema and explicitly supplied generated historical bundles. V1
-// resolves by exact generation. V2 resolves by logical event-schema digest.
 type eventSchemaHistory struct {
 	byGeneration  map[golem.SchemaDigest]*schema.Registry
 	byEventSchema map[golem.SchemaDigest]*schema.Registry
@@ -87,11 +84,7 @@ func (history *eventSchemaHistory) ResolveFactSchema(reference mutationfact.Sche
 	if history == nil {
 		return nil, golem.SchemaDigest{}, false
 	}
-	if reference.FormatVersion == mutationfact.FormatVersionV1 {
-		registry, ok := history.byGeneration[reference.Generation]
-		return registry, golem.SchemaDigest{}, ok
-	}
-	if reference.FormatVersion == mutationfact.FormatVersionV2 {
+	if reference.FormatVersion == mutationfact.FormatVersion {
 		registry, ok := history.byEventSchema[reference.EventSchema]
 		return registry, reference.EventSchema, ok
 	}

@@ -11,6 +11,7 @@ import (
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
@@ -36,7 +37,7 @@ func (failure historyError) Error() string { return string(failure) }
 
 const errHistoryIncompatible historyError = "incompatible history"
 
-func TestHistoricalBundleResolvesV1IntoCompatibleCurrentFactory(t *testing.T) {
+func TestHistoricalBundleResolvesFactIntoCompatibleCurrentFactory(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	historicalBundle := golem.GeneratedSchemaBundle(
 		golem.SchemaDigest{99}, fixture.Bundle.GeneratorVersion(), fixture.Bundle.TemplateABIVersion(),
@@ -46,9 +47,9 @@ func TestHistoricalBundleResolvesV1IntoCompatibleCurrentFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	historicalRegistry, _, ok := history.ResolveFactSchema(mutationfact.SchemaReference{FormatVersion: mutationfact.FormatVersionV1, Generation: golem.SchemaDigest{99}})
-	if !ok {
-		t.Fatal("historical V1 generation was not registered")
+	historicalRegistry, err := schema.NewHistorical(historicalBundle)
+	if err != nil {
+		t.Fatal(err)
 	}
 	title, _ := policyir.StringValue("historical")
 	row, err := mutationdecode.NewRow(historicalRegistry, policyir.ModelID(fixture.Post), []mutationdecode.Cell{
@@ -60,7 +61,17 @@ func TestHistoricalBundleResolvesV1IntoCompatibleCurrentFactory(t *testing.T) {
 		t.Fatal(err)
 	}
 	requirement, _ := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil)
-	fact, err := mutationfact.New(historicalRegistry, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, nil, &row)
+	activeModel, _ := fixture.Registry.Model(fixture.Post)
+	activeFingerprint, _, _ := activeModel.EventSchema()
+	activeDigest, err := mutationfact.ParseEventSchemaFingerprint(activeFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement, err = requirement.WithEventSchema([32]byte(activeDigest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := mutationfact.New(historicalRegistry, activeDigest, mutationfact.EventID{1}, requirement, mutationfact.CausationID{2}, 1, 7, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +89,7 @@ func TestHistoricalBundleResolvesV1IntoCompatibleCurrentFactory(t *testing.T) {
 	if transport.ResolvedEventSchemaDigest() != golem.EventSchemaDigest(currentDigest) {
 		t.Fatal("historical bundle did not prove the current logical event schema")
 	}
-	validated, err := typedvalue.New(typedvalue.Metadata{
+	validated, err := typedvalue.New(typedvalue.Metadata{Version: 7,
 		EventID:             transport.EventID(),
 		Action:              transport.Action(),
 		CausationID:         transport.CausationID(),
@@ -98,10 +109,10 @@ func TestHistoricalBundleResolvesV1IntoCompatibleCurrentFactory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := RuntimeBuildValidatedEvent(registry, validated); err != nil {
-		t.Fatalf("compatible historical V1 did not reach current factory: %v", err)
+		t.Fatalf("compatible historical fact did not reach current factory: %v", err)
 	}
 
-	incompatible, err := typedvalue.New(typedvalue.Metadata{
+	incompatible, err := typedvalue.New(typedvalue.Metadata{Version: 7,
 		EventID: golem.EventID{3}, Action: golem.EventCreated, CausationID: golem.CausationID{4}, Ordinal: 1,
 		RecordedAt: time.Unix(11, 0), Generation: golem.SchemaDigest{99}, ResolvedEventSchema: golem.EventSchemaDigest{5}, ModelID: fixture.Post,
 	}, []any{golem.UUID{7}}, nil)

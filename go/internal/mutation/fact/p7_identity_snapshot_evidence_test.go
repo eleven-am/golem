@@ -54,7 +54,11 @@ func p7RoundTripDelete(t testing.TB, registry *schema.Registry, before mutationd
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := New(registry, event, requirement, causation, 1, &before, nil)
+	requirement, err = requirement.WithEventSchema([32]byte(testEventSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := New(registry, testEventSchema, event, requirement, causation, 1, testRowVersion, &before, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +66,7 @@ func p7RoundTripDelete(t testing.TB, registry *schema.Registry, before mutationd
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := DecodeOutbox(row.Metadata, row.DeleteSnapshot, registry)
+	decoded, err := DecodeOutbox(row.Metadata, row.DeleteSnapshot, registry, testEventSchema)
 	if err != nil {
 		t.Fatal(err)
 	}

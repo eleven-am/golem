@@ -7,64 +7,23 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
-func TestHistoricalRegistryLoadsExactReleasedSocialV1V4PhysicalV1BundleOnly(t *testing.T) {
+func TestReleasedSocialV4BundleIsRefusedWithTheDrainInstruction(t *testing.T) {
 	bundle := frozenP7GeneratedSchemaBundle(t)
 	if bundle.Model().FormatVersion() != 1 || bundle.Contract().FormatVersion() != 4 {
 		t.Fatalf("released social fixture versions = model %d contract %d", bundle.Model().FormatVersion(), bundle.Contract().FormatVersion())
 	}
-	for _, provider := range bundle.Providers() {
-		if provider.Schema().FormatVersion() != 1 || provider.Schema().CanonicalVersion() != 1 {
-			t.Fatalf("released social provider %s versions = %d/%d", provider.Provider(), provider.Schema().FormatVersion(), provider.Schema().CanonicalVersion())
-		}
-	}
-	registry, err := schema.NewHistorical(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if registry.GenerationDigest() != bundle.GenerationDigest() || len(registry.Providers()) != 2 {
-		t.Fatalf("historical registry = generation %s providers %v", registry.GenerationDigest(), registry.Providers())
+	const want = "P2_SCHEMA_DOCUMENT: contract.formatVersion: historical contract format 4 is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles"
+	if _, err := schema.NewHistorical(bundle); err == nil || err.Error() != want {
+		t.Fatalf("historical registry error = %v, want %s", err, want)
 	}
 	if _, err := schema.New(bundle); err == nil {
 		t.Fatal("active registry accepted released historical social bundle")
-	}
-
-	providers := bundle.Providers()
-	first := providers[0]
-	firstSchema := first.Schema()
-	wrongFingerprint := firstSchema.Fingerprint()
-	wrongFingerprint[0] ^= 0xff
-	providers[0] = golem.GeneratedProviderSchemaDocument(first.Provider(), first.SystemFingerprint(), golem.GeneratedSchemaDocument(1, 1, wrongFingerprint, firstSchema.Bytes()))
-	wrongBundle := golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)
-	if _, err := schema.NewHistorical(wrongBundle); err == nil || !strings.Contains(err.Error(), "historical physical fingerprint mismatch") {
-		t.Fatalf("historical registry accepted wrong original physical-v1 fingerprint: %v", err)
-	}
-
-	providers = bundle.Providers()
-	first = providers[0]
-	wrongSystemFingerprint := first.SystemFingerprint()
-	wrongSystemFingerprint[0] ^= 0xff
-	providers[0] = golem.GeneratedProviderSchemaDocument(first.Provider(), wrongSystemFingerprint, first.Schema())
-	wrongBundle = golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)
-	if _, err := schema.NewHistorical(wrongBundle); err == nil || !strings.Contains(err.Error(), "historical system fingerprint mismatch") {
-		t.Fatalf("historical registry accepted wrong original physical-v1 system fingerprint: %v", err)
-	}
-
-	for _, version := range []uint32{2, 3, 4} {
-		providers = bundle.Providers()
-		first = providers[0]
-		firstSchema = first.Schema()
-		providers[0] = golem.GeneratedProviderSchemaDocument(first.Provider(), first.SystemFingerprint(), golem.GeneratedSchemaDocument(version, version, firstSchema.Fingerprint(), firstSchema.Bytes()))
-		forged := golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)
-		if _, err := schema.NewHistorical(forged); err == nil {
-			t.Fatalf("historical registry accepted physical-v1 bytes relabelled as %d", version)
-		}
 	}
 }
 

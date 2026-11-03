@@ -36,6 +36,7 @@ type SocialMutationFixture struct {
 	FriendshipFriend                                           golem.FieldID
 	TagID, TagName, TagPostTags                                golem.FieldID
 	PostTagPostID, PostTagTagName, PostTagPost, PostTagTag     golem.FieldID
+	UserRowVersion, PostRowVersion, CommentRowVersion          golem.FieldID
 
 	PostAuthorship, CommentPostRelation, CommentAuthorship    golem.RelationID
 	CommentThreading, FriendshipOrigin, FriendshipDestination golem.RelationID
@@ -199,6 +200,7 @@ func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace 
 		{ModelID: postTag, Fields: fieldContracts(postTagPostID, postTagTagName, postTagPost, postTagTag), Subscriptions: true},
 	}}
 	normalizeSubscribedEvents(t, model, &contract)
+	rowVersions := applyRowVersions(t, &model, &contract)
 
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
@@ -255,5 +257,8 @@ func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace 
 	if uniqueUserName {
 		fixture.UserNameKey = golem.KeyID(mustFixed(t, string(userNameKey)))
 	}
+	fixture.UserRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[user])))
+	fixture.PostRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[post])))
+	fixture.CommentRowVersion = golem.FieldID(mustFixed(t, string(rowVersions[comment])))
 	return fixture
 }

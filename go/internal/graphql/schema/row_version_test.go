@@ -42,7 +42,7 @@ func TestRowVersionIsAStringOnSubscribedOutputTypesOnly(t *testing.T) {
 		if len(shape.IdentityFields) > 1 {
 			identityType = contract.GraphQLName + "EventIdentity"
 		}
-		contract.Event = &compilerir.EventContractIR{PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType, MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}, Schema: shape, SchemaFingerprint: fingerprint}
+		contract.Event = &compilerir.EventContractIR{PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType, MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"}, Schema: shape, SchemaFingerprint: fingerprint}
 	}
 	if diagnostics := compilerrowversion.Apply(compiled.Compilation); len(diagnostics) != 0 {
 		t.Fatalf("row version diagnostics = %#v", diagnostics)

@@ -506,6 +506,10 @@ func classifyFactFailure(err error) string {
 	if errors.As(err, &unavailable) {
 		return "schema-unavailable"
 	}
+	var retired *mutationfact.FormatRetiredError
+	if errors.As(err, &retired) {
+		return "format-retired"
+	}
 	return "fact-invalid"
 }
 
