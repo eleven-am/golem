@@ -19,7 +19,6 @@ import (
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
-	"github.com/eleven-am/golem/go/observe"
 )
 
 func TestPolicyCacheKeysAnEntryByTheEpochCurrentAtInsertion(t *testing.T) {
@@ -93,7 +92,7 @@ func TestPolicyCacheBuildPanicIsRaisedAndNeverCached(t *testing.T) {
 	}
 }
 
-func TestPolicyCacheFailedPolicyBuildSuppressesEventsAsPolicyUnavailable(t *testing.T) {
+func TestPolicyCacheFailedPolicyBuildEndsEventStreamsWithRevalidation(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -126,14 +125,7 @@ func TestPolicyCacheFailedPolicyBuildSuppressesEventsAsPolicyUnavailable(t *test
 	fixture.app.bindings = bindings
 	fixture.app.InvalidatePolicies()
 	fixture.publish(t, fixture.notice(t, golem.EventUpdated, 2300, "visible", false))
-	select {
-	case observation := <-fixture.suppressed:
-		if observation.Reason() != observe.ReasonRevalidation {
-			t.Fatalf("failed policy build suppression reason=%q", observation.Reason())
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("an event for a model whose policy build failed was not suppressed")
-	}
+	expectStreamEnds(t, stream, events.CodeSubscriptionRevalidation)
 }
 
 type policyCacheActor struct {

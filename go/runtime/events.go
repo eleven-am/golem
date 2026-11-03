@@ -494,7 +494,7 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if fresh.policies.PolicyError(policyir.ModelID(state.model)) != nil {
-		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	fact := envelope.Fact()
 	identity, ok := fact.AfterIdentity()
@@ -513,7 +513,7 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 	case golem.EventCreated, golem.EventUpdated:
 		row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
 		if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
-			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+			return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 		}
 		if readErr != nil {
 			return subscription.Evaluation[any]{}, readErr
@@ -608,6 +608,9 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
+		return golem.RuntimeModelRow{}, false, err
+	}
 	if err != nil {
 		return golem.RuntimeModelRow{}, false, nil
 	}

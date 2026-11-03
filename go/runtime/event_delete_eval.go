@@ -104,7 +104,7 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	}
 	row, _, err := readplan.CallerReach(caller.policies, model, nil, app.readLimits.plan.MaxRelationDepth)
 	if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
-		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+		return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if err != nil {
 		return app.unverifiableDelete(ctx, state)
@@ -121,7 +121,7 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	if where != nil {
 		_, filter, err = readplan.CallerReach(caller.policies, model, where, app.readLimits.plan.MaxRelationDepth)
 		if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
-			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+			return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 		}
 		if err != nil {
 			filter = nil

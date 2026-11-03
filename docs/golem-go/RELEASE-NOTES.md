@@ -30,6 +30,8 @@ an optional `Extensions` field. A client that subscribes without the block must
 add it before upgrading to this version; see the GUIDE section "The live
 handshake and the subscription ack".
 
+**Event streams end when a policy is unavailable.** An event for a model or a relation target whose policy cannot be built used to be dropped silently, so a stream stayed open and quiet. The stream now ends with `GOLEM_SUBSCRIPTION_REVALIDATION`, for created, updated and deleted events alike. Reopen it once the policy builds. The suppression reason `policy_unavailable` (`events.SuppressionPolicyUnavailable`) is gone because the stream now ends instead.
+
 **Sockets close at their credential's deadline.** A WebSocket or SSE
 subscription now needs a deadline derived from its principal's context: the
 context's own deadline (the credential expiry), or, for a context marked with

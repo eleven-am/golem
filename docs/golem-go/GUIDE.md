@@ -659,7 +659,9 @@ Code that breaks the contract is frozen at its first result for that actor.
   `DefinePolicy` declares something invalid or panics, affects only that
   model. `ForPrincipal` still succeeds and other models work. Calls that need
   that model's policy are refused with `UNAUTHENTICATED: principal policy could
-  not be established`, and its events are suppressed. A panic is re-raised once,
+  not be established`, and an open event stream on that model ends with
+  `GOLEM_SUBSCRIPTION_REVALIDATION` instead of silently dropping the events;
+  reopen it once the policy builds. A panic is re-raised once,
   in the first call that needs the model. The failure stays with the cached
   set until that set is evicted or invalidated.
 
@@ -1492,7 +1494,8 @@ cannot decide it:
 - a set of subscribers whose combined relations the planner cannot read in one
   bounded plan (for example one past the relation limit): every subscriber of
   that event is then unknown and takes the full path;
-- a policy for the model that is unavailable.
+- a policy for the model that is unavailable (the full path then ends the
+  stream with `GOLEM_SUBSCRIPTION_REVALIDATION`).
 
 Unknown never costs correctness, only the saving: the event costs what it cost
 before for that subscriber.
