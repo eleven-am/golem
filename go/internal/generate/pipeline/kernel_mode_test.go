@@ -123,7 +123,7 @@ func TestKernelModeRunsNoGQLGenAndEmitsNoGraphQLArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, artifact := range result.Prospective.Artifacts {
-		if artifact.Kind == manifest.ArtifactGraphQLGo || artifact.Kind == manifest.ArtifactGraphQLSDL {
+		if artifact.Kind == manifest.ArtifactGraphQLGo || artifact.Kind == manifest.ArtifactGraphQLSDL || artifact.Kind == manifest.ArtifactClientTS {
 			t.Fatalf("kernel mode emitted GraphQL artifact %s (%s)", artifact.Path, artifact.Kind)
 		}
 		if bytes.Contains(artifact.Content, []byte("GraphQLConfig")) {
@@ -152,7 +152,7 @@ func TestKernelModeRunsNoGQLGenAndEmitsNoGraphQLArtifacts(t *testing.T) {
 	for _, artifact := range graphqlResult.Prospective.Artifacts {
 		kinds[artifact.Kind]++
 	}
-	if kinds[manifest.ArtifactGraphQLGo] != 4 || kinds[manifest.ArtifactGraphQLSDL] != 1 {
+	if kinds[manifest.ArtifactGraphQLGo] != 4 || kinds[manifest.ArtifactGraphQLSDL] != 1 || kinds[manifest.ArtifactClientTS] != 1 {
 		t.Fatalf("GraphQL-mode artifact kinds = %v", kinds)
 	}
 }
@@ -216,14 +216,14 @@ func TestKernelArtifactsAreByteIdenticalAcrossModesWithAFixedDigest(t *testing.T
 	var expected []manifest.Artifact
 	removed := 0
 	for _, artifact := range graphqlArtifacts {
-		if artifact.Kind == manifest.ArtifactGraphQLGo || artifact.Kind == manifest.ArtifactGraphQLSDL {
+		if artifact.Kind == manifest.ArtifactGraphQLGo || artifact.Kind == manifest.ArtifactGraphQLSDL || artifact.Kind == manifest.ArtifactClientTS {
 			removed++
 			continue
 		}
 		expected = append(expected, artifact)
 	}
-	if removed != 5 {
-		t.Fatalf("GraphQL mode emitted %d GraphQL artifacts, want 5", removed)
+	if removed != 6 {
+		t.Fatalf("GraphQL mode emitted %d GraphQL artifacts, want 6", removed)
 	}
 	if len(kernelArtifacts) != len(expected) {
 		t.Fatalf("kernel artifacts = %d, want %d", len(kernelArtifacts), len(expected))

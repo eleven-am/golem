@@ -32,6 +32,7 @@ const (
 	ArtifactRegistryGo ArtifactKind = "registry_go"
 	ArtifactGraphQLSDL ArtifactKind = "graphql_sdl"
 	ArtifactGraphQLGo  ArtifactKind = "graphql_go"
+	ArtifactClientTS   ArtifactKind = "client_manifest_ts"
 	ArtifactMetadata   ArtifactKind = "metadata"
 	ArtifactProvider   ArtifactKind = "provider"
 	ArtifactSnapshot   ArtifactKind = "snapshot"

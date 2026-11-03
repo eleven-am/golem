@@ -16,7 +16,7 @@ import (
 
 const golemGeneratedGraphQLABI = "p8-graphql-abi-v6"
 const golemGeneratedGQLGenVersion = "v0.17.70"
-const golemGeneratedGraphQLGenerationDigest = "3e61e0ba99959af9dfe84cc0d03a09a2bff8a2b68fb675dd45621f4627eda580"
+const golemGeneratedGraphQLGenerationDigest = "1994acf0cdcf6be03470487db3ea020b0397345d2013fe0525c0958a92d98849"
 const golemGeneratedGraphQLGeneratorVersion = "p1-v1"
 const golemGeneratedGraphQLTemplateABI = "p8-go-abi-v7"
 const golemGeneratedGraphQLContractFingerprint = "09963e2bd5bcffce983317bd6f5236e96a5b6d178d64f4c41c0edd5e6927516b"

@@ -6,7 +6,7 @@
   "provider": "postgresql",
   "physicalFingerprint": "7e8a6410722d0334686a5401333c34ae458da530483ea8c95ead5685bd5d8389",
   "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-  "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
+  "generationDigest": "b900ed7cd5998b7d8dfeaaaae1f4f0fa7135befa94ec04e0db79df111fbba555",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
