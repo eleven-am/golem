@@ -509,7 +509,7 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		}
 		return rollbackTransaction(transaction, err)
 	}
-	if commitErr := binding.operationWrites.commit(transaction.Commit); commitErr != nil {
+	if commitErr := binding.operationWrites.commit(reportUnknownCommit(ctx, transaction.Commit)); commitErr != nil {
 		binding.discardMutation()
 		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
 			_ = transaction.Rollback()

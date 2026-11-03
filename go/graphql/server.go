@@ -20,6 +20,7 @@ import (
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
@@ -466,11 +467,20 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 	}
 	var operationSpan *observeexec.Span
+	ctx, commits := commitreport.Install(ctx)
 	ctx, operationSpan = observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLRequest, observe.PhaseFinish)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			server.config.ReportInternalError(ctx, fmt.Errorf("GraphQL executor panic: %v\n%s", recovered, debug.Stack()))
 			response = Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
+		}
+		if state, reported := commits.State(); reported && len(response.Errors) != 0 {
+			extensions := make(map[string]any, len(response.Extensions)+1)
+			for name, value := range response.Extensions {
+				extensions[name] = value
+			}
+			extensions["golem"] = map[string]any{"commit": state}
+			response.Extensions = extensions
 		}
 		if operationSpan != nil {
 			outcome, reason := graphQLObservationResult(response)

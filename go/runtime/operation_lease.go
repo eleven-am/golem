@@ -2,9 +2,12 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"sync"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 )
 
@@ -39,7 +42,17 @@ func withinOperationAttempt[P, A, R any](ctx context.Context, caller *Caller[P, 
 }
 
 func commitWithinOperation(ctx context.Context, commit func() error) error {
-	return operationLeaseFrom(ctx).Commit(commit)
+	return operationLeaseFrom(ctx).Commit(reportUnknownCommit(ctx, commit))
+}
+
+func reportUnknownCommit(ctx context.Context, commit func() error) func() error {
+	return func() error {
+		err := commit()
+		if err != nil && !providerInterference(err) && !errors.Is(err, sql.ErrTxDone) {
+			commitreport.From(ctx).Unknown()
+		}
+		return err
+	}
 }
 
 func operationConflict(model golem.ModelID, operation, message string) error {

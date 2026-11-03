@@ -1317,6 +1317,34 @@ query resolver or a wrapper around a mutation resolver, is refused with
 `P5_CUSTOM_OPERATION` before anything runs. `Mutate` is generated only for a
 schema that declares a custom mutation.
 
+### Partial commits are never reported as clean failures
+
+A mutation document can commit some of its work and then fail: the first root
+commits and the second is refused, or a custom mutation commits one write and
+returns an error. A response with errors alone would look like a clean failure,
+and a client that retries would repeat a write that is already persisted.
+
+When a response has errors and the operation committed at least one write, the
+response carries an extension at its top level:
+
+```json
+{ "errors": [ ... ], "extensions": { "golem": { "commit": "PARTIAL" } } }
+```
+
+- `PARTIAL`: at least one write was committed. Do not retry the document as a
+  whole.
+- `UNKNOWN`: a `COMMIT` failed in a way that does not say whether the database
+  applied it, such as a connection lost while the commit was in flight. Read the
+  data back before retrying. `UNKNOWN` wins when both apply.
+
+A response with no errors, a failure that committed nothing, and an update that
+touched no rows carry no `extensions.golem.commit`; their bytes are unchanged.
+A custom mutation that commits and then cannot return its result reports
+`COMMITTED_RESULT_UNAVAILABLE` with `committed: true` on its error and
+`commit: "PARTIAL"` on the response. The two always agree. A serialization
+failure or a commit on a finished transaction is a definite rollback and is not
+`UNKNOWN`. The extension is written for HTTP, SSE and WebSocket operations.
+
 ## Using golem from Go without GraphQL (kernel mode)
 
 An application that calls golem only from Go can leave GraphQL out entirely:
