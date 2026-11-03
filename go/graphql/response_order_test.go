@@ -285,7 +285,7 @@ func TestSubscriptionFramesFollowSelectionOrder(t *testing.T) {
 
 func orderSubscriptionFrame(t *testing.T, server *graphql.Server[int], query string) string {
 	t.Helper()
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	connection, _, err := (&websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}).Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {

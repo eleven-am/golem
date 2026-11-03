@@ -99,7 +99,7 @@ func newSSEServer(t *testing.T, limits events.Limits, stream ResponseStream) (*S
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(sseAuthenticated(server.Handler()))
+	host := httptest.NewServer(sseAuthenticated(withCredentialDeadline(server.Handler())))
 	t.Cleanup(host.Close)
 	return server, executor, host
 }
@@ -421,14 +421,14 @@ func TestSSESubscriptionsNeedASubscriptionExecutor(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(sseTicksBody))
 	request.Header.Set("Accept", "text/event-stream")
 	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
+	withCredentialDeadline(server.Handler()).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "SUBSCRIPTIONS_UNAVAILABLE") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	request = httptest.NewRequest(http.MethodGet, "/graphql", nil)
 	request.Header.Set("Accept", "text/event-stream")
 	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
+	withCredentialDeadline(server.Handler()).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusMethodNotAllowed || !strings.Contains(recorder.Body.String(), "METHOD_NOT_ALLOWED") {
 		t.Fatalf("GET status=%d body=%s", recorder.Code, recorder.Body.String())
 	}

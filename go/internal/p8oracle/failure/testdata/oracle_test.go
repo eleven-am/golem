@@ -199,7 +199,9 @@ func (loader *cancelledLoader) ObservePostDisplayCodeLoad(ctx context.Context, _
 func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *social.GraphQLServer, probe *cancelledLoader, transport *subscribeSignalTransport) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		ctx := social.WithPostDisplayCodeLoaderObserver(request.Context(), probe)
+		deadlineCtx, cancel := context.WithTimeout(request.Context(), time.Hour)
+		defer cancel()
+		ctx := social.WithPostDisplayCodeLoaderObserver(deadlineCtx, probe)
 		graph.Handler().ServeHTTP(writer, request.WithContext(ctx))
 	}))
 	defer server.Close()

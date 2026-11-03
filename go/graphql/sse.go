@@ -171,11 +171,18 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 		refuse(writer, *failure)
 		return
 	}
+	deadline, deadlineFailure := server.principalDeadline(request.Context(), time.Now())
+	if deadlineFailure != nil {
+		refuse(writer, *deadlineFailure)
+		return
+	}
 	executor, subscribable := server.executor.(SubscriptionExecutor[P])
 	if !subscribable {
 		refuse(writer, publicError("SUBSCRIPTIONS_UNAVAILABLE", "GraphQL subscriptions are unavailable"))
 		return
 	}
+	ctx, cancelDeadline := context.WithDeadline(ctx, deadline)
+	defer cancelDeadline()
 	opCtx, observation := observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
 	source, err := server.subscribe(executor, opCtx, principal, prepared.Operation)
 	if err != nil {

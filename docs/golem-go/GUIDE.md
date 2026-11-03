@@ -1652,6 +1652,54 @@ client that needs a consistent view subscribes, waits for the ack, and then
 fetches: a commit after the ack arrives as an event, and a commit before it is
 in the fetch.
 
+#### The socket deadline
+
+A live socket closes at a deadline, and a reconnect resolves the principal
+again. This is how a revoked credential or a changed role stops reaching an
+open socket: no event judges it, the deadline does. One rule derives the
+deadline from the context of the socket's principal, which is the context
+`WebSocketInit` returns on WebSocket and the request context on SSE:
+
+1. **The context has a deadline.** That is the credential expiry, so set it
+   where you resolve the principal: `context.WithDeadline(ctx, expiresAt)` with
+   the token's or the session's expiry. A principal that is also marked (below)
+   still uses the deadline.
+2. **No deadline, and the context is marked, and `EventLimits.RevalidateEvery`
+   is set.** The deadline is the open time plus `RevalidateEvery`. This is for
+   principals whose credential never expires, such as API keys.
+3. **Otherwise the live handshake is refused** with
+   `GOLEM_PRINCIPAL_DEADLINE_REQUIRED`: WebSocket close `4426` with reason
+   `golem:GOLEM_PRINCIPAL_DEADLINE_REQUIRED`; SSE status 400 with that code in
+   a GraphQL error whose message names the fix. HTTP queries and mutations are
+   never refused for want of a deadline.
+
+When the deadline passes the server closes the WebSocket with `4401` (an SSE
+stream ends). The client gets fresh credentials and reconnects; the server
+resolves the principal from those credentials, and the client refetches its
+live queries after the acks. Nothing is carried over from the old socket.
+
+**The marker.** `golem.WithoutCredentialExpiry(ctx)` declares that the principal
+this context carries has no credential expiry, so `RevalidateEvery` bounds its
+socket instead. `golem.HasNoCredentialExpiry(ctx)` reads it. Set it only in
+your own server-side code that resolves the principal, for example in the
+function that turns an API key into a principal, or in `WebSocketInit` for a
+socket authenticated that way. golem reads it only from the context value, never
+from a client: a field in the `golem` block is a protocol mismatch, and a
+payload field or a header such as `X-Golem-No-Credential-Expiry` has no effect.
+Do not mark a principal that has an expiry; give it the deadline.
+
+```go
+func resolveAPIKey(ctx context.Context, key string) (context.Context, error) {
+	principal, err := lookup(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return golem.WithoutCredentialExpiry(withPrincipal(ctx, principal)), nil
+}
+```
+
+`RevalidateEvery` has no default; unset, a marked principal is refused.
+
 ## Event transports
 
 `EventTransport` decides which processes hear an event:

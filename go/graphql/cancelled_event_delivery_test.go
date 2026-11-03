@@ -118,7 +118,7 @@ func TestWebSocketEventInFlightWhenConnectionIsCancelledWritesNoFrameAndReportsN
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	connection, _, err := (&websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}).Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestSSEEventInFlightWhenRequestIsCancelledWritesNoFrameAndReportsNothing(t 
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Accept", "text/event-stream")
 		recorder := httptest.NewRecorder()
-		server.Handler().ServeHTTP(recorder, request)
+		withCredentialDeadline(server.Handler()).ServeHTTP(recorder, request)
 		cancel()
 		if recorder.Body.String() != "event: next\ndata: "+liveAckWire+"\n\n" {
 			t.Fatalf("repetition %d: a cancelled stream wrote more than its ack: %q", repetition, recorder.Body.String())
@@ -198,7 +198,7 @@ func TestWebSocketEventInFlightWhenClientCompletesReportsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	connection, _, err := (&websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}).Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {

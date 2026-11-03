@@ -88,7 +88,7 @@ func newClientStopServer(t *testing.T) (*websocket.Conn, *clientStopExecutor, *c
 			if string(payload) != `{"token":"valid"}` {
 				return nil, errors.New("invalid token")
 			}
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		Observer:            observer,
 		ReportInternalError: func(context.Context, error) {},
@@ -96,7 +96,7 @@ func newClientStopServer(t *testing.T) (*websocket.Conn, *clientStopExecutor, *c
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	t.Cleanup(host.Close)
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -253,14 +253,14 @@ func TestWebSocketStoppedOperationWritesNoFrameIssuedAfterTheStopWasProcessed(t 
 				return value, ok
 			},
 			WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
-				return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+				return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 			},
 			ReportInternalError: func(context.Context, error) {},
 		}, executor)
 		if err != nil {
 			t.Fatal(err)
 		}
-		host := httptest.NewServer(server.Handler())
+		host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 		connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 		if err != nil {
@@ -315,14 +315,14 @@ func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T
 			return value, ok
 		},
 		WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		ReportInternalError: func(context.Context, error) {},
 	}, executor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)

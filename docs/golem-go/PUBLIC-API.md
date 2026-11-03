@@ -122,6 +122,13 @@ that declares `golem.WithoutGraphQL` gets no GraphQL files and no `GraphQL`
 method on its `App`. The `graphql` package is still public and unchanged; such
 an application simply never imports it.
 
+**The credential-expiry marker is part of the surface.**
+`golem.WithoutCredentialExpiry(ctx)` and `golem.HasNoCredentialExpiry(ctx)` let
+server-side code declare that a principal's credential never expires, so that
+`EventLimits.RevalidateEvery` bounds its live socket (GUIDE, "The socket
+deadline"). The marker is a context value under an unexported key; golem never
+reads it from client input, and that is part of the contract.
+
 ## Before 1.0
 
 A 1.0 would claim that removals stop happening without a major version. That

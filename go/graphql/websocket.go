@@ -114,7 +114,7 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	}
 	block, initPayload := splitInitPayload(initPayload)
 	if refusal := server.checkHandshake(block); refusal != "" {
-		state.close(4426, refusal.closeReason())
+		state.close(closeHandshakeRefused, refusal.closeReason())
 		return
 	}
 	derived := ctx
@@ -130,6 +130,11 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 		state.close(4401, "authentication is required")
 		return
 	}
+	deadline, deadlineFailure := server.principalDeadline(derived, time.Now())
+	if deadlineFailure != nil {
+		state.close(closeHandshakeRefused, refusedDeadline.closeReason())
+		return
+	}
 	state.ctx, state.principal = derived, principal
 	_ = conn.SetReadDeadline(time.Time{})
 	conn.SetReadLimit(int64(server.limits.MaxRequestBytes))
@@ -138,6 +143,12 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	}
 	stopLiveness := state.startLiveness()
 	defer stopLiveness()
+	expiry := time.AfterFunc(time.Until(deadline), func() {
+		state.close(closeCredentialExpired, "credential expired")
+		state.cancel()
+		_ = state.conn.Close()
+	})
+	defer expiry.Stop()
 	for {
 		message, err = state.read()
 		if err != nil {

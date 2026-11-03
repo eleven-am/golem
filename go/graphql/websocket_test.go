@@ -68,7 +68,7 @@ func newProtocolServer(t *testing.T, limits events.Limits) (*Server[int], *proto
 			}
 			// Deliberately discard the supplied parent: the server must still bind
 			// every operation to its own connection/lifecycle cancellation.
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		EventLimits: limits, ReportInternalError: func(context.Context, error) {},
 	}, &protocolExecutor{stream: stream})
@@ -80,7 +80,7 @@ func newProtocolServer(t *testing.T, limits events.Limits) (*Server[int], *proto
 
 func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 	server, stream := newProtocolServer(t, events.Limits{})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -111,7 +111,7 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 
 func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 200 * time.Millisecond, WebSocketPongTimeout: 20 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -157,7 +157,7 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 
 func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{ConnectionInitTimeout: 25 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	url := "ws" + strings.TrimPrefix(host.URL, "http")
 	legacy := websocket.Dialer{Subprotocols: []string{"graphql-ws"}}
@@ -196,7 +196,7 @@ func TestHTTPRefusesSubscriptionsAndShutdownClosesActiveWebSockets(t *testing.T)
 	if len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "SUBSCRIPTION_TRANSPORT_REQUIRED" {
 		t.Fatalf("HTTP subscription response = %#v", response)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -238,7 +238,7 @@ func TestWebSocketOperationPanicIsSanitizedAndConnectionSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -323,7 +323,7 @@ func maskedPongFrame(t *testing.T, payload []byte) []byte {
 
 func TestWebSocketKeepsClientThatSendsUnsolicitedPongsBeforeItsAnswer(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 100 * time.Millisecond, WebSocketPongTimeout: 30 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -402,7 +402,7 @@ func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(executor.release) }) }

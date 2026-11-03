@@ -58,9 +58,10 @@ func (access *recheckAccess) resolve(_ context.Context, principal social.Princip
 }
 
 type recheckWorld struct {
-	application *social.App[social.Principal]
-	access      *recheckAccess
-	host        *httptest.Server
+	application   *social.App[social.Principal]
+	access        *recheckAccess
+	host          *httptest.Server
+	credentialTTL atomic.Int64
 }
 
 func openRecheckWorld(t *testing.T, ctx context.Context, database *provider.Database, limits events.Limits) *recheckWorld {
@@ -112,6 +113,7 @@ func openRecheckWorld(t *testing.T, ctx context.Context, database *provider.Data
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = graph.Shutdown(context.Background()) })
+	world := &recheckWorld{}
 	host := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		user, err := golem.ParseUUID(request.Header.Get("X-Test-User"))
 		if err != nil {
@@ -119,10 +121,17 @@ func openRecheckWorld(t *testing.T, ctx context.Context, database *provider.Data
 			return
 		}
 		principal := social.Principal{Development: true, DevUserID: user}
-		graph.Handler().ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		ctx := testPrincipalContext(request.Context(), principal)
+		if ttl := time.Duration(world.credentialTTL.Load()); ttl > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(context.WithValue(request.Context(), principalContextKey{}, principal), ttl)
+			defer cancel()
+		}
+		graph.Handler().ServeHTTP(writer, request.WithContext(ctx))
 	}))
 	t.Cleanup(host.Close)
-	return &recheckWorld{application: application, access: access, host: host}
+	world.application, world.access, world.host = application, access, host
+	return world
 }
 
 func postStillShared(ctx context.Context, application *social.App[social.Principal], post golem.UUID) error {
@@ -536,5 +545,58 @@ func TestSubscriptionRecheckLeavesNoGoroutinesBehind(t *testing.T) {
 	}
 	if running := runtime.NumGoroutine(); running > baseline {
 		t.Fatalf("goroutines=%d after closing every rechecked stream; baseline=%d", running, baseline)
+	}
+}
+
+func TestReconnectAfterTheDeadlineResolvesThePrincipalFresh(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	world := openRecheckWorld(t, ctx, openDeleteEventsSQLite(t), events.Limits{})
+	carolID, carol := world.user(t, ctx, "66000000-0000-0000-0000-000000000003", "carol")
+	world.credentialTTL.Store(int64(1500 * time.Millisecond))
+	first := world.dial(t, carolID)
+	subscribeWS(t, first, "posts", postSubscription, nil)
+	draftOne := mustUUID(t, "67000000-0000-0000-0000-000000000001")
+	time.Sleep(100 * time.Millisecond)
+	if _, err := carol.Posts.Create(ctx, referencePostInput(t, draftOne, false)); err != nil {
+		t.Fatal(err)
+	}
+	awaitWSNext(t, first, "posts", draftOne.String())
+	_ = first.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		if _, _, err := first.ReadMessage(); err != nil {
+			var closeError *websocket.CloseError
+			if !errors.As(err, &closeError) || closeError.Code != 4401 {
+				t.Fatalf("socket ended with %v, want close 4401", err)
+			}
+			break
+		}
+	}
+	world.access.ban(carolID)
+	world.credentialTTL.Store(int64(time.Hour))
+	second := world.dial(t, carolID)
+	subscribeWS(t, second, "posts", postSubscription, nil)
+	time.Sleep(100 * time.Millisecond)
+	draftTwo := mustUUID(t, "67000000-0000-0000-0000-000000000002")
+	published := mustUUID(t, "67000000-0000-0000-0000-000000000003")
+	if _, err := carol.Posts.Create(ctx, referencePostInput(t, draftTwo, false)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := carol.Posts.Create(ctx, referencePostInput(t, published, true)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_ = second.SetReadDeadline(deadline)
+		var frame wsFrame
+		if err := second.ReadJSON(&frame); err != nil {
+			t.Fatalf("the reconnected socket never delivered the published post: %v", err)
+		}
+		if bytes.Contains(frame.Payload, []byte(draftTwo.String())) {
+			t.Fatal("the reconnected socket kept the old actor and delivered a draft it may no longer read")
+		}
+		if bytes.Contains(frame.Payload, []byte(published.String())) {
+			return
+		}
 	}
 }

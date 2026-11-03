@@ -44,7 +44,7 @@ func newErrorsServer(t testing.TB, limits Limits, introspection bool) *Server[in
 			return value, ok
 		},
 		WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		Limits:              limits,
 		Introspection:       introspection,
