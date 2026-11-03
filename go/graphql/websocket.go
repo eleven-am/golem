@@ -271,6 +271,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		if state.server.executable != nil && response.Data != nil {
 			serialized = state.server.executePrepared(ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
 		}
+		if ctx.Err() != nil {
+			operationErr = context.Canceled
+			return
+		}
 		payload, err := encodeResponse(serialized)
 		if err != nil {
 			operationErr = err

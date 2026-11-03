@@ -626,7 +626,7 @@ func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool)
 }
 
 func (server *Server[P]) executePrepared(ctx context.Context, request Request, document *ast.QueryDocument, definition *ast.OperationDefinition, variables map[string]any, prepared Response) Response {
-	ctx, err := withPreparedOperation(ctx, prepared)
+	ctx, err := withPreparedOperation(context.WithoutCancel(ctx), prepared)
 	if err != nil {
 		return Response{Errors: []Error{PresentError(ctx, err, nil, server.config.ReportInternalError)}}
 	}

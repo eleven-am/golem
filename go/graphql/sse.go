@@ -270,6 +270,9 @@ func (stream *sseStream[P]) relay(source ResponseStream, request Request, prepar
 		if stream.server.executable != nil && response.Data != nil {
 			serialized = stream.server.executePrepared(stream.ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
 		}
+		if stream.ctx.Err() != nil {
+			return context.Canceled
+		}
 		if err := stream.next(serialized); err != nil {
 			return err
 		}
