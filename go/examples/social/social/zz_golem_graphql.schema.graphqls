@@ -104,6 +104,7 @@ type Comment {
   author: User
   parent: Comment
   replies(where: CommentWhereInput, orderBy: [CommentOrderByInput!], cursor: CommentWhereUniqueInput, distinct: [CommentScalarField!], skip: Int, take: Int = 50): [Comment!]
+  _version: String!
   _count: CommentCountOutput
 }
 
@@ -286,6 +287,7 @@ type Post {
   author: User
   comments(where: CommentWhereInput, orderBy: [CommentOrderByInput!], cursor: CommentWhereUniqueInput, distinct: [CommentScalarField!], skip: Int, take: Int = 50): [Comment!]
   postTags(where: PostTagWhereInput, orderBy: [PostTagOrderByInput!], cursor: PostTagWhereUniqueInput, distinct: [PostTagScalarField!], skip: Int, take: Int = 50): [PostTag!]
+  _version: String!
   displayCode(prefix: String!): String!
   excerpt(maximum: Int!): String
   _count: PostCountOutput

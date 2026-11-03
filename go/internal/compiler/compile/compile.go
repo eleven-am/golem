@@ -19,6 +19,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/methods"
 	"github.com/eleven-am/golem/go/internal/compiler/relation"
 	"github.com/eleven-am/golem/go/internal/compiler/resolve"
+	"github.com/eleven-am/golem/go/internal/compiler/rowversion"
 	"github.com/eleven-am/golem/go/internal/compiler/schema"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	"github.com/eleven-am/golem/go/internal/gomodfile"
@@ -183,6 +184,9 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, interpreted.GraphQLModels)...)
 	}
 	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, rowversion.Apply(&resolved.Compilation)...)
+	}
+	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.Normalize(&resolved.Compilation, interpreted.GraphQLComputed, interpreted.GraphQLCustom)...)
 	}
 	if !hasErrors(diagnostics) {
@@ -341,6 +345,9 @@ func CompileRawWithPrevious(raw ir.RawDeclIR, previous *ir.ModelIR) Result {
 	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, nil)...)
+	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, rowversion.Apply(&resolved.Compilation)...)
 	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddSemanticSearchOperations(&resolved.Compilation)...)

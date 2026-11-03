@@ -397,6 +397,12 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			}
 			continue
 		}
+		if ir.IsRowVersionField(field) {
+			if readable {
+				fmt.Fprintf(&output, "  %s: String!\n", fc.GraphQLName)
+			}
+			continue
+		}
 		writableCreate = writableCreate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 		writableUpdate = writableUpdate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 		if view.model.OptimisticConcurrency != nil && field.ID == *view.model.OptimisticConcurrency {

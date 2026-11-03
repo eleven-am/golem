@@ -1,139 +1,139 @@
 {
   "formatVersion": 2,
-  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "80eec434687445448316107adbad08d03a04a496b9357b835e4ac0fbd7af6a12",
+  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+  "contractFingerprint": "97485267bfe97e4eb2fa454175b9f470e3a1b37f28b866deb0f9da4816c5a108",
   "providerFingerprints": [
     {
       "provider": "postgresql",
-      "fingerprint": "34e070aeb0fb061095976992c6457b6eb67f06d47433e42ca262753225de38fe",
+      "fingerprint": "7e8a6410722d0334686a5401333c34ae458da530483ea8c95ead5685bd5d8389",
       "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-      "migrationFingerprint": "c9afc4666886b2d6fced6ae1d4e96c051a38934684403caf33dc3c63fde9a6a0"
+      "migrationFingerprint": "77cf54bea6288c5f64baf302c357f560dfa5a1184deac9fbafe213037b5f442a"
     },
     {
       "provider": "sqlite",
-      "fingerprint": "cc6e96025f152b40a54c5ae00c1b480fd1405863c541d9311e2c88dcc235672e",
+      "fingerprint": "60c0c06485c61118e58b52326eb5ed084103916f33234a72d3b7c99facf1ac16",
       "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
-      "migrationFingerprint": "fbf96cc43fff3bd5be67d0889e2463f946ad566fccf08e981360af07c302010c"
+      "migrationFingerprint": "2d047551ffb3cc0583d029a0a23228d4f201697fb9866f28da33f050741fda4f"
     }
   ],
-  "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+  "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "artifacts": [
     {
       "path": ".golem/generated/contract.metadata.json",
       "kind": "metadata",
-      "contentSha256": "d866e43b5a955a59db51adbcaf3739b2f46dea629a6118fec43a3e4c544bae9b",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "314063ba47054f942962b66b37f7e7958300d6a934d1ea4c82bf54cee2ffa8fb",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/model.snapshot.json",
       "kind": "snapshot",
-      "contentSha256": "ff957ccb81a2fc7f3420b514a53aeaaaeb530b820e81fa3fc55b5de697a5a7e2",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "dbe1cd8f6b6c3c66586431bc8f6074db8a381c598ebb712a3094d631952b169c",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/postgresql.physical.snapshot.json",
       "kind": "provider",
-      "contentSha256": "4690e136654379a3b69b6913f96c2e876c5e71f0d978cf11fe688eed5adbf565",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "d2325a255cdf83e82c11c2ebdc5b89d756a5b620e35cfe344a01250b9dfcc77b",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/sqlite.physical.snapshot.json",
       "kind": "provider",
-      "contentSha256": "789e0f7f65956f7d582082cdc04be58d805983425d23a13609e3734d64704e2a",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "5e581a8b3f2f596634dd15a4c4359443bc5528acea99d6de0148107c7140cc97",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": "social/golemgqlgen/zz_golem_graphql_exec.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "f87e15588685da6c34df769ced3354f08ee650181c49130e9314022f94be9b4a",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "5410141e1c7491157f59ac53e61629bac41641801068cab01fa6fa8299479cf2",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/golemgqlgen/zz_golem_graphql_models.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "981d696eedfeea57554f58ad5388b861e0c70d27bde9d254d9cd088120ec1b0f",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "124ca9d0faea0b4c1aa99aa7a04dd660422e3044bc1e7cd3edfb8a35c00dc1e9",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/golemgqlgen/zz_golem_graphql_resolvers.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "e498baa16efa82e848d1258ccaff8799aaffe1fa37eef94f46bff592edfe7eff",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "5f2bf95a8f8fd882b0d2900cba3a232820aaea3609bc434fb2c91d9bc5887f39",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_bindings.gen.go",
       "kind": "bindings_go",
-      "contentSha256": "996bb61955c5bcbe300ee86eac5f77810d965ff9309351efbc7c7192b1c26827",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "37238c18ef2ecd1c75961271032b18f9c8aa1335469a297bd30e18ef3e0ee3c9",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_events.gen.go",
       "kind": "event_go",
-      "contentSha256": "7e43dd6f84346a58384f78c85757867bd64b174f6d70b4a2d8e97a38488d5326",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "38b9fcd93338358e5a93388ea7e5cd163ded15cdc194e7b9abd5a820fcd54e5c",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_graphql.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "1149553402340fc5e22924661cf4a70e4a2ef0ac6aba4da578d1c7d0a5fc13c4",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "763d75bb3d8bee7c1557dbcb06007885f2fcfe953ed479e151be1ad340dae60e",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_graphql.schema.graphqls",
       "kind": "graphql_sdl",
-      "contentSha256": "746815cf90da85badf8d1b023b0316dac92d49eeba94b7761f21fd5b1dbdb41f",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "24911fab9397920626c0673980b8bec5a40a24cc1af272e71be91413a3fbdce2",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "# Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_models.gen.go",
       "kind": "model_go",
-      "contentSha256": "0f37670ef87e244bb3c9db671f97e0d4032067a24b4f5bba1c1ef798ed86dc06",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "501320e4c6be403aef970d0770e9ce4036c4bbb5a4b8f6fca57a74f151cbf514",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "social/zz_golem_registry.gen.go",
       "kind": "registry_go",
-      "contentSha256": "11f37e07942dd466d18120784f7c0d7949f20c305b314154db63a735772f0fc2",
-      "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-      "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+      "contentSha256": "ded96a81458fd1d3d37230a0cbb291182262aa5fbc06aad72d5554ffc5f1afbc",
+      "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+      "generationDigest": "63d7394646764a0b5082613e43385d8b319bde720ca99150ecd62ca0fc4b01bc",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     }

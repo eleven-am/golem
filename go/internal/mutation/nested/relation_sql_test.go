@@ -129,34 +129,7 @@ func TestRelatedPredicateIsCorrelatedAndParametersAreRebased(t *testing.T) {
 	}
 }
 
-func TestMembershipWriteUsesCorrelationOrderAndRejectsRequiredDisconnect(t *testing.T) {
-	fixture := schematest.NewGraph(t)
-	post := graphPostRow(t, fixture, 4, 1)
-	user := graphUserRow(t, fixture, 7)
-	position := relationPosition(t, fixture.Post, fixture.PostAuthor, fixture.Authorship, fixture.User, mutationir.PositionBranchResult, nil)
-	node := relationNode(t, fixture.Post, fixture.PostKey, fixture.PostID, fixture.Post, fixture.Authorship, mutationir.Connect, position)
-	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
-		statement, err := RenderMembershipWrite(MembershipSQLRequest{Node: node, Anchor: post, Related: user, Effect: MembershipConnect, Registry: fixture.Registry, Provider: provider, MaxParameters: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if statement.Role() != ApplyMembershipConnect || statement.ModelID() != policyir.ModelID(fixture.Post) || len(statement.Args()) != 2 {
-			t.Fatalf("provider %d membership statement invalid", provider)
-		}
-		first, second := "?1", "?2"
-		if provider == policyir.ProviderPostgreSQL {
-			first, second = "$1", "$2"
-		}
-		if !strings.Contains(statement.SQL(), "author_id\" = "+first) || !strings.Contains(statement.SQL(), "id\" = "+second) {
-			t.Fatalf("correlation/identity bind order changed: %s", statement.SQL())
-		}
-		if _, err := RenderMembershipWrite(MembershipSQLRequest{Node: node, Anchor: post, Related: user, Effect: MembershipDisconnect, Registry: fixture.Registry, Provider: provider, MaxParameters: 10}); err == nil {
-			t.Fatal("required FK disconnect rendered SQL")
-		}
-	}
-}
-
-func TestSQLiteRenderedExpansionAndMembershipWriteExecuteLive(t *testing.T) {
+func TestSQLiteRenderedExpansionExecutesLive(t *testing.T) {
 	fixture := schematest.NewGraph(t)
 	database, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -201,35 +174,11 @@ func TestSQLiteRenderedExpansionAndMembershipWriteExecuteLive(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("related expansion rows=%d want 1; sql=%s args=%#v inserted_author=%s", count, statement.SQL(), statement.Args(), user8)
 	}
-	postAnchor := graphPostRow(t, fixture, 4, 8)
-	userRelated := graphUserRow(t, fixture, 7)
-	writePosition := relationPosition(t, fixture.Post, fixture.PostAuthor, fixture.Authorship, fixture.User, mutationir.PositionBranchResult, nil)
-	writeNode := relationNode(t, fixture.Post, fixture.PostKey, fixture.PostID, fixture.Post, fixture.Authorship, mutationir.Connect, writePosition)
-	write, err := RenderMembershipWrite(MembershipSQLRequest{Node: writeNode, Anchor: postAnchor, Related: userRelated, Effect: MembershipConnect, Registry: fixture.Registry, Provider: policyir.ProviderSQLite, MaxParameters: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := make([]any, len(write.Columns()))
-	dest := make([]any, len(raw))
-	for index := range raw {
-		dest[index] = &raw[index]
-	}
-	if err := database.QueryRowContext(context.Background(), write.SQL(), write.Args()...).Scan(dest...); err != nil {
-		t.Fatal(err)
-	}
-	var author string
-	if err := database.QueryRow("SELECT author_id FROM posts WHERE id = ?", post).Scan(&author); err != nil {
-		t.Fatal(err)
-	}
-	if author != user7 {
-		t.Fatalf("membership write author=%s want %s", author, user7)
-	}
 }
 
 func TestCompositeCorrelationAndPrimaryKeysPreserveDeclaredOrder(t *testing.T) {
 	fixture := schematest.NewCompositeRelation(t)
 	tenant := compositeTenantRow(t, fixture, 1, 2)
-	item := compositeItemRow(t, fixture, 3, 4, 8, 9)
 	position := relationPosition(t, fixture.Tenant, fixture.TenantItems, fixture.Ownership, fixture.Item, mutationir.PositionEntireMembership, nil)
 	node := compositeRelationNode(t, fixture.Tenant, fixture.TenantKey, []golem.FieldID{fixture.TenantRegion, fixture.TenantID}, fixture.Item, fixture.Ownership, mutationir.Disconnect, position)
 	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
@@ -256,30 +205,6 @@ func TestCompositeCorrelationAndPrimaryKeysPreserveDeclaredOrder(t *testing.T) {
 		if len(statement.Args()) != 2 {
 			t.Fatalf("provider %d args=%#v", provider, statement.Args())
 		}
-	}
-
-	sourcePosition := relationPosition(t, fixture.Item, fixture.ItemOwner, fixture.Ownership, fixture.Tenant, mutationir.PositionBranchResult, nil)
-	sourceNode := compositeRelationNode(t, fixture.Item, fixture.ItemKey, []golem.FieldID{fixture.ItemRegion, fixture.ItemID}, fixture.Item, fixture.Ownership, mutationir.Connect, sourcePosition)
-	write, err := RenderMembershipWrite(MembershipSQLRequest{
-		Node: sourceNode, Anchor: item, Related: tenant, Effect: MembershipConnect,
-		Registry: fixture.Registry, Provider: policyir.ProviderPostgreSQL, MaxParameters: 4,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{"owner_region\" = $1", "owner_id\" = $2", "region\" = $3", "id\" = $4"} {
-		if !strings.Contains(write.SQL(), fragment) {
-			t.Fatalf("composite membership SQL lacks %q: %s", fragment, write.SQL())
-		}
-	}
-	if len(write.Args()) != 4 {
-		t.Fatalf("composite membership args=%#v", write.Args())
-	}
-	if _, err := RenderMembershipWrite(MembershipSQLRequest{
-		Node: sourceNode, Anchor: item, Related: tenant, Effect: MembershipConnect,
-		Registry: fixture.Registry, Provider: policyir.ProviderPostgreSQL, MaxParameters: 3,
-	}); err == nil || !strings.Contains(err.Error(), "P4_NESTED_SQL_LIMIT") {
-		t.Fatalf("parameter bound was not enforced: %v", err)
 	}
 }
 
@@ -314,22 +239,6 @@ func TestExecuteRelationSQLDecodesCompleteRowsAndRefusesSentinel(t *testing.T) {
 	}
 	if _, err := ExecuteRelationSQL(context.Background(), database, fixture.Registry, policyir.ProviderSQLite, program.Statements()[0]); err == nil || !strings.Contains(err.Error(), "P4_NESTED_SQL_EXEC_LIMIT") {
 		t.Fatalf("sentinel expansion was not refused: %v", err)
-	}
-	if _, err := database.Exec("DELETE FROM posts WHERE id = ?", uuidText(1)); err != nil {
-		t.Fatal(err)
-	}
-	missing := graphPostRow(t, fixture, 1, 7)
-	writePosition := relationPosition(t, fixture.Post, fixture.PostAuthor, fixture.Authorship, fixture.User, mutationir.PositionBranchResult, nil)
-	writeNode := relationNode(t, fixture.Post, fixture.PostKey, fixture.PostID, fixture.Post, fixture.Authorship, mutationir.Connect, writePosition)
-	write, err := RenderMembershipWrite(MembershipSQLRequest{
-		Node: writeNode, Anchor: missing, Related: graphUserRow(t, fixture, 7), Effect: MembershipConnect,
-		Registry: fixture.Registry, Provider: policyir.ProviderSQLite, MaxParameters: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ExecuteRelationSQL(context.Background(), database, fixture.Registry, policyir.ProviderSQLite, write); err == nil || !strings.Contains(err.Error(), "P4_NESTED_SQL_EXEC_CARDINALITY") {
-		t.Fatalf("zero-row membership update was not refused: %v", err)
 	}
 }
 

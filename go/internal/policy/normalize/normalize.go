@@ -32,6 +32,9 @@ func Policy(input ir.Policy) (ir.Policy, error) {
 	if err != nil {
 		return ir.Policy{}, fmt.Errorf("normalize policy: %w", err)
 	}
+	if version, owned := input.RowVersion(); owned {
+		validated = validated.WithRowVersion(version)
+	}
 
 	model := validated.ModelID()
 	normalized := make([]ir.Rule, validated.RuleCount())
@@ -70,6 +73,9 @@ func Policy(input ir.Policy) (ir.Policy, error) {
 	result, err := ir.NewPolicy(model, normalized)
 	if err != nil {
 		return ir.Policy{}, fmt.Errorf("normalize policy: rebuild: %w", err)
+	}
+	if version, owned := input.RowVersion(); owned {
+		result = result.WithRowVersion(version)
 	}
 	return result, nil
 }

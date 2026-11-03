@@ -430,6 +430,7 @@ type Model struct {
 	scopedReads           bool
 	hookOwnedCreate       []golem.FieldID
 	optimisticConcurrency *golem.FieldID
+	rowVersion            *golem.FieldID
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
@@ -504,6 +505,13 @@ func (model Model) OptimisticConcurrency() (golem.FieldID, bool) {
 		return golem.FieldID{}, false
 	}
 	return *model.optimisticConcurrency, true
+}
+
+func (model Model) RowVersion() (golem.FieldID, bool) {
+	if model.rowVersion == nil {
+		return golem.FieldID{}, false
+	}
+	return *model.rowVersion, true
 }
 
 // EqualityIndexed reports the compiler-proven provider-neutral fact that an

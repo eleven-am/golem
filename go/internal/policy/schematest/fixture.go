@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	compilerrowversion "github.com/eleven-am/golem/go/internal/compiler/rowversion"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -35,6 +36,7 @@ type Fixture struct {
 	PostJSON         golem.FieldID
 	PostList         golem.FieldID
 	PostDateTime     golem.FieldID
+	PostRowVersion   golem.FieldID
 	PostAt           golem.FieldID
 	PostStamps       golem.FieldID
 	PostAuthorName   golem.FieldID
@@ -184,15 +186,25 @@ func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake 
 	return newFixtureWithDeleteAction(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, compilerir.ActionRestrict, compilerir.ModelID(id(1)))
 }
 
+func NewSubscribedRowVersionedOnDelete(t testing.TB, action compilerir.ReferentialAction) Fixture {
+	return newFixtureWithDeleteSnapshot(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, true, false, false, action, compilerir.ModelID(id(1)), false, true)
+}
+
+func NewSubscribedRowVersionedOnDeletePostgreSQLNamespaces(action compilerir.ReferentialAction) func(testing.TB, physical.PhysicalName, physical.PhysicalName) Fixture {
+	return func(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
+		return newFixtureWithDeleteSnapshot(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, true, false, false, action, compilerir.ModelID(id(1)), false, true)
+	}
+}
+
 func NewSubscribedIndexedWithFullDeleteSnapshot(t testing.TB) Fixture {
-	return newFixtureWithDeleteSnapshot(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, false, false, false, compilerir.ActionRestrict, compilerir.ModelID(id(1)), true)
+	return newFixtureWithDeleteSnapshot(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, false, false, false, compilerir.ActionRestrict, compilerir.ModelID(id(1)), true, false)
 }
 
 func newFixtureWithDeleteAction(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID) Fixture {
-	return newFixtureWithDeleteSnapshot(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, deleteAction, user, false)
+	return newFixtureWithDeleteSnapshot(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, deleteAction, user, false, false)
 }
 
-func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID, fullPostDeleteSnapshot bool) Fixture {
+func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction, user compilerir.ModelID, fullPostDeleteSnapshot, rowVersion bool) Fixture {
 	t.Helper()
 	post := compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
@@ -307,6 +319,19 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 		}
 	}
 	normalizeDeclaredSubscribedEvents(t, model, &contract, declared)
+	var postRowVersion compilerir.FieldID
+	if rowVersion {
+		compilation := compilerir.CompilationIR{Model: model, Contract: contract}
+		if diagnostics := compilerrowversion.Apply(&compilation); len(diagnostics) != 0 {
+			t.Fatalf("row version fixture: %v", diagnostics)
+		}
+		model, contract = compilation.Model, compilation.Contract
+		for _, field := range model.Models[1].Fields {
+			if compilerir.IsRowVersionField(field) {
+				postRowVersion = field.ID
+			}
+		}
+	}
 
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
@@ -351,7 +376,7 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 	// The complete exact-value fixture includes provider-owned JSON/list checks
 	// and temporal/storage details. Lower it through the real providers so live
 	// post-apply introspection must reproduce precisely the same physical IR.
-	if fullExactValues {
+	if fullExactValues || rowVersion {
 		var err error
 		sqliteSchema, err = sqliteprovider.New().Lower(context.Background(), model, physical.LowerOptions{})
 		if err != nil {
@@ -387,6 +412,9 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 	}
 	if optimisticConcurrency {
 		fixture.PostDateTime = golem.FieldID(mustFixed(t, string(postDateTime)))
+	}
+	if rowVersion {
+		fixture.PostRowVersion = golem.FieldID(mustFixed(t, string(postRowVersion)))
 	}
 	if fullExactValues {
 		fixture.PostNullableText = golem.FieldID(mustFixed(t, string(postNullableText)))

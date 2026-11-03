@@ -82,6 +82,13 @@ func (program Program) PrepareCaptured(rows []mutationdecode.Row) (Prepared, err
 		}
 		prepared.statements = append(prepared.statements, statement)
 	}
+	if context.node.Operation() == mutationir.UpdateMany {
+		advance, advanceErr := context.advanceVersion()
+		if advanceErr != nil {
+			return Prepared{}, advanceErr
+		}
+		prepared.statements = append(prepared.statements, advance...)
+	}
 	if _, referenced := context.node.ReferenceCondition(); referenced && context.node.Operation() == mutationir.UpdateMany {
 		for start := 0; start < len(rows); start += chunkSize {
 			end := start + chunkSize
@@ -229,6 +236,13 @@ func (context renderContext) renderUpdate(identities [][]any) (Statement, error)
 	}
 	if len(assignments) == 0 {
 		return Statement{}, fail(CodeInput, context.modelID(), policyir.FieldID{}, "update-many has no scalar operations", nil)
+	}
+	if context.version != nil {
+		field, found := context.resolver.Field(context.provider, context.modelID(), *context.version)
+		if !found {
+			return Statement{}, fail(CodeSchema, context.modelID(), *context.version, "row version field has no physical descriptor", nil)
+		}
+		assignments = append(assignments, context.dialect.Quote(field.Column)+" = "+context.versionNext)
 	}
 	identitySQL, identityBindings, err := context.identitiesWhere(identities, len(bindings))
 	if err != nil {

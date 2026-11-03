@@ -142,7 +142,7 @@ func recordCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, regi
 	}
 	after := make(map[string]mutationdecode.Row, len(effects.nulled))
 	for model, rows := range groupCascadeRows(effects.nulled) {
-		current, err := readCascadeRows(ctx, queryer, registry, provider, limits, model, rows)
+		current, err := stampCascadeRows(ctx, queryer, registry, provider, limits, model, rows)
 		if err != nil {
 			return err
 		}
@@ -211,6 +211,25 @@ func readCascadeRows(ctx context.Context, queryer sqlx.QueryerContext, registry 
 	var result []mutationdecode.Row
 	for _, statement := range statements {
 		current, _, err := executeMutationBatchStatement(ctx, queryer, registry, provider, model, statement, 0)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, current...)
+	}
+	return result, nil
+}
+
+func stampCascadeRows(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, limits normalizedMutationLimits, model policyir.ModelID, rows []mutationdecode.Row) ([]mutationdecode.Row, error) {
+	statements, err := mutationbatch.RenderStampRows(mutationbatch.RowsRequest{Registry: registry, Provider: provider, Model: model, Rows: rows, MaxParameters: uint32(limits.statementParameters)})
+	if err != nil {
+		return nil, err
+	}
+	if len(statements) == 0 {
+		return readCascadeRows(ctx, queryer, registry, provider, limits, model, rows)
+	}
+	var result []mutationdecode.Row
+	for _, statement := range statements {
+		current, _, err := executeMutationBatchStatement(ctx, queryer, registry, provider, model, statement, statement.ExpectedRows())
 		if err != nil {
 			return nil, err
 		}
