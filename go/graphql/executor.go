@@ -85,7 +85,11 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 		return nil, err
 	}
 	bindings := append([]ComputedBinding(nil), config.ComputedBindings...)
-	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom, listBounds: NewListBounds(compiler.ListBounds())}, nil
+	bounds, err := compiler.ListBounds()
+	if err != nil {
+		return nil, fmt.Errorf("GraphQL list bounds: %w", err)
+	}
+	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom, listBounds: NewListBounds(bounds)}, nil
 }
 
 func (executor *generatedExecutor[P]) ListBounds() ListBounds { return executor.listBounds }

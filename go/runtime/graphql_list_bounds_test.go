@@ -39,7 +39,7 @@ func TestGeneratedServersHaveBoundForEveryUndefaultedList(t *testing.T) {
 		{"p5social", p5social.GolemGeneratedSchemaBundle(), []string{"Query.groupByPosts", "Query.relationGroupByPosts"}},
 		{"p5extensions", p5extensions.GolemGeneratedSchemaBundle(), []string{"Query.searchUsers"}},
 		{"p6metrics", p6metrics.GolemGeneratedSchemaBundle(), []string{"Query.groupByMetrics"}},
-		{"p10operations", p10operations.GolemGeneratedSchemaBundle(), []string{"Mutation.submitCappedInvites", "Mutation.submitInvites", "Query.cappedInvites", "Query.groupedInvites", "Query.searchInvites", "Query.searchTeams", "Team.openInvites"}},
+		{"p10operations", p10operations.GolemGeneratedSchemaBundle(), []string{"Mutation.submitCappedInvites", "Mutation.submitInvites", "Query.cappedInvites", "Query.groupedInvites", "Query.searchInvites", "Query.searchTeams", "Team.openInvites", "Team.selfTeams"}},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			compilation, err := policyschema.DecodeActive(fixture.bundle)
@@ -50,7 +50,10 @@ func TestGeneratedServersHaveBoundForEveryUndefaultedList(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounds := compiler.ListBounds()
+			bounds, err := compiler.ListBounds()
+			if err != nil {
+				t.Fatal(err)
+			}
 			var keys []string
 			for key, bound := range bounds {
 				keys = append(keys, key)

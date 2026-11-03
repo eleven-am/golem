@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -24,11 +26,6 @@ func TestInvariantCompileErrorsAreInternalAndReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := range compilation.Contract.Models {
-		if compilation.Contract.Models[index].GraphQLName == "User" {
-			compilation.Contract.Models[index].Exposed = false
-		}
-	}
 	var reports []error
 	executor, err := NewGeneratedExecutor(GeneratedExecutorConfig[int]{
 		Bundle: generatedTestBundle(t, compilation),
@@ -41,6 +38,17 @@ func TestInvariantCompileErrorsAreInternalAndReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].GraphQLName == "User" {
+			compilation.Contract.Models[index].Exposed = false
+		}
+	}
+	corrupted, err := graphqloperation.New(compilation, graphqloperation.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.(*generatedExecutor[int]).compiler = corrupted
 	post := generatedTestContract(t, compilation.Contract, "Post")
 	query, queryErrors := gqlparser.LoadQuery(schema, `{ `+post.Roots.FindMany+` { author { id } } }`)
 	if len(queryErrors) != 0 {
@@ -58,6 +66,26 @@ func TestInvariantCompileErrorsAreInternalAndReported(t *testing.T) {
 	user := generatedTestContract(t, compilation.Contract, "User")
 	if reports[0].Error() != "internal compile failure: model "+string(user.ModelID)+" is not exposed" {
 		t.Fatalf("report text=%q", reports[0].Error())
+	}
+}
+
+func TestGeneratedExecutorRefusesAHiddenRelationTargetAtStartup(t *testing.T) {
+	compilation, _ := generatedTestCompilation(t)
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].GraphQLName == "User" {
+			compilation.Contract.Models[index].Exposed = false
+		}
+	}
+	user := generatedTestContract(t, compilation.Contract, "User")
+	_, err := NewGeneratedExecutor(GeneratedExecutorConfig[int]{
+		Bundle:              generatedTestBundle(t, compilation),
+		BeginCaller:         func(context.Context, int) (CallerExecution, error) { return nil, nil },
+		ReportInternalError: func(context.Context, error) {},
+	})
+	want := "GraphQL list bounds: exposed relation Comment.author targets hidden model " + string(user.ModelID)
+	if err == nil || err.Error() != want {
+		t.Fatalf("err=%v want %q", err, want)
 	}
 }
 

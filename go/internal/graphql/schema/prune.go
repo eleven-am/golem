@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -22,17 +23,37 @@ type reachabilityWalk struct {
 	pending    []string
 }
 
+func ReachableTypes(compilation ir.CompilationIR) (map[string]bool, error) {
+	assembled, err := assemble(compilation)
+	if err != nil {
+		return nil, err
+	}
+	_, walk, err := walkReachable(assembled)
+	if err != nil {
+		return nil, err
+	}
+	return walk.keptTypes, nil
+}
+
 func pruneUnreachable(sdl string) (string, error) {
+	document, walk, err := walkReachable(sdl)
+	if err != nil {
+		return "", err
+	}
+	return cutUnreachable(sdl, document, walk)
+}
+
+func walkReachable(sdl string) (*ast.SchemaDocument, *reachabilityWalk, error) {
 	source := &ast.Source{Name: "generated.graphql", Input: sdl}
 	document, parseErr := parser.ParseSchema(source)
 	if parseErr != nil {
-		return "", fmt.Errorf("generated GraphQL schema does not parse: %w", parseErr)
+		return nil, nil, fmt.Errorf("generated GraphQL schema does not parse: %w", parseErr)
 	}
 	if _, err := gqlparser.LoadSchema(source); err != nil {
-		return "", fmt.Errorf("generated GraphQL schema is invalid before pruning: %w", err)
+		return nil, nil, fmt.Errorf("generated GraphQL schema is invalid before pruning: %w", err)
 	}
 	if document.Schema != nil || document.SchemaExtension != nil || len(document.Extensions) != 0 {
-		return "", fmt.Errorf("generated GraphQL schema contains schema or extension definitions that pruning cannot split")
+		return nil, nil, fmt.Errorf("generated GraphQL schema contains schema or extension definitions that pruning cannot split")
 	}
 	walk := &reachabilityWalk{
 		types:      make(map[string]*ast.Definition, len(document.Definitions)),
@@ -53,6 +74,10 @@ func pruneUnreachable(sdl string) (string, error) {
 	}
 	walk.drain()
 
+	return document, walk, nil
+}
+
+func cutUnreachable(sdl string, document *ast.SchemaDocument, walk *reachabilityWalk) (string, error) {
 	type span struct {
 		line int
 		kind string

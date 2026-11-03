@@ -50,6 +50,8 @@ type NoArgs struct{}
 func (Team) DefineGraphQL(graphql *golem.GraphQLModel[Team]) {
 	golem.ComputedField(graphql, "newestInvite", golem.GraphQLObject[Invite](), Team{}.NewestInvite, golem.Requires(Teams.Owner))
 	golem.ComputedField(graphql, "pinnedInvite", golem.GraphQLObject[Invite]().NonNull(), Team{}.PinnedInvite, golem.Requires(Teams.Owner))
+	golem.ComputedField(graphql, "selfTeam", golem.GraphQLObject[Team]().NonNull(), Team{}.SelfTeam, golem.Requires(Teams.Owner))
+	golem.ComputedField(graphql, "selfTeams", golem.GraphQLList(golem.GraphQLObject[Team]().NonNull(), 5).NonNull(), Team{}.SelfTeams, golem.Requires(Teams.Owner))
 	golem.ComputedField(graphql, "openInvites", golem.GraphQLList(golem.GraphQLObject[Invite]().NonNull(), 20).NonNull(), Team{}.OpenInvites, golem.Requires(Teams.Owner))
 }
 
@@ -63,6 +65,14 @@ func (Team) NewestInvite(ctx context.Context, row golem.Row[Team], _ NoArgs) (go
 
 func (Team) PinnedInvite(ctx context.Context, row golem.Row[Team], arguments NoArgs) (golem.Row[Invite], error) {
 	return Team{}.NewestInvite(ctx, row, arguments)
+}
+
+func (Team) SelfTeam(_ context.Context, row golem.Row[Team], _ NoArgs) (golem.Row[Team], error) {
+	return row, nil
+}
+
+func (Team) SelfTeams(_ context.Context, row golem.Row[Team], _ NoArgs) ([]golem.Row[Team], error) {
+	return []golem.Row[Team]{row}, nil
 }
 
 func (Team) OpenInvites(ctx context.Context, row golem.Row[Team], _ NoArgs) ([]golem.Row[Invite], error) {

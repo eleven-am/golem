@@ -119,6 +119,8 @@ type Team {
   newestInvite: Invite
   openInvites: [Invite!]!
   pinnedInvite: Invite!
+  selfTeam: Team!
+  selfTeams: [Team!]!
   _count: TeamCountOutput
 }
 

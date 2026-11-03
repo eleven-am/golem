@@ -549,6 +549,31 @@ func TestComputedModelResultIsCallerReadAndResolvesNested(t *testing.T) {
 	})
 }
 
+func TestComputedResolverReturningItsParentRowHydratesThroughTheCallerRead(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		ctx := context.Background()
+		second := p10OperationID(t, 302)
+		if _, err := fixture.app.System().Teams.Create(ctx, p10operations.Teams.Create(p10operations.Teams.ID.Create(second), p10operations.Teams.Owner.Create("alpha"))); err != nil {
+			t.Fatal(err)
+		}
+		response := fixture.run(t, "alpha", `{ searchTeams(owner: "alpha") { id owner selfTeam { id owner } selfTeams { id owner } } }`)
+		if len(response.Errors) != 0 {
+			t.Fatalf("errors: %#v", response.Errors)
+		}
+		teams := response.items(t, "searchTeams")
+		if len(teams) != 2 {
+			t.Fatalf("teams = %#v", teams)
+		}
+		for _, team := range teams {
+			single, _ := team["selfTeam"].(map[string]any)
+			listed, _ := team["selfTeams"].([]any)
+			if single["id"] != team["id"] || single["owner"] != "alpha" || len(listed) != 1 || listed[0].(map[string]any)["id"] != team["id"] {
+				t.Fatalf("a returned parent row lost its identity or hydration: %#v", team)
+			}
+		}
+	})
+}
+
 func TestCustomQueryHydrationBatchesComputedOncePerSlot(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile

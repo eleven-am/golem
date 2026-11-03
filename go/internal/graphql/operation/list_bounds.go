@@ -3,9 +3,10 @@ package operation
 import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 )
 
-func (c *Compiler) ListBounds() map[string]int {
+func (c *Compiler) ListBounds() (map[string]int, error) {
 	bounds := map[string]int{}
 	if c.analytics != nil {
 		for root, maximum := range c.analytics.GroupRootMaxima() {
@@ -20,8 +21,12 @@ func (c *Compiler) ListBounds() map[string]int {
 			bounds[rootTypeName(operation.Operation)+"."+operation.Name] = capacity
 		}
 	}
+	reachable, err := graphqlschema.ReachableTypes(c.compilation)
+	if err != nil {
+		return nil, err
+	}
 	for _, contract := range c.compilation.Contract.Models {
-		if !contract.Exposed {
+		if !reachable[contract.GraphQLName] {
 			continue
 		}
 		for _, field := range contract.Computed {
@@ -30,7 +35,7 @@ func (c *Compiler) ListBounds() map[string]int {
 			}
 		}
 	}
-	return bounds
+	return bounds, nil
 }
 
 func rootTypeName(kind compilerir.CustomOperationKind) string {
