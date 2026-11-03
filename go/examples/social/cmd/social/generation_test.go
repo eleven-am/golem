@@ -43,6 +43,32 @@ func TestExternalSocialApplicationGenerateCheckBuildAndRun(t *testing.T) {
 	if !strings.Contains(checked, `"checked": true`) {
 		t.Fatalf("fresh generated application was not current: %s", checked)
 	}
+	clientManifest := filepath.Join(freshRoot, "social", "zz_golem_client.gen.ts")
+	generatedClient, err := os.ReadFile(clientManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedClient, err := os.ReadFile(filepath.Join(exampleRoot, "social", "zz_golem_client.gen.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(generatedClient, committedClient) {
+		t.Fatal("fresh client manifest differs from the committed one")
+	}
+	if err := os.WriteFile(clientManifest, append(append([]byte(nil), generatedClient...), []byte("export const handEdited = true;\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	drift := exec.Command(cli, "check", "--schema", "./social", "--app-out", "./social", "--migrations", "migrations")
+	drift.Dir = freshRoot
+	drift.Env = commandEnv
+	driftOutput, driftErr := drift.CombinedOutput()
+	if driftErr == nil || !strings.Contains(string(driftOutput), "zz_golem_client.gen.ts") {
+		t.Fatalf("check accepted a hand-edited client manifest: err=%v\n%s", driftErr, driftOutput)
+	}
+	if err := os.WriteFile(clientManifest, generatedClient, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runP8Command(t, freshRoot, commandEnv, cli, "check", "--schema", "./social", "--app-out", "./social", "--migrations", "migrations")
 
 	databaseDSN := "file:" + filepath.Join(t.TempDir(), "social.sqlite")
 	runP8Command(t, freshRoot, commandEnv, cli, "migration", "apply", "--provider", "sqlite", "--dsn", databaseDSN, "--migrations", "migrations")

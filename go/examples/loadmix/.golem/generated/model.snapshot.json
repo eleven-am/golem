@@ -1,9 +1,9 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "model_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "8916e59d976fa9e6a88fa20e9b3b25e49fb2c85d83ee452b795a6d09fc865098",
-  "contractFingerprint": "fcb80d91a087ae705263c92ea03a25f46350ce63f0d1e313d0ef3680091d6b0a",
-  "generationDigest": "11b8dd537720c1fc34ac1f9a64e9243761c9ef0d9e19bb07d3889573de098b8b",
+  "modelFingerprint": "27b9a195558f3d51748349b62fcd6bbd4effd9f1115ada56c5fc0673b00853b1",
+  "contractFingerprint": "f4f630e5ccfe6ed1842c97c3554dbb90d2cc808712df3893628a854b38614605",
+  "generationDigest": "63c510f62eb77a376f035885c28261067ffa579ddb2988c97c413fdf3544c59b",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -942,6 +942,31 @@
             }
           },
           {
+            "id": "57694ed4d7f875b8e4e04f5b800a2fbb",
+            "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 43,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
+            }
+          },
+          {
             "id": "703b08cfd9d16e5bfe18126dc6396386",
             "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000PreambleStatus",
             "goName": "PreambleStatus",
@@ -1575,6 +1600,31 @@
             }
           },
           {
+            "id": "35795a8e5c05414e956ec550a8b5977f",
+            "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 9,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
+            }
+          },
+          {
             "id": "52a7fa59ddf4adf4e2ae3a848f10154a",
             "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000ThreadID",
             "goName": "ThreadID",
@@ -1764,6 +1814,31 @@
           "physicalName": "article_audio"
         },
         "fields": [
+          {
+            "id": "06190ff471d0ac3be37caa66d2298a44",
+            "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 16,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
+            }
+          },
           {
             "id": "10306059701c35b592f06282f13761d2",
             "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000SourceContentHash",
@@ -2253,6 +2328,31 @@
               "relationId": "2d82dcbcd06123c96cbcbe1fe06ba542",
               "role": "source",
               "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "bc4e65af4cce9950a4ee3fa8d7362ff0",
+            "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 8,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
             }
           },
           {

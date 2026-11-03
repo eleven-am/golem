@@ -1,0 +1,2567 @@
+{
+  "formatVersion": 2,
+  "schema": {
+    "id": "e0bae6f96bd81147df833752c4794036",
+    "stableName": "golem_loadmix_example",
+    "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+    "rootFunction": "DefineSchema",
+    "actor": {
+      "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+      "name": "Actor"
+    }
+  },
+  "providers": [
+    "postgresql"
+  ],
+  "enums": [
+    {
+      "id": "0c6714fae9376b9611fc160fcbb36694",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ArticleStatus"
+      },
+      "logicalName": "ArticleStatus",
+      "values": [
+        {
+          "id": "1f793162647e4f1704297001bc3b8aa0",
+          "goName": "ArticleStatusPending",
+          "wireValue": "PENDING"
+        },
+        {
+          "id": "6b16189d27172d2f4e4fd57d2ec8a8cb",
+          "goName": "ArticleStatusExtracting",
+          "wireValue": "EXTRACTING"
+        },
+        {
+          "id": "1701a431b2bdf96b96018866def6cc76",
+          "goName": "ArticleStatusReady",
+          "wireValue": "READY"
+        },
+        {
+          "id": "8338dfccaefbf14ac19f0ddac273877f",
+          "goName": "ArticleStatusFailed",
+          "wireValue": "FAILED"
+        }
+      ]
+    },
+    {
+      "id": "2a8dbc8af3e76859db99d53ee240ae3d",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "SourceType"
+      },
+      "logicalName": "SourceType",
+      "values": [
+        {
+          "id": "e0e6ed1ac49f784cf3c8fff803c8a237",
+          "goName": "SourceTypeURL",
+          "wireValue": "URL"
+        },
+        {
+          "id": "fb0479ec4db6967a235e4ca354d3bad7",
+          "goName": "SourceTypeYouTube",
+          "wireValue": "YOUTUBE"
+        },
+        {
+          "id": "b73a0c637da28358932fa2ec1badadbc",
+          "goName": "SourceTypePDF",
+          "wireValue": "PDF"
+        },
+        {
+          "id": "34b2d68cff19f695afa2d74858fb1ab8",
+          "goName": "SourceTypeEPUB",
+          "wireValue": "EPUB"
+        }
+      ]
+    },
+    {
+      "id": "48736248fc6d82ee85e7e648d06ec629",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ChatMessageStatus"
+      },
+      "logicalName": "ChatMessageStatus",
+      "values": [
+        {
+          "id": "ca764c8f02e09a1d95fcf43181417b53",
+          "goName": "ChatMessageStatusPending",
+          "wireValue": "PENDING"
+        },
+        {
+          "id": "a816afa01083feceec67c03902fedb48",
+          "goName": "ChatMessageStatusStreaming",
+          "wireValue": "STREAMING"
+        },
+        {
+          "id": "9cae2bdc46e56cb2a679ef48b8e8a7bd",
+          "goName": "ChatMessageStatusCompleted",
+          "wireValue": "COMPLETED"
+        },
+        {
+          "id": "8de40ba5dcadd8d43d037c899b6f0ed4",
+          "goName": "ChatMessageStatusFailed",
+          "wireValue": "FAILED"
+        },
+        {
+          "id": "ec8a13fa5f96ba25a00be26dacdfe2fa",
+          "goName": "ChatMessageStatusCancelled",
+          "wireValue": "CANCELLED"
+        }
+      ]
+    },
+    {
+      "id": "6da52f5ee2e4c4eb3e41158301620deb",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "FeatureStatus"
+      },
+      "logicalName": "FeatureStatus",
+      "values": [
+        {
+          "id": "e04fa34e2e0d2817ab1ae47539fb9ff5",
+          "goName": "FeatureStatusIdle",
+          "wireValue": "IDLE"
+        },
+        {
+          "id": "8f46d8695f48a504c04bd4286388b74f",
+          "goName": "FeatureStatusPending",
+          "wireValue": "PENDING"
+        },
+        {
+          "id": "6a098380d53b1414a60efa323bf1c2cb",
+          "goName": "FeatureStatusRunning",
+          "wireValue": "RUNNING"
+        },
+        {
+          "id": "053031c245f177bf325288ee6ee0bb93",
+          "goName": "FeatureStatusReady",
+          "wireValue": "READY"
+        },
+        {
+          "id": "92d47ebb678637bc596e923e6f09dfd5",
+          "goName": "FeatureStatusFailed",
+          "wireValue": "FAILED"
+        }
+      ]
+    },
+    {
+      "id": "e634639645ec08105983a997943c00ec",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ArticlePreference"
+      },
+      "logicalName": "ArticlePreference",
+      "values": [
+        {
+          "id": "3defa327fc35f46136795b2f9ce17371",
+          "goName": "ArticlePreferenceNeutral",
+          "wireValue": "NEUTRAL"
+        },
+        {
+          "id": "6be0be372059b8d2fda5088654311513",
+          "goName": "ArticlePreferenceLike",
+          "wireValue": "LIKE"
+        },
+        {
+          "id": "d7d94cbc4d1eb82282294d3c6a643b5a",
+          "goName": "ArticlePreferenceDislike",
+          "wireValue": "DISLIKE"
+        }
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "1d29ec78f3084897a1e868ab1b6604d0",
+      "canonicalIdentity": "loadmix.ReadingSession",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ReadingSession"
+      },
+      "logicalName": "ReadingSession",
+      "table": {
+        "physicalName": "reading_sessions"
+      },
+      "fields": [
+        {
+          "id": "183c9ec18b73fdb3a21dc702187ad5cd",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000SessionType",
+          "goName": "SessionType",
+          "logicalName": "SessionType",
+          "declarationOrder": 7,
+          "kind": "scalar",
+          "scalar": {
+            "column": "session_type",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "string",
+                "canonical": "reading"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "525486e081df9d1135817b59ab301fd0",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000ProgressEnd",
+          "goName": "ProgressEnd",
+          "logicalName": "ProgressEnd",
+          "declarationOrder": 6,
+          "kind": "scalar",
+          "scalar": {
+            "column": "progress_end",
+            "type": {
+              "kind": "float64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "float",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "61b0a7caa4a88e9ab556cdc59dbb175d",
+          "canonicalIdentity": "loadmix.ReadingSession.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "7735fccdae2812cb3d5dea76bc6cab8b",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000ProgressStart",
+          "goName": "ProgressStart",
+          "logicalName": "ProgressStart",
+          "declarationOrder": 5,
+          "kind": "scalar",
+          "scalar": {
+            "column": "progress_start",
+            "type": {
+              "kind": "float64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "float",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "9eee4a5effa92d9086011f7fc33f020c",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000ArticleID",
+          "goName": "ArticleID",
+          "logicalName": "ArticleID",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "article_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "a576af5a178159ed7aa9e69675a8593d",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000Article",
+          "goName": "Article",
+          "logicalName": "Article",
+          "declarationOrder": 8,
+          "kind": "relation",
+          "relation": {
+            "relationId": "6698b891affc15764234a3850fc9d1a9",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "d149806fe15d3ee32ce7e2f5bfd35dfd",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000DurationSec",
+          "goName": "DurationSec",
+          "logicalName": "DurationSec",
+          "declarationOrder": 4,
+          "kind": "scalar",
+          "scalar": {
+            "column": "duration_sec",
+            "type": {
+              "kind": "int32"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "integer",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "de3b6779cb77452ca75124507c49d2db",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000EndedAt",
+          "goName": "EndedAt",
+          "logicalName": "EndedAt",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "ended_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "ef1ad4ce3e749c8ce154340d0fc987a5",
+          "canonicalIdentity": "1d29ec78f3084897a1e868ab1b6604d0\u0000StartedAt",
+          "goName": "StartedAt",
+          "logicalName": "StartedAt",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "started_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "224ddcd62a5ff2164a72231ea41d3f4a",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_reading_sessions",
+        "fields": [
+          "61b0a7caa4a88e9ab556cdc59dbb175d"
+        ]
+      },
+      "uniques": [],
+      "indexes": [],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "61b0a7caa4a88e9ab556cdc59dbb175d",
+          "kind": "key",
+          "keyId": "224ddcd62a5ff2164a72231ea41d3f4a"
+        }
+      ]
+    },
+    {
+      "id": "430d11bbacc9e3032d6ba6130b2f877c",
+      "canonicalIdentity": "loadmix.User",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "User"
+      },
+      "logicalName": "User",
+      "table": {
+        "physicalName": "users"
+      },
+      "fields": [
+        {
+          "id": "1a46d4b4bc09a4332c4e36ca40e6bbb4",
+          "canonicalIdentity": "430d11bbacc9e3032d6ba6130b2f877c\u0000ChatThreads",
+          "goName": "ChatThreads",
+          "logicalName": "ChatThreads",
+          "declarationOrder": 5,
+          "kind": "relation",
+          "relation": {
+            "relationId": "2d82dcbcd06123c96cbcbe1fe06ba542",
+            "role": "inverse",
+            "kind": "hasMany"
+          }
+        },
+        {
+          "id": "2601a50b10536d9947b484d20fe7440f",
+          "canonicalIdentity": "430d11bbacc9e3032d6ba6130b2f877c\u0000Name",
+          "goName": "Name",
+          "logicalName": "Name",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "name",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "string",
+                "canonical": ""
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "3abec05884e4126c253fcd366d9f24e3",
+          "canonicalIdentity": "loadmix.User.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "7d9341839cb05e6815b10136fd3ee5d6",
+          "canonicalIdentity": "430d11bbacc9e3032d6ba6130b2f877c\u0000Email",
+          "goName": "Email",
+          "logicalName": "Email",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "email",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "b6d8c32672c2aba7fd514d88aff0e11c",
+          "canonicalIdentity": "430d11bbacc9e3032d6ba6130b2f877c\u0000CreatedAt",
+          "goName": "CreatedAt",
+          "logicalName": "CreatedAt",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "created_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "f93173731a781d326f83d0c1ebbfe22d",
+          "canonicalIdentity": "430d11bbacc9e3032d6ba6130b2f877c\u0000Articles",
+          "goName": "Articles",
+          "logicalName": "Articles",
+          "declarationOrder": 4,
+          "kind": "relation",
+          "relation": {
+            "relationId": "548603008941c5a70d466e9d25abee2e",
+            "role": "inverse",
+            "kind": "hasMany"
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "c2e1a06ac321409905958f0ad8970630",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_users",
+        "fields": [
+          "3abec05884e4126c253fcd366d9f24e3"
+        ]
+      },
+      "uniques": [],
+      "indexes": [],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "3abec05884e4126c253fcd366d9f24e3",
+          "kind": "key",
+          "keyId": "c2e1a06ac321409905958f0ad8970630"
+        }
+      ]
+    },
+    {
+      "id": "59d3db36ba8528d7e1640abce40014ba",
+      "canonicalIdentity": "loadmix.Article",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "Article"
+      },
+      "logicalName": "Article",
+      "table": {
+        "physicalName": "articles"
+      },
+      "fields": [
+        {
+          "id": "07b72293316a9817cb5b8b1978f4e463",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Status",
+          "goName": "Status",
+          "logicalName": "Status",
+          "declarationOrder": 21,
+          "kind": "enum",
+          "scalar": {
+            "column": "status",
+            "type": {
+              "kind": "enum",
+              "enumId": "0c6714fae9376b9611fc160fcbb36694"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "PENDING"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "082959e8366fc3180e669871c2a77000",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000RoleplayCharacter",
+          "goName": "RoleplayCharacter",
+          "logicalName": "RoleplayCharacter",
+          "declarationOrder": 15,
+          "kind": "scalar",
+          "scalar": {
+            "column": "roleplay_character",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "08fe07f6d82d44734cd85f1f43833cf6",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ScreenshotStatus",
+          "goName": "ScreenshotStatus",
+          "logicalName": "ScreenshotStatus",
+          "declarationOrder": 23,
+          "kind": "enum",
+          "scalar": {
+            "column": "screenshot_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "IDLE"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "097b2851347b07ab9246854fdb50b2b9",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000UserID",
+          "goName": "UserID",
+          "logicalName": "UserID",
+          "declarationOrder": 38,
+          "kind": "scalar",
+          "scalar": {
+            "column": "user_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "0a0a51cc807ad5c38a6b52914537fb75",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioProgress",
+          "goName": "AudioProgress",
+          "logicalName": "AudioProgress",
+          "declarationOrder": 31,
+          "kind": "scalar",
+          "scalar": {
+            "column": "audio_progress",
+            "type": {
+              "kind": "float64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "float",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "116e10534dde82bcce7403c5f1c93416",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000SourceType",
+          "goName": "SourceType",
+          "logicalName": "SourceType",
+          "declarationOrder": 1,
+          "kind": "enum",
+          "scalar": {
+            "column": "source_type",
+            "type": {
+              "kind": "enum",
+              "enumId": "2a8dbc8af3e76859db99d53ee240ae3d"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "URL"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "161ecd6f9a3f58a53084510af9556c2d",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ScreenshotPath",
+          "goName": "ScreenshotPath",
+          "logicalName": "ScreenshotPath",
+          "declarationOrder": 9,
+          "kind": "scalar",
+          "scalar": {
+            "column": "screenshot_path",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "170321fd0f2b57b42c9112424e25c915",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000EmbeddingStatus",
+          "goName": "EmbeddingStatus",
+          "logicalName": "EmbeddingStatus",
+          "declarationOrder": 26,
+          "kind": "enum",
+          "scalar": {
+            "column": "embedding_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "IDLE"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "1dffbe30bd5667050e080985cfa8085f",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioError",
+          "goName": "AudioError",
+          "logicalName": "AudioError",
+          "declarationOrder": 30,
+          "kind": "scalar",
+          "scalar": {
+            "column": "audio_error",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "1e02457fd4ca51431c00e449011686fb",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000WordCount",
+          "goName": "WordCount",
+          "logicalName": "WordCount",
+          "declarationOrder": 18,
+          "kind": "scalar",
+          "scalar": {
+            "column": "word_count",
+            "type": {
+              "kind": "int32"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "1f1ecf3c99db97580feebfbe520dd587",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000OriginalLanguage",
+          "goName": "OriginalLanguage",
+          "logicalName": "OriginalLanguage",
+          "declarationOrder": 12,
+          "kind": "scalar",
+          "scalar": {
+            "column": "original_language",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "2a4b5982516ba7d3dc4a8f9e183b266a",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ReadingProgress",
+          "goName": "ReadingProgress",
+          "logicalName": "ReadingProgress",
+          "declarationOrder": 33,
+          "kind": "scalar",
+          "scalar": {
+            "column": "reading_progress",
+            "type": {
+              "kind": "float64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "float",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "31e675266d3c09e715426de7a72a962d",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000RoleplayUserCharacter",
+          "goName": "RoleplayUserCharacter",
+          "logicalName": "RoleplayUserCharacter",
+          "declarationOrder": 16,
+          "kind": "scalar",
+          "scalar": {
+            "column": "roleplay_user_character",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "3f6a483030d3f0a34ad2587dae9389dc",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000PublishedDate",
+          "goName": "PublishedDate",
+          "logicalName": "PublishedDate",
+          "declarationOrder": 6,
+          "kind": "scalar",
+          "scalar": {
+            "column": "published_date",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "438d53c1e0b61d58ed04fd2932c9fc3e",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000UpdatedAt",
+          "goName": "UpdatedAt",
+          "logicalName": "UpdatedAt",
+          "declarationOrder": 37,
+          "kind": "scalar",
+          "scalar": {
+            "column": "updated_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "updated": true,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "44050da040920b9f9e666832553d4dd5",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000RoleplayScene",
+          "goName": "RoleplayScene",
+          "logicalName": "RoleplayScene",
+          "declarationOrder": 17,
+          "kind": "scalar",
+          "scalar": {
+            "column": "roleplay_scene",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "453d6437deb4751894b15de34a63b684",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ExtractError",
+          "goName": "ExtractError",
+          "logicalName": "ExtractError",
+          "declarationOrder": 22,
+          "kind": "scalar",
+          "scalar": {
+            "column": "extract_error",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "502795e3548952111ae1e31de341166b",
+          "canonicalIdentity": "loadmix.Article.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "54157442d212d34d00a342b21ac798fe",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000LastReadAt",
+          "goName": "LastReadAt",
+          "logicalName": "LastReadAt",
+          "declarationOrder": 32,
+          "kind": "scalar",
+          "scalar": {
+            "column": "last_read_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "57694ed4d7f875b8e4e04f5b800a2fbb",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000GolemVersion",
+          "goName": "GolemVersion",
+          "logicalName": "GolemVersion",
+          "declarationOrder": 43,
+          "kind": "scalar",
+          "scalar": {
+            "column": "golem_version",
+            "type": {
+              "kind": "int64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "integer",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": true
+          }
+        },
+        {
+          "id": "703b08cfd9d16e5bfe18126dc6396386",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000PreambleStatus",
+          "goName": "PreambleStatus",
+          "logicalName": "PreambleStatus",
+          "declarationOrder": 25,
+          "kind": "enum",
+          "scalar": {
+            "column": "preamble_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "IDLE"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "70b43ff6d31f7fc6b01700b438d3798f",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000User",
+          "goName": "User",
+          "logicalName": "User",
+          "declarationOrder": 39,
+          "kind": "relation",
+          "relation": {
+            "relationId": "548603008941c5a70d466e9d25abee2e",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "73dcb9b88f324c411c3503278905aabe",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000HeroImageURL",
+          "goName": "HeroImageURL",
+          "logicalName": "HeroImageURL",
+          "declarationOrder": 11,
+          "kind": "scalar",
+          "scalar": {
+            "column": "hero_image_url",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "79eb7ef0e98150205af17b98c4daafc5",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000URL",
+          "goName": "URL",
+          "logicalName": "URL",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "url",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "7d5e0a69e7b460b95402d757ce6f119f",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000SuggestedPreamble",
+          "goName": "SuggestedPreamble",
+          "logicalName": "SuggestedPreamble",
+          "declarationOrder": 14,
+          "kind": "scalar",
+          "scalar": {
+            "column": "suggested_preamble",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "8087c754748d826d928a2b85eb313c03",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ReadingTimeMinutes",
+          "goName": "ReadingTimeMinutes",
+          "logicalName": "ReadingTimeMinutes",
+          "declarationOrder": 19,
+          "kind": "scalar",
+          "scalar": {
+            "column": "reading_time_minutes",
+            "type": {
+              "kind": "int32"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "927e6d39135b65614405de492bfe9438",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Author",
+          "goName": "Author",
+          "logicalName": "Author",
+          "declarationOrder": 4,
+          "kind": "scalar",
+          "scalar": {
+            "column": "author",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "96c3a6204fd937279abc7d8c99483057",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AnalysisStatus",
+          "goName": "AnalysisStatus",
+          "logicalName": "AnalysisStatus",
+          "declarationOrder": 24,
+          "kind": "enum",
+          "scalar": {
+            "column": "analysis_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "IDLE"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "9776aecc7134130b98f25287c5a487f4",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000CoverImagePath",
+          "goName": "CoverImagePath",
+          "logicalName": "CoverImagePath",
+          "declarationOrder": 10,
+          "kind": "scalar",
+          "scalar": {
+            "column": "cover_image_path",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "ab6605487a43aaa119fe0e40614c8866",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioVoiceUsed",
+          "goName": "AudioVoiceUsed",
+          "logicalName": "AudioVoiceUsed",
+          "declarationOrder": 29,
+          "kind": "scalar",
+          "scalar": {
+            "column": "audio_voice_used",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "b4e442f4b74820854eafa0fbe7fc90bf",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000SiteName",
+          "goName": "SiteName",
+          "logicalName": "SiteName",
+          "declarationOrder": 5,
+          "kind": "scalar",
+          "scalar": {
+            "column": "site_name",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "b9458fb876dc1c355a537f036f1fac66",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Preference",
+          "goName": "Preference",
+          "logicalName": "Preference",
+          "declarationOrder": 35,
+          "kind": "enum",
+          "scalar": {
+            "column": "preference",
+            "type": {
+              "kind": "enum",
+              "enumId": "e634639645ec08105983a997943c00ec"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "NEUTRAL"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "cd87e070d573120690e7848614676c85",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000CreatedAt",
+          "goName": "CreatedAt",
+          "logicalName": "CreatedAt",
+          "declarationOrder": 36,
+          "kind": "scalar",
+          "scalar": {
+            "column": "created_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "d6c41ecbe3e2fc20b5d1a1721a3168f4",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000PlainTextContent",
+          "goName": "PlainTextContent",
+          "logicalName": "PlainTextContent",
+          "declarationOrder": 8,
+          "kind": "scalar",
+          "scalar": {
+            "column": "plain_text_content",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "d87cdaaeb265a903f69ff613119f1e72",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Summary",
+          "goName": "Summary",
+          "logicalName": "Summary",
+          "declarationOrder": 13,
+          "kind": "scalar",
+          "scalar": {
+            "column": "summary",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e098f31dcfd87754476ad3bd4fff17c9",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000MarkdownContent",
+          "goName": "MarkdownContent",
+          "logicalName": "MarkdownContent",
+          "declarationOrder": 7,
+          "kind": "scalar",
+          "scalar": {
+            "column": "markdown_content",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e14aaa8fcbfd51a88fd1c9360fda5fdb",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Sessions",
+          "goName": "Sessions",
+          "logicalName": "Sessions",
+          "declarationOrder": 40,
+          "kind": "relation",
+          "relation": {
+            "relationId": "6698b891affc15764234a3850fc9d1a9",
+            "role": "inverse",
+            "kind": "hasMany"
+          }
+        },
+        {
+          "id": "e720b30ed567702fc61ecb18170a291a",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioStatus",
+          "goName": "AudioStatus",
+          "logicalName": "AudioStatus",
+          "declarationOrder": 27,
+          "kind": "enum",
+          "scalar": {
+            "column": "audio_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "IDLE"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e8c5b2cdb667217f59ca26a15ebe4f4c",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioArtifact",
+          "goName": "AudioArtifact",
+          "logicalName": "AudioArtifact",
+          "declarationOrder": 42,
+          "kind": "relation",
+          "relation": {
+            "relationId": "aaba97c7e5edaa554ac28c63c928266c",
+            "role": "inverse",
+            "kind": "hasOne"
+          }
+        },
+        {
+          "id": "ea6f9415858c95572cfb744931582362",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Title",
+          "goName": "Title",
+          "logicalName": "Title",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "title",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "ef035dcb0da620d6e85a5f4418766013",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000IsArchived",
+          "goName": "IsArchived",
+          "logicalName": "IsArchived",
+          "declarationOrder": 34,
+          "kind": "scalar",
+          "scalar": {
+            "column": "is_archived",
+            "type": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "bool",
+                "canonical": "false"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "f76a287cf0232449277b899ef9a30758",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000ContentHash",
+          "goName": "ContentHash",
+          "logicalName": "ContentHash",
+          "declarationOrder": 20,
+          "kind": "scalar",
+          "scalar": {
+            "column": "content_hash",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "f76b318584215e6f58470c6827da63f6",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000AudioFilePath",
+          "goName": "AudioFilePath",
+          "logicalName": "AudioFilePath",
+          "declarationOrder": 28,
+          "kind": "scalar",
+          "scalar": {
+            "column": "audio_file_path",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "fd1a90e32222b0587bcfa0e41231d509",
+          "canonicalIdentity": "59d3db36ba8528d7e1640abce40014ba\u0000Thread",
+          "goName": "Thread",
+          "logicalName": "Thread",
+          "declarationOrder": 41,
+          "kind": "relation",
+          "relation": {
+            "relationId": "0fcd10e7c99b6fa24ecab37eb35b53bc",
+            "role": "inverse",
+            "kind": "hasOne"
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "66240978d422ed32ea9c2fea1b3d9ebe",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_articles",
+        "fields": [
+          "502795e3548952111ae1e31de341166b"
+        ]
+      },
+      "uniques": [
+        {
+          "id": "19adf122c3b0347cf3b2548feb68f5ff",
+          "kind": "unique",
+          "logicalName": "UserID_URL",
+          "physicalName": "uq_articles_user_url",
+          "fields": [
+            "097b2851347b07ab9246854fdb50b2b9",
+            "79eb7ef0e98150205af17b98c4daafc5"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "id": "1247c4b0e62bbaeb940684f0ca1f6b88",
+          "modelId": "59d3db36ba8528d7e1640abce40014ba",
+          "physicalName": "idx_articles_user_archived",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "097b2851347b07ab9246854fdb50b2b9",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "ef035dcb0da620d6e85a5f4418766013",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        },
+        {
+          "id": "20a0d7f2b84cbcb461d6ba08acc9b4e6",
+          "modelId": "59d3db36ba8528d7e1640abce40014ba",
+          "physicalName": "idx_articles_user_last_read",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "097b2851347b07ab9246854fdb50b2b9",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "54157442d212d34d00a342b21ac798fe",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        },
+        {
+          "id": "6b444bee2a0be95f3d2e1c7294ba77ee",
+          "modelId": "59d3db36ba8528d7e1640abce40014ba",
+          "physicalName": "idx_articles_user_status",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "097b2851347b07ab9246854fdb50b2b9",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "07b72293316a9817cb5b8b1978f4e463",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        },
+        {
+          "id": "afc8afd343a7c5ddbd0705765ce90164",
+          "modelId": "59d3db36ba8528d7e1640abce40014ba",
+          "physicalName": "idx_articles_user_preference",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "097b2851347b07ab9246854fdb50b2b9",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "b9458fb876dc1c355a537f036f1fac66",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        }
+      ],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "097b2851347b07ab9246854fdb50b2b9",
+          "kind": "index",
+          "indexId": "1247c4b0e62bbaeb940684f0ca1f6b88"
+        },
+        {
+          "fieldId": "097b2851347b07ab9246854fdb50b2b9",
+          "kind": "index",
+          "indexId": "20a0d7f2b84cbcb461d6ba08acc9b4e6"
+        },
+        {
+          "fieldId": "097b2851347b07ab9246854fdb50b2b9",
+          "kind": "index",
+          "indexId": "6b444bee2a0be95f3d2e1c7294ba77ee"
+        },
+        {
+          "fieldId": "097b2851347b07ab9246854fdb50b2b9",
+          "kind": "index",
+          "indexId": "afc8afd343a7c5ddbd0705765ce90164"
+        },
+        {
+          "fieldId": "097b2851347b07ab9246854fdb50b2b9",
+          "kind": "key",
+          "keyId": "19adf122c3b0347cf3b2548feb68f5ff"
+        },
+        {
+          "fieldId": "502795e3548952111ae1e31de341166b",
+          "kind": "key",
+          "keyId": "66240978d422ed32ea9c2fea1b3d9ebe"
+        }
+      ]
+    },
+    {
+      "id": "5ab2a2505a9baa8aff88758325e9ccbc",
+      "canonicalIdentity": "loadmix.ChatMessage",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ChatMessage"
+      },
+      "logicalName": "ChatMessage",
+      "table": {
+        "physicalName": "chat_messages"
+      },
+      "fields": [
+        {
+          "id": "09d66737df748cf101df239703fbcf6a",
+          "canonicalIdentity": "loadmix.ChatMessage.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "2094525c344c28821064e1efe3c470da",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000Role",
+          "goName": "Role",
+          "logicalName": "Role",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "role",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "35795a8e5c05414e956ec550a8b5977f",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000GolemVersion",
+          "goName": "GolemVersion",
+          "logicalName": "GolemVersion",
+          "declarationOrder": 9,
+          "kind": "scalar",
+          "scalar": {
+            "column": "golem_version",
+            "type": {
+              "kind": "int64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "integer",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": true
+          }
+        },
+        {
+          "id": "52a7fa59ddf4adf4e2ae3a848f10154a",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000ThreadID",
+          "goName": "ThreadID",
+          "logicalName": "ThreadID",
+          "declarationOrder": 6,
+          "kind": "scalar",
+          "scalar": {
+            "column": "thread_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "7b36eeaa6de1becb309b159b565c50a3",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000Content",
+          "goName": "Content",
+          "logicalName": "Content",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "content",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "80a06f848e7851739e6924aa907671f4",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000CreatedAt",
+          "goName": "CreatedAt",
+          "logicalName": "CreatedAt",
+          "declarationOrder": 7,
+          "kind": "scalar",
+          "scalar": {
+            "column": "created_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "a6c65a8428b902070726cd9409a26bbc",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000Status",
+          "goName": "Status",
+          "logicalName": "Status",
+          "declarationOrder": 3,
+          "kind": "enum",
+          "scalar": {
+            "column": "status",
+            "type": {
+              "kind": "enum",
+              "enumId": "48736248fc6d82ee85e7e648d06ec629"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "COMPLETED"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "cab833b4a5786b40705d1e0f834526bb",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000Error",
+          "goName": "Error",
+          "logicalName": "Error",
+          "declarationOrder": 4,
+          "kind": "scalar",
+          "scalar": {
+            "column": "error",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "ecdc026da1671b63480a15a5a5050ee9",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000CompletedAt",
+          "goName": "CompletedAt",
+          "logicalName": "CompletedAt",
+          "declarationOrder": 5,
+          "kind": "scalar",
+          "scalar": {
+            "column": "completed_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "f93e8b5ac009baa64b875df01a6797bc",
+          "canonicalIdentity": "5ab2a2505a9baa8aff88758325e9ccbc\u0000Thread",
+          "goName": "Thread",
+          "logicalName": "Thread",
+          "declarationOrder": 8,
+          "kind": "relation",
+          "relation": {
+            "relationId": "54d205d6810c49624b480eae460cee4b",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "a3c57529449280633061da976e8cdedb",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_chat_messages",
+        "fields": [
+          "09d66737df748cf101df239703fbcf6a"
+        ]
+      },
+      "uniques": [],
+      "indexes": [
+        {
+          "id": "98aa2b23cd4d30b5e87f982d843e23b4",
+          "modelId": "5ab2a2505a9baa8aff88758325e9ccbc",
+          "physicalName": "idx_chat_messages_thread_created",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "52a7fa59ddf4adf4e2ae3a848f10154a",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "80a06f848e7851739e6924aa907671f4",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        }
+      ],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "09d66737df748cf101df239703fbcf6a",
+          "kind": "key",
+          "keyId": "a3c57529449280633061da976e8cdedb"
+        },
+        {
+          "fieldId": "52a7fa59ddf4adf4e2ae3a848f10154a",
+          "kind": "index",
+          "indexId": "98aa2b23cd4d30b5e87f982d843e23b4"
+        }
+      ]
+    },
+    {
+      "id": "8ad574a1a5899feca086712f5a69f7cb",
+      "canonicalIdentity": "loadmix.ArticleAudio",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ArticleAudio"
+      },
+      "logicalName": "ArticleAudio",
+      "table": {
+        "physicalName": "article_audio"
+      },
+      "fields": [
+        {
+          "id": "06190ff471d0ac3be37caa66d2298a44",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000GolemVersion",
+          "goName": "GolemVersion",
+          "logicalName": "GolemVersion",
+          "declarationOrder": 16,
+          "kind": "scalar",
+          "scalar": {
+            "column": "golem_version",
+            "type": {
+              "kind": "int64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "integer",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": true
+          }
+        },
+        {
+          "id": "10306059701c35b592f06282f13761d2",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000SourceContentHash",
+          "goName": "SourceContentHash",
+          "logicalName": "SourceContentHash",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "source_content_hash",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "172e236fe24cfac2eefd10af3ad8cbe4",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000UserID",
+          "goName": "UserID",
+          "logicalName": "UserID",
+          "declarationOrder": 12,
+          "kind": "scalar",
+          "scalar": {
+            "column": "user_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "2dd6562816c9537e214b1f530709e33a",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000StoragePath",
+          "goName": "StoragePath",
+          "logicalName": "StoragePath",
+          "declarationOrder": 6,
+          "kind": "scalar",
+          "scalar": {
+            "column": "storage_path",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "35e2137691ee57bba17dbcc7e8e3165d",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000User",
+          "goName": "User",
+          "logicalName": "User",
+          "declarationOrder": 13,
+          "kind": "relation",
+          "relation": {
+            "relationId": "7ac60e704b8f7f31aae0b04fa30b9c5e",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "3829582e695a8d0deb4cea4fcc8ccd50",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000SpecificationVersion",
+          "goName": "SpecificationVersion",
+          "logicalName": "SpecificationVersion",
+          "declarationOrder": 7,
+          "kind": "scalar",
+          "scalar": {
+            "column": "specification_version",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "string",
+                "canonical": "readable-audio-v1"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "466de09acd491bb90a03b05a6b49600e",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000UpdatedAt",
+          "goName": "UpdatedAt",
+          "logicalName": "UpdatedAt",
+          "declarationOrder": 11,
+          "kind": "scalar",
+          "scalar": {
+            "column": "updated_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "updated": true,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "496c6517070b70d4c0ff83e8bd8d5c1e",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000ArticleID",
+          "goName": "ArticleID",
+          "logicalName": "ArticleID",
+          "declarationOrder": 14,
+          "kind": "scalar",
+          "scalar": {
+            "column": "article_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "4fda8e8d0c50e9cdfd57a7954e68fd8a",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000Article",
+          "goName": "Article",
+          "logicalName": "Article",
+          "declarationOrder": 15,
+          "kind": "relation",
+          "relation": {
+            "relationId": "aaba97c7e5edaa554ac28c63c928266c",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "5b06d85a649abbc162651ddc653d0578",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000CreatedAt",
+          "goName": "CreatedAt",
+          "logicalName": "CreatedAt",
+          "declarationOrder": 10,
+          "kind": "scalar",
+          "scalar": {
+            "column": "created_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "8088cf1ddba0cd4579554a34560003a4",
+          "canonicalIdentity": "loadmix.ArticleAudio.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "83ef1aba97be8d5cb8e435ba685f59cb",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000TTSModel",
+          "goName": "TTSModel",
+          "logicalName": "TTSModel",
+          "declarationOrder": 4,
+          "kind": "scalar",
+          "scalar": {
+            "column": "tts_model",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "9fee3a15c105b9b96c7d679b0c000157",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000ContentType",
+          "goName": "ContentType",
+          "logicalName": "ContentType",
+          "declarationOrder": 5,
+          "kind": "scalar",
+          "scalar": {
+            "column": "content_type",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "string",
+                "canonical": "audio/mpeg"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "a38c27dfe44718cc5ad1ad737992b1f2",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000GeneratedAt",
+          "goName": "GeneratedAt",
+          "logicalName": "GeneratedAt",
+          "declarationOrder": 9,
+          "kind": "scalar",
+          "scalar": {
+            "column": "generated_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "b334072140f1c73df075e0744e54e5fe",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000Voice",
+          "goName": "Voice",
+          "logicalName": "Voice",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "voice",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "c1f787e5bcbc64f179a4ceb4066eade2",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000GenerationStatus",
+          "goName": "GenerationStatus",
+          "logicalName": "GenerationStatus",
+          "declarationOrder": 1,
+          "kind": "enum",
+          "scalar": {
+            "column": "generation_status",
+            "type": {
+              "kind": "enum",
+              "enumId": "6da52f5ee2e4c4eb3e41158301620deb"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "enum",
+                "canonical": "PENDING"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e5d4f2c03d7272f74523082f6dc5eb2c",
+          "canonicalIdentity": "8ad574a1a5899feca086712f5a69f7cb\u0000GenerationError",
+          "goName": "GenerationError",
+          "logicalName": "GenerationError",
+          "declarationOrder": 8,
+          "kind": "scalar",
+          "scalar": {
+            "column": "generation_error",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "dc3179748b2bedcb1d4ca65236e2e740",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_article_audio",
+        "fields": [
+          "8088cf1ddba0cd4579554a34560003a4"
+        ]
+      },
+      "uniques": [
+        {
+          "id": "2ceef42993c1e658650fd54ca3634e42",
+          "kind": "unique",
+          "logicalName": "ArticleID",
+          "physicalName": "uq_article_audio_article",
+          "fields": [
+            "496c6517070b70d4c0ff83e8bd8d5c1e"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "id": "a21e5eeda489fd5a10a5fcc1da6f8361",
+          "modelId": "8ad574a1a5899feca086712f5a69f7cb",
+          "physicalName": "idx_article_audio_user_status",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "172e236fe24cfac2eefd10af3ad8cbe4",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "c1f787e5bcbc64f179a4ceb4066eade2",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        }
+      ],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "172e236fe24cfac2eefd10af3ad8cbe4",
+          "kind": "index",
+          "indexId": "a21e5eeda489fd5a10a5fcc1da6f8361"
+        },
+        {
+          "fieldId": "496c6517070b70d4c0ff83e8bd8d5c1e",
+          "kind": "key",
+          "keyId": "2ceef42993c1e658650fd54ca3634e42"
+        },
+        {
+          "fieldId": "8088cf1ddba0cd4579554a34560003a4",
+          "kind": "key",
+          "keyId": "dc3179748b2bedcb1d4ca65236e2e740"
+        }
+      ]
+    },
+    {
+      "id": "9d17e6136a5709d5a83bb0cd4f12638f",
+      "canonicalIdentity": "loadmix.ChatThread",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/loadmix/loadmix",
+        "name": "ChatThread"
+      },
+      "logicalName": "ChatThread",
+      "table": {
+        "physicalName": "chat_threads"
+      },
+      "fields": [
+        {
+          "id": "02863ab9c6bedc7e423ba183ee1a3ec6",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000ArticleID",
+          "goName": "ArticleID",
+          "logicalName": "ArticleID",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "article_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "13d415dc805e3d385ad537594f461429",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000Messages",
+          "goName": "Messages",
+          "logicalName": "Messages",
+          "declarationOrder": 7,
+          "kind": "relation",
+          "relation": {
+            "relationId": "54d205d6810c49624b480eae460cee4b",
+            "role": "inverse",
+            "kind": "hasMany"
+          }
+        },
+        {
+          "id": "3ab845433e2944c2012090b3f417aeb1",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000UserID",
+          "goName": "UserID",
+          "logicalName": "UserID",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "user_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "4deb79eafe9e5a204dcdafe84fab1860",
+          "canonicalIdentity": "loadmix.ChatThread.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "5fdc4bef2689605a6438e1e051676b02",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000CreatedAt",
+          "goName": "CreatedAt",
+          "logicalName": "CreatedAt",
+          "declarationOrder": 4,
+          "kind": "scalar",
+          "scalar": {
+            "column": "created_at",
+            "type": {
+              "kind": "dateTime",
+              "precision": 6
+            },
+            "nullable": false,
+            "default": {
+              "kind": "now",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "7142b9cf45537c1f3c183c87a33cd897",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000Article",
+          "goName": "Article",
+          "logicalName": "Article",
+          "declarationOrder": 5,
+          "kind": "relation",
+          "relation": {
+            "relationId": "0fcd10e7c99b6fa24ecab37eb35b53bc",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "bc15d4a920448fef25bd7cd9eaa91cd1",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000User",
+          "goName": "User",
+          "logicalName": "User",
+          "declarationOrder": 6,
+          "kind": "relation",
+          "relation": {
+            "relationId": "2d82dcbcd06123c96cbcbe1fe06ba542",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "bc4e65af4cce9950a4ee3fa8d7362ff0",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000GolemVersion",
+          "goName": "GolemVersion",
+          "logicalName": "GolemVersion",
+          "declarationOrder": 8,
+          "kind": "scalar",
+          "scalar": {
+            "column": "golem_version",
+            "type": {
+              "kind": "int64"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "integer",
+                "canonical": "0"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": true
+          }
+        },
+        {
+          "id": "c81a4b3fee847f8af9219296110eb894",
+          "canonicalIdentity": "9d17e6136a5709d5a83bb0cd4f12638f\u0000Preamble",
+          "goName": "Preamble",
+          "logicalName": "Preamble",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "preamble",
+            "type": {
+              "kind": "string"
+            },
+            "nullable": true,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "3aaab3c6d2b478f46e5fd04f32731921",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_chat_threads",
+        "fields": [
+          "4deb79eafe9e5a204dcdafe84fab1860"
+        ]
+      },
+      "uniques": [
+        {
+          "id": "2fc3d549ba5deddd3bc973a41ef37606",
+          "kind": "unique",
+          "logicalName": "ArticleID",
+          "physicalName": "uq_chat_threads_article",
+          "fields": [
+            "02863ab9c6bedc7e423ba183ee1a3ec6"
+          ]
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "02863ab9c6bedc7e423ba183ee1a3ec6",
+          "kind": "key",
+          "keyId": "2fc3d549ba5deddd3bc973a41ef37606"
+        },
+        {
+          "fieldId": "4deb79eafe9e5a204dcdafe84fab1860",
+          "kind": "key",
+          "keyId": "3aaab3c6d2b478f46e5fd04f32731921"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "0fcd10e7c99b6fa24ecab37eb35b53bc",
+      "name": "Article",
+      "sourceModel": "9d17e6136a5709d5a83bb0cd4f12638f",
+      "targetModel": "59d3db36ba8528d7e1640abce40014ba",
+      "sourceField": "7142b9cf45537c1f3c183c87a33cd897",
+      "inverseField": "fd1a90e32222b0587bcfa0e41231d509",
+      "cardinality": "one",
+      "localFields": [
+        "02863ab9c6bedc7e423ba183ee1a3ec6"
+      ],
+      "remoteFields": [
+        "502795e3548952111ae1e31de341166b"
+      ],
+      "foreignKey": {
+        "id": "21dc60e267b5b1ed3ebb136d4f5e3354",
+        "physicalName": "fk_chat_threads_article_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "2d82dcbcd06123c96cbcbe1fe06ba542",
+      "name": "User",
+      "sourceModel": "9d17e6136a5709d5a83bb0cd4f12638f",
+      "targetModel": "430d11bbacc9e3032d6ba6130b2f877c",
+      "sourceField": "bc15d4a920448fef25bd7cd9eaa91cd1",
+      "inverseField": "1a46d4b4bc09a4332c4e36ca40e6bbb4",
+      "cardinality": "many",
+      "localFields": [
+        "3ab845433e2944c2012090b3f417aeb1"
+      ],
+      "remoteFields": [
+        "3abec05884e4126c253fcd366d9f24e3"
+      ],
+      "foreignKey": {
+        "id": "74a29dba75f004fc8b5345326c7eda43",
+        "physicalName": "fk_chat_threads_user_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "548603008941c5a70d466e9d25abee2e",
+      "name": "User",
+      "sourceModel": "59d3db36ba8528d7e1640abce40014ba",
+      "targetModel": "430d11bbacc9e3032d6ba6130b2f877c",
+      "sourceField": "70b43ff6d31f7fc6b01700b438d3798f",
+      "inverseField": "f93173731a781d326f83d0c1ebbfe22d",
+      "cardinality": "many",
+      "localFields": [
+        "097b2851347b07ab9246854fdb50b2b9"
+      ],
+      "remoteFields": [
+        "3abec05884e4126c253fcd366d9f24e3"
+      ],
+      "foreignKey": {
+        "id": "face9ecaed36f1e9bff921887764d662",
+        "physicalName": "fk_articles_user_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "54d205d6810c49624b480eae460cee4b",
+      "name": "Thread",
+      "sourceModel": "5ab2a2505a9baa8aff88758325e9ccbc",
+      "targetModel": "9d17e6136a5709d5a83bb0cd4f12638f",
+      "sourceField": "f93e8b5ac009baa64b875df01a6797bc",
+      "inverseField": "13d415dc805e3d385ad537594f461429",
+      "cardinality": "many",
+      "localFields": [
+        "52a7fa59ddf4adf4e2ae3a848f10154a"
+      ],
+      "remoteFields": [
+        "4deb79eafe9e5a204dcdafe84fab1860"
+      ],
+      "foreignKey": {
+        "id": "4bdc2ed6f07525ffc43828659ebcc7a2",
+        "physicalName": "fk_chat_messages_thread_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "6698b891affc15764234a3850fc9d1a9",
+      "name": "Article",
+      "sourceModel": "1d29ec78f3084897a1e868ab1b6604d0",
+      "targetModel": "59d3db36ba8528d7e1640abce40014ba",
+      "sourceField": "a576af5a178159ed7aa9e69675a8593d",
+      "inverseField": "e14aaa8fcbfd51a88fd1c9360fda5fdb",
+      "cardinality": "many",
+      "localFields": [
+        "9eee4a5effa92d9086011f7fc33f020c"
+      ],
+      "remoteFields": [
+        "502795e3548952111ae1e31de341166b"
+      ],
+      "foreignKey": {
+        "id": "c77ba79518981a82cd2396e632429b07",
+        "physicalName": "fk_reading_sessions_article_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "7ac60e704b8f7f31aae0b04fa30b9c5e",
+      "name": "User",
+      "sourceModel": "8ad574a1a5899feca086712f5a69f7cb",
+      "targetModel": "430d11bbacc9e3032d6ba6130b2f877c",
+      "sourceField": "35e2137691ee57bba17dbcc7e8e3165d",
+      "cardinality": "many",
+      "localFields": [
+        "172e236fe24cfac2eefd10af3ad8cbe4"
+      ],
+      "remoteFields": [
+        "3abec05884e4126c253fcd366d9f24e3"
+      ],
+      "foreignKey": {
+        "id": "f8f903e58bacc9dca74c73588f33167c",
+        "physicalName": "fk_article_audio_user_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    },
+    {
+      "id": "aaba97c7e5edaa554ac28c63c928266c",
+      "name": "Article",
+      "sourceModel": "8ad574a1a5899feca086712f5a69f7cb",
+      "targetModel": "59d3db36ba8528d7e1640abce40014ba",
+      "sourceField": "4fda8e8d0c50e9cdfd57a7954e68fd8a",
+      "inverseField": "e8c5b2cdb667217f59ca26a15ebe4f4c",
+      "cardinality": "one",
+      "localFields": [
+        "496c6517070b70d4c0ff83e8bd8d5c1e"
+      ],
+      "remoteFields": [
+        "502795e3548952111ae1e31de341166b"
+      ],
+      "foreignKey": {
+        "id": "a320ad3d066720ca19c88afc3c63c3d5",
+        "physicalName": "fk_article_audio_article_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    }
+  ],
+  "extensions": []
+}

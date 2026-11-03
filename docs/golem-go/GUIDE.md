@@ -1386,7 +1386,8 @@ hooks, events, the queue, and both kinds of operation.
 
 Switching modes is a regeneration, not a migration. Adding `WithoutGraphQL` and
 running `golem generate` removes exactly the GraphQL files: the SDL,
-`zz_golem_graphql.gen.go` and the three files in `golemgqlgen/`. The model,
+`zz_golem_client.gen.ts`, `zz_golem_graphql.gen.go` and the three files in
+`golemgqlgen/`. The model,
 contract, physical and migration fingerprints are identical in both modes, so
 `golem migration plan` reports no changes, and `golem check` and `golem doctor`
 report the generation as current. Removing the declaration and regenerating
@@ -1777,6 +1778,39 @@ once per operation, on WebSocket and SSE alike. A subscription that is refused
 client that needs a consistent view subscribes, waits for the ack, and then
 fetches: a commit after the ack arrives as an event, and a commit before it is
 in the fetch.
+
+#### The client manifest
+
+`golem generate` writes `zz_golem_client.gen.ts` beside the SDL, from the same
+compiled contract, in every GraphQL-mode application. It is the one file a
+generated client reads to know the shape of your API without parsing the SDL,
+and it is listed in `.golem/generated-manifest.json` like every other generated
+file, so `golem check` fails when it is edited by hand or falls behind the
+schema. Regenerate it; never edit it.
+
+It exports `golemClientManifest` (`as const`) and its type
+`GolemClientManifest`, and holds only these facts:
+
+- `contract`: the contract fingerprint, the value a client sends as the
+  `contract` of the `golem` block (see the handshake above).
+- `models`, keyed by GraphQL type name. Each model has:
+  - `primaryKey`: the primary-key fields, in key order;
+  - `cursorSelector`: the name of the unique input a `cursor` uses for the
+    primary key, a plain value for a one-field key and an object keyed by the
+    `primaryKey` fields for a compound key;
+  - `events`: the name of the model's events subscription root, or `null`;
+  - `relations`, keyed by relation field: its `target` type, whether it is a
+    `list`, and its `inverse` field on the target, or `null` when the other side
+    is not exposed;
+  - `computed`, keyed by computed field: the models whose rows its result holds.
+- `roots`, keyed by every Query and Mutation field in the SDL: `kind` is
+  `generated` for the roots golem builds from a model and `opaque` for custom,
+  semantic and full-text roots. `models` means "the models whose changes this
+  root's result depends on": the owning model for a generated root (aggregate,
+  groupBy and the many-row mutations included), and for an opaque root the
+  models whose rows the result holds, possibly none.
+
+The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 
 #### The socket deadline
 

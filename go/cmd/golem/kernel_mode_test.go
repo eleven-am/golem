@@ -35,6 +35,7 @@ func TestSwitchingToKernelModeRemovesOnlyTheGraphQLLayer(t *testing.T) {
 		"app/golemgqlgen/zz_golem_graphql_exec.gen.go",
 		"app/golemgqlgen/zz_golem_graphql_models.gen.go",
 		"app/golemgqlgen/zz_golem_graphql_resolvers.gen.go",
+		"app/zz_golem_client.gen.ts",
 		"app/zz_golem_graphql.gen.go",
 		"app/zz_golem_graphql.schema.graphqls",
 	}
@@ -55,7 +56,7 @@ func TestSwitchingToKernelModeRemovesOnlyTheGraphQLLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range kernelManifest.Artifacts {
-		if entry.Kind == manifest.ArtifactGraphQLGo || entry.Kind == manifest.ArtifactGraphQLSDL {
+		if entry.Kind == manifest.ArtifactGraphQLGo || entry.Kind == manifest.ArtifactGraphQLSDL || entry.Kind == manifest.ArtifactClientTS {
 			t.Fatalf("kernel manifest lists GraphQL artifact %s", entry.Path)
 		}
 	}
