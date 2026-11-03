@@ -110,7 +110,7 @@ func TestGraphQLDefaultPageAndExplicitReversePageRespectStricterLimitsWithoutHid
 	if _, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -4}}); err == nil {
 		t.Fatal("explicit reverse take above the runtime limit was accepted")
 	}
-	reverse, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -3}})
+	reverse, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -3, "orderBy": []any{map[string]any{"createdAt": "desc"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

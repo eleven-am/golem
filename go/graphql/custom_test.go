@@ -2,11 +2,13 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 )
 
 type customTypedCaller struct{ marker string }
@@ -129,6 +131,10 @@ func TestGeneratedCustomQueryAndMutationUseCallerTypesAndExactSchema(t *testing.
 	}
 	if value, ok := mutationResult.Value().(golem.RuntimeModelRow); !ok || value.ModelID() != model || mutationCalls != 1 {
 		t.Fatalf("custom mutation result=%#v calls=%d", mutationResult.Value(), mutationCalls)
+	}
+	var invariant *compileerr.Error
+	if _, err := execution.Execute(context.Background(), CustomQuery, "searchUsers", map[string]any{"nope": 1}); !errors.As(err, &invariant) || invariant.Kind() != compileerr.KindInvariant || queryCalls != 1 {
+		t.Fatalf("execution-time argument fault was not an internal invariant: err=%v calls=%d", err, queryCalls)
 	}
 	wrong, _ := registry.ForCaller(&otherCustomCaller{})
 	if _, err := wrong.Execute(context.Background(), CustomQuery, "searchUsers", map[string]any{"where": predicate}); err == nil || queryCalls != 1 {

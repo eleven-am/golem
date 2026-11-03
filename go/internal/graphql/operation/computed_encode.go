@@ -536,11 +536,11 @@ func encodeComputedScalar(name string, value any) (any, error) {
 		}
 	case "JSON":
 		if document, ok := value.(interface{ Bytes() []byte }); ok {
-			return graphqlscalar.JSON(document.Bytes(), graphqlscalar.JSONLimits{})
+			return encodedJSON(document.Bytes())
 		}
 		encoded, err := json.Marshal(value)
 		if err == nil {
-			return graphqlscalar.JSON(encoded, graphqlscalar.JSONLimits{})
+			return encodedJSON(encoded)
 		}
 	}
 	return nil, fmt.Errorf("computed scalar %s cannot serialize %T", name, value)

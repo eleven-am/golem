@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -92,8 +93,11 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: subscription executor is unavailable")
 	}
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
-	if err != nil || compiled.Event == nil {
-		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: GraphQL subscription could not be bound")
+	if err != nil {
+		return nil, err
+	}
+	if compiled.Event == nil {
+		return nil, compileerr.Invariantf("subscription compiled without an event root")
 	}
 	caller, err := executor.begin(ctx, principal)
 	if err != nil || caller == nil {

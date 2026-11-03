@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 )
 
 func hookValuesBinder(t *testing.T) (*Binder, compilerir.ModelDeclIR) {
@@ -88,7 +89,7 @@ func TestMutationValueReturnsPublicGoValues(t *testing.T) {
 func TestMutationValueRefusesWhatTheFieldCannotHold(t *testing.T) {
 	binder, model := hookValuesBinder(t)
 	text := entryField(t, model, "Text")
-	if _, err := binder.MutationValue(model.ID, text.ID, int64(3)); err == nil || !strings.Contains(err.Error(), "P5_BIND_MUTATION_VALUE") {
+	if _, err := binder.MutationValue(model.ID, text.ID, int64(3)); err == nil || !isKind(err, compileerr.KindInvalidValue) {
 		t.Fatalf("wrong scalar kind error=%v", err)
 	}
 	state := entryField(t, model, "State")

@@ -20,6 +20,7 @@ import (
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -692,6 +693,13 @@ func publicError(code, message string) Error {
 // wrapped policy, SQL, driver, file, or stack details. Unknown failures are
 // reported through the trusted callback and presented as INTERNAL_SERVER_ERROR.
 func PresentError(ctx context.Context, err error, path []any, report func(context.Context, error)) Error {
+	if response, rooted := compileerr.RootOf(err); rooted && path == nil {
+		path = []any{response}
+	}
+	var compileFailure *compileerr.Error
+	if errors.As(err, &compileFailure) && !compileFailure.Internal() {
+		return presentCompileError(compileFailure, path)
+	}
 	var failure *golem.Error
 	if errors.As(err, &failure) {
 		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: publicErrorExtensions(failure)}
@@ -706,6 +714,26 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 	result.Path = append([]any(nil), path...)
 	return result
 }
+func presentCompileError(failure *compileerr.Error, path []any) Error {
+	extensions := map[string]any{"code": "BAD_USER_INPUT"}
+	if reason := failure.Reason(); reason != "" {
+		extensions["reason"] = string(reason)
+	}
+	if argument := failure.Argument(); argument != "" {
+		extensions["argument"] = argument
+	}
+	if limit := failure.Limit(); limit != "" {
+		extensions["limit"] = limit
+	}
+	if maximum, ok := failure.Max(); ok {
+		extensions["max"] = maximum
+	}
+	if minimum, ok := failure.Min(); ok {
+		extensions["min"] = minimum
+	}
+	return Error{Message: failure.Message(), Path: append([]any(nil), path...), Extensions: extensions}
+}
+
 func publicErrorExtensions(failure *golem.Error) map[string]any {
 	extensions := map[string]any{"code": string(failure.Code)}
 	if failure.Reason != "" {

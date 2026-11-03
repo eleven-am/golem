@@ -1844,6 +1844,51 @@ The cost is exact; it stops at the largest integer if the operation's fan-out
 overflows it. A request with no `query` is `BAD_REQUEST`
 (`GraphQL request requires a query`), not a limit error.
 
+### Errors for a value the operation cannot use
+
+A document can be valid and still carry a value that cannot be bound: a `take`
+past the model's maximum, a UUID that is not canonical, an empty `where`. Such a
+read is refused before any SQL runs, with code `BAD_USER_INPUT`:
+
+```json
+{"message": "Argument take on User must be between -500 and 500, excluding 0",
+ "path": ["users"],
+ "extensions": {"code": "BAD_USER_INPUT", "reason": "INVALID_VALUE", "argument": "take", "min": -500, "max": 500}}
+```
+
+`path` is the response name of the root field that was refused. `argument` is
+the dotted input path, `where.id.equals` or `orderBy[0].id`. `reason` is
+`INVALID_VALUE` for a value that is out of range or malformed, and
+`LIMIT_EXCEEDED` for a bound on the input or selection (`limit` names it:
+`MaxInputNodes`, `MaxInputDepth`, `MaxListItems`, `MaxDepth`,
+`MaxSelectedFields`, `MaxAliases`), with `max` for its value. `min` and `max`
+carry a numeric range.
+
+| Message form | Cause |
+|---|---|
+| `Argument x on M cannot be null` | an argument or input member is `null`, or an omitted `$variable` was given to it |
+| `Argument x on M must not be empty` | an empty `where`, `AND`, `OR`, `NOT`, `orderBy` or `distinct` |
+| `Input x on M must set exactly one member` | a unique selector or an `orderBy` entry names none or several |
+| `Input x on M is required` | a compound selector lacks a component |
+| `Argument take on M must be between -N and N, excluding 0`, `... must not be 0`, `Argument skip on M must be at least 0` | paging outside the allowed range |
+| `Argument take on M is negative and requires orderBy` | a negative `take` without an `orderBy` |
+| `Input x on M is not a valid T`, `... is not a canonical T`, `... is outside the T range`, `... must be of type T`, `... exceeds the maximum length of N`, `... must not contain NUL characters` | a scalar value that is malformed, not in its canonical text, out of range, of the wrong type, too long, or holds NUL |
+| `Input x on M is not supported for this field or provider` | an operator the field or the provider does not support |
+| `Argument x on M names a field more than once` | a repeated `orderBy` or `distinct` field |
+| `Input x on M is not available for this operation` | an unknown or unreadable field |
+| `Field f on M requires a selection set`, `... must not have a selection set` | a selection that does not match the field's type |
+| `Directive @skip requires a Boolean if` | a `@skip` or `@include` without a Boolean `if` |
+| `Input exceeds L (N)`, `Selection exceeds L (N)` | the input or selection bound named by `extensions.limit` |
+
+`M` is a model, operation or computed field name from your schema. The message
+never contains text from your request. If the operation is valid and golem still
+cannot compile it, because its own contract is inconsistent, the response is
+`INTERNAL_SERVER_ERROR` with `internal server error`, and the cause goes to
+`ReportInternalError`. A subscription that cannot be bound returns the same typed
+error from `Subscribe`; `graphql.PresentError` turns it into this response.
+A refusal raised by the write or aggregate binding itself still reads
+`GraphQL operation could not be bound`.
+
 ## Errors you will meet early
 
 | Error | Cause |

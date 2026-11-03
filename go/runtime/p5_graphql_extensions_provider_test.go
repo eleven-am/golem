@@ -220,7 +220,7 @@ func TestSILENT_PAGE_TRUNCATIONGeneratedGraphQLDefaultPageNeverSilentlyTruncates
 	}
 	trace.reset()
 	omitted := executeP5ExtensionGraphQL(t, server, p5extensions.Principal{ID: "alpha", Valid: true}, `query { users { id } }`, nil)
-	if len(omitted.Errors) != 1 || omitted.Errors[0].Extensions["code"] != "BAD_USER_INPUT" {
+	if len(omitted.Errors) != 1 || omitted.Errors[0].Extensions["code"] != "BAD_USER_INPUT" || omitted.Errors[0].Message != "Argument take on User must be between -2 and 2, excluding 0" {
 		t.Fatalf("omitted SDL default above runtime maximum was not visibly refused: %#v", omitted)
 	}
 	if statements := trace.snapshot(); len(statements) != 0 {

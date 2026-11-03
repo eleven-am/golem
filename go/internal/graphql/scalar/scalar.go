@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math"
 	"strconv"
@@ -15,7 +14,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 )
+
+func invalid(detail compileerr.Detail, name string) error {
+	return compileerr.New(compileerr.KindInvalidValue, detail, compileerr.Type(name))
+}
 
 func BigInt(input any) (int64, error) {
 	var text string
@@ -29,14 +33,14 @@ func BigInt(input any) (int64, error) {
 	case int:
 		return int64(value), nil
 	default:
-		return 0, fmt.Errorf("BigInt requires an exact decimal string or inline integer")
+		return 0, invalid(compileerr.ValueWrongKind, "BigInt")
 	}
 	if text == "" || strings.HasPrefix(text, "+") || (len(text) > 1 && text[0] == '0') || strings.HasPrefix(text, "-0") {
-		return 0, fmt.Errorf("BigInt is not canonical")
+		return 0, invalid(compileerr.ValueNotCanonical, "BigInt")
 	}
 	value, err := strconv.ParseInt(text, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("BigInt is outside signed 64-bit range")
+		return 0, invalid(compileerr.ValueOutOfRange, "BigInt")
 	}
 	return value, nil
 }
@@ -44,14 +48,14 @@ func BigInt(input any) (int64, error) {
 func Decimal(input any) (golem.Decimal, error) {
 	text, ok := input.(string)
 	if !ok {
-		return golem.Decimal{}, fmt.Errorf("Decimal requires an exact string")
+		return golem.Decimal{}, invalid(compileerr.ValueWrongKind, "Decimal")
 	}
 	value, err := golem.ParseDecimal(text)
 	if err != nil {
-		return golem.Decimal{}, fmt.Errorf("invalid Decimal: %w", err)
+		return golem.Decimal{}, invalid(compileerr.ValueMalformed, "Decimal")
 	}
 	if value.String() != text {
-		return golem.Decimal{}, fmt.Errorf("Decimal is not canonical")
+		return golem.Decimal{}, invalid(compileerr.ValueNotCanonical, "Decimal")
 	}
 	return value, nil
 }
@@ -59,14 +63,14 @@ func Decimal(input any) (golem.Decimal, error) {
 func UUID(input any) (golem.UUID, error) {
 	text, ok := input.(string)
 	if !ok {
-		return golem.UUID{}, fmt.Errorf("UUID requires a string")
+		return golem.UUID{}, invalid(compileerr.ValueWrongKind, "UUID")
 	}
 	value, err := golem.ParseUUID(text)
 	if err != nil {
-		return golem.UUID{}, fmt.Errorf("invalid UUID")
+		return golem.UUID{}, invalid(compileerr.ValueMalformed, "UUID")
 	}
 	if value.String() != text {
-		return golem.UUID{}, fmt.Errorf("UUID is not canonical lowercase hyphenated text")
+		return golem.UUID{}, invalid(compileerr.ValueNotCanonical, "UUID")
 	}
 	return value, nil
 }
@@ -74,14 +78,14 @@ func UUID(input any) (golem.UUID, error) {
 func Date(input any) (golem.Date, error) {
 	text, ok := input.(string)
 	if !ok {
-		return golem.Date{}, fmt.Errorf("Date requires a string")
+		return golem.Date{}, invalid(compileerr.ValueWrongKind, "Date")
 	}
 	value, err := golem.ParseDate(text)
 	if err != nil {
-		return golem.Date{}, fmt.Errorf("invalid Date")
+		return golem.Date{}, invalid(compileerr.ValueMalformed, "Date")
 	}
 	if value.String() != text {
-		return golem.Date{}, fmt.Errorf("Date is not canonical")
+		return golem.Date{}, invalid(compileerr.ValueNotCanonical, "Date")
 	}
 	return value, nil
 }
@@ -89,14 +93,14 @@ func Date(input any) (golem.Date, error) {
 func Time(input any) (golem.Time, error) {
 	text, ok := input.(string)
 	if !ok {
-		return golem.Time{}, fmt.Errorf("Time requires a string")
+		return golem.Time{}, invalid(compileerr.ValueWrongKind, "Time")
 	}
 	value, err := golem.ParseTime(text)
 	if err != nil {
-		return golem.Time{}, fmt.Errorf("invalid Time")
+		return golem.Time{}, invalid(compileerr.ValueMalformed, "Time")
 	}
 	if value.String() != text {
-		return golem.Time{}, fmt.Errorf("Time is not canonical")
+		return golem.Time{}, invalid(compileerr.ValueNotCanonical, "Time")
 	}
 	return value, nil
 }
@@ -104,14 +108,14 @@ func Time(input any) (golem.Time, error) {
 func DateTime(input any) (time.Time, error) {
 	text, ok := input.(string)
 	if !ok {
-		return time.Time{}, fmt.Errorf("DateTime requires a string")
+		return time.Time{}, invalid(compileerr.ValueWrongKind, "DateTime")
 	}
 	value, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid DateTime")
+		return time.Time{}, invalid(compileerr.ValueMalformed, "DateTime")
 	}
 	if value.Year() < 1 || value.Year() > 9999 || value.Nanosecond()%1_000 != 0 {
-		return time.Time{}, fmt.Errorf("DateTime is outside the portable range or microsecond precision")
+		return time.Time{}, invalid(compileerr.ValueOutOfRange, "DateTime")
 	}
 	return value.UTC(), nil
 }
@@ -119,11 +123,11 @@ func DateTime(input any) (time.Time, error) {
 func Bytes(input any) ([]byte, error) {
 	text, ok := input.(string)
 	if !ok {
-		return nil, fmt.Errorf("Bytes requires a base64 string")
+		return nil, invalid(compileerr.ValueWrongKind, "Bytes")
 	}
 	value, err := base64.StdEncoding.Strict().DecodeString(text)
 	if err != nil || base64.StdEncoding.EncodeToString(value) != text {
-		return nil, fmt.Errorf("Bytes is not canonical base64")
+		return nil, invalid(compileerr.ValueNotCanonical, "Bytes")
 	}
 	return value, nil
 }
@@ -135,11 +139,11 @@ func Float(input any, bits int) (float64, error) {
 		value = raw
 	case json.Number:
 		if !json.Valid([]byte(raw)) {
-			return 0, fmt.Errorf("invalid Float")
+			return 0, invalid(compileerr.ValueMalformed, "Float")
 		}
 		parsed, err := strconv.ParseFloat(string(raw), 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid Float")
+			return 0, invalid(compileerr.ValueMalformed, "Float")
 		}
 		value = parsed
 	case int:
@@ -147,15 +151,15 @@ func Float(input any, bits int) (float64, error) {
 	case int64:
 		value = float64(raw)
 	default:
-		return 0, fmt.Errorf("Float requires a JSON number")
+		return 0, invalid(compileerr.ValueWrongKind, "Float")
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("Float must be finite")
+		return 0, invalid(compileerr.ValueNotFinite, "Float")
 	}
 	if bits == 32 {
 		narrowed := float32(value)
 		if math.IsInf(float64(narrowed), 0) {
-			return 0, fmt.Errorf("Float is outside float32 range")
+			return 0, invalid(compileerr.ValueOutOfRange, "Float")
 		}
 		value = float64(narrowed)
 	}
@@ -175,30 +179,30 @@ func JSON(encoded []byte, limits JSONLimits) (any, error) {
 		limits.MaxNodes = 32_768
 	}
 	if len(encoded) > limits.MaxBytes {
-		return nil, fmt.Errorf("JSON exceeds byte limit")
+		return nil, compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONBytes, compileerr.Max(limits.MaxBytes))
 	}
 	if !utf8.Valid(encoded) {
-		return nil, fmt.Errorf("JSON is not valid UTF-8")
+		return nil, invalid(compileerr.ValueMalformed, "JSON")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return nil, fmt.Errorf("invalid JSON")
+		return nil, invalid(compileerr.ValueMalformed, "JSON")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("JSON has trailing value")
+		return nil, invalid(compileerr.ValueMalformed, "JSON")
 	}
 	nodes := 0
 	var walk func(any, int) error
 	walk = func(value any, depth int) error {
 		if depth > limits.MaxDepth {
-			return fmt.Errorf("JSON exceeds depth limit")
+			return compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONDepth, compileerr.Max(limits.MaxDepth))
 		}
 		nodes++
 		if nodes > limits.MaxNodes {
-			return fmt.Errorf("JSON exceeds node limit")
+			return compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONNodes, compileerr.Max(limits.MaxNodes))
 		}
 		switch item := value.(type) {
 		case []any:

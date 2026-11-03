@@ -93,7 +93,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	}
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
 	if err != nil {
-		return Response{Errors: []Error{publicError("BAD_USER_INPUT", "GraphQL operation could not be bound")}}
+		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
 	if len(compiled.Order) == 0 && compiled.Event == nil && executor.authenticate != nil {
 		if err := executor.authenticate(ctx, principal); err != nil {

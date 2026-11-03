@@ -3,6 +3,7 @@ package operation
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
@@ -971,4 +973,41 @@ func golemModelID(id compilerir.ModelID) (result golem.ModelID) {
 	decoded, _ := hex.DecodeString(string(id))
 	copy(result[:], decoded)
 	return result
+}
+
+func TestSemanticTakeOutsideItsMaximumNamesTheRootAndTheRange(t *testing.T) {
+	compilation := semanticSocial(t)
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := compilation.Contract.CustomOperations[0]
+	postContract := contractNamed(t, compilation.Contract, "Post")
+	postModel := modelByIDForTest(t, compilation.Model, postContract.ModelID)
+	postID := fieldContractByIDForTest(t, postContract, postModel.PrimaryKey.Fields[0])
+	compiler, err := New(compilation, Limits{Bind: graphqlbind.Limits{MaxPageSize: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, take := range []string{"3", "0", "-1"} {
+		query, queryErrors := gqlparser.LoadQuery(schema, `query { search: `+operation.Name+`(query: "rank me", take: `+take+`) { `+postID.GraphQLName+` } }`)
+		if len(queryErrors) != 0 {
+			t.Fatal(queryErrors)
+		}
+		_, err := compiler.Compile(query, query.Operations[0], nil)
+		var typed *compileerr.Error
+		if !errors.As(err, &typed) || typed.Kind() != compileerr.KindIntegerRange || typed.Detail() != compileerr.IntegerPositive {
+			t.Fatalf("take %s error=%v", take, err)
+		}
+		if want := "Argument take on " + operation.Name + " must be between 1 and 2"; typed.Message() != want {
+			t.Fatalf("take %s message=%q want %q", take, typed.Message(), want)
+		}
+		if root, ok := compileerr.RootOf(err); !ok || root != "search" {
+			t.Fatalf("take %s root=%q/%t want the response name", take, root, ok)
+		}
+	}
 }

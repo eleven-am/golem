@@ -3,12 +3,12 @@ package selectset
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 	"unicode/utf8"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -31,17 +31,17 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 	raw := make(map[string]any, len(supplied))
 	for _, argument := range supplied {
 		if _, duplicate := raw[argument.Name]; duplicate {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s repeats argument %q", field.Name, argument.Name)
+			return nil, "", compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateArgument, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		if _, known := declared[argument.Name]; !known {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s has unknown argument %q", field.Name, argument.Name)
+			return nil, "", compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableArgument, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		if argument.Value == nil {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s.%s has no value", field.Name, argument.Name)
+			return nil, "", compileerr.Invariantf("computed argument %s.%s has no value", field.Name, argument.Name)
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s.%s: %w", field.Name, argument.Name, err)
+			return nil, "", compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		raw[argument.Name] = value
 	}
@@ -53,24 +53,24 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 		value, present := raw[argument.Name]
 		if !present {
 			if !argument.Type.Nullable {
-				return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s requires argument %q", field.Name, argument.Name)
+				return nil, "", compileerr.New(compileerr.KindRequired, compileerr.DetailNone, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 			}
 			value = nil
 		}
 		coerced, wire, err := coerceComputedValue(argument.Type, value, enums, maxListItems)
 		if err != nil {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s.%s: %w", field.Name, argument.Name, err)
+			return nil, "", compileerr.On(compileerr.At(err, argument.Name), field.Name)
 		}
 		encoded, err := json.Marshal(wire)
 		if err != nil {
-			return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s.%s cannot be canonicalized", field.Name, argument.Name)
+			return nil, "", compileerr.Invariantf("computed argument %s.%s cannot be canonicalized: %w", field.Name, argument.Name, err)
 		}
 		bound = append(bound, graphqlextension.BoundArgument{Name: argument.Name, Type: argument.Type, Value: coerced, Canonical: append(json.RawMessage(nil), encoded...)})
 		canonical = append(canonical, graphqlextension.CanonicalArgument{Name: argument.Name, Value: encoded})
 	}
 	key, err := graphqlextension.CanonicalArguments(canonical...)
 	if err != nil {
-		return nil, "", fmt.Errorf("P5_COMPUTED_ARGUMENT: %s: %w", field.Name, err)
+		return nil, "", compileerr.Invariant(err)
 	}
 	return bound, key, nil
 }
@@ -78,27 +78,27 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string]map[string]string, maxListItems int) (any, any, error) {
 	if raw == nil {
 		if !typ.Nullable {
-			return nil, nil, fmt.Errorf("non-null value is null")
+			return nil, nil, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone)
 		}
 		return nil, nil, nil
 	}
 	if typ.Kind == compilerir.GraphQLTypeList {
 		if typ.Element == nil {
-			return nil, nil, fmt.Errorf("list type has no element")
+			return nil, nil, compileerr.Invariantf("list type has no element")
 		}
 		items, ok := raw.([]any)
 		if !ok {
-			return nil, nil, fmt.Errorf("expected list, got %T", raw)
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
 		}
 		if len(items) > maxListItems {
-			return nil, nil, fmt.Errorf("list exceeds item limit %d", maxListItems)
+			return nil, nil, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", maxListItems))
 		}
 		values := make([]any, len(items))
 		wire := make([]any, len(items))
 		for index, item := range items {
 			value, encoded, err := coerceComputedValue(*typ.Element, item, enums, maxListItems)
 			if err != nil {
-				return nil, nil, fmt.Errorf("element %d: %w", index, err)
+				return nil, nil, compileerr.At(err, compileerr.Index("", index))
 			}
 			values[index], wire[index] = value, encoded
 		}
@@ -108,24 +108,27 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 		value, ok := raw.(string)
 		wire, known := enums[typ.Name][value]
 		if !ok || !known {
-			return nil, nil, fmt.Errorf("unknown %s enum value", typ.Name)
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueUnknownEnum, compileerr.Type(typ.Name))
 		}
 		return wire, value, nil
 	}
 	if typ.Kind != compilerir.GraphQLTypeScalar {
-		return nil, nil, fmt.Errorf("unsupported computed argument type %s", typ.Kind)
+		return nil, nil, compileerr.Invariantf("unsupported computed argument type %s", typ.Kind)
 	}
 	switch typ.Name {
 	case "Boolean":
 		value, ok := raw.(bool)
 		if !ok {
-			return nil, nil, fmt.Errorf("expected Boolean, got %T", raw)
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Type("Boolean"))
 		}
 		return value, value, nil
 	case "Int":
 		value, err := computedInteger(raw)
-		if err != nil || value < math.MinInt32 || value > math.MaxInt32 {
-			return nil, nil, fmt.Errorf("Int is outside signed 32-bit range")
+		if err != nil {
+			return nil, nil, err
+		}
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueOutOfRange, compileerr.Type("Int"))
 		}
 		return int32(value), value, nil
 	case "Float":
@@ -140,7 +143,7 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 	case "String":
 		value, ok := raw.(string)
 		if !ok || !utf8.ValidString(value) {
-			return nil, nil, fmt.Errorf("expected UTF-8 String, got %T", raw)
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Type("String"))
 		}
 		return value, value, nil
 	case "BigInt":
@@ -188,7 +191,7 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 	case "JSON":
 		encoded, err := json.Marshal(raw)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid JSON")
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueMalformed, compileerr.Type("JSON"))
 		}
 		value, err := graphqlscalar.JSON(encoded, graphqlscalar.JSONLimits{})
 		if err != nil {
@@ -196,7 +199,7 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 		}
 		return value, value, nil
 	default:
-		return nil, nil, fmt.Errorf("unknown scalar %q", typ.Name)
+		return nil, nil, compileerr.Invariantf("unknown scalar %q", typ.Name)
 	}
 }
 
@@ -227,9 +230,13 @@ func computedInteger(raw any) (int64, error) {
 	case int64:
 		return value, nil
 	case json.Number:
-		return strconv.ParseInt(string(value), 10, 64)
+		parsed, err := strconv.ParseInt(string(value), 10, 64)
+		if err != nil {
+			return 0, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueOutOfRange, compileerr.Type("Int"))
+		}
+		return parsed, nil
 	default:
-		return 0, fmt.Errorf("expected exact integer, got %T", raw)
+		return 0, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Type("Int"))
 	}
 }
 

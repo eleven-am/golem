@@ -10,6 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -254,11 +255,11 @@ func (c *Compiler) encodeLogical(logical compilerir.LogicalTypeIR, value any) (a
 			if err != nil {
 				return nil, err
 			}
-			return graphqlscalar.JSON(encoded, graphqlscalar.JSONLimits{})
+			return encodedJSON(encoded)
 		case json.RawMessage:
-			return graphqlscalar.JSON(value, graphqlscalar.JSONLimits{})
+			return encodedJSON(value)
 		case interface{ Bytes() []byte }:
-			return graphqlscalar.JSON(value.Bytes(), graphqlscalar.JSONLimits{})
+			return encodedJSON(value.Bytes())
 		default:
 			return value, nil
 		}
@@ -274,7 +275,7 @@ func (c *Compiler) encodeLogical(logical compilerir.LogicalTypeIR, value any) (a
 		if !ok || logical.Element == nil {
 			break
 		}
-		decoded, err := graphqlscalar.JSON(list.CanonicalJSON(), graphqlscalar.JSONLimits{})
+		decoded, err := encodedJSON(list.CanonicalJSON())
 		if err != nil {
 			return nil, err
 		}
@@ -393,4 +394,12 @@ func fixedPublicID(value string) ([16]byte, error) {
 	}
 	copy(result[:], decoded)
 	return result, nil
+}
+
+func encodedJSON(encoded []byte) (any, error) {
+	value, err := graphqlscalar.JSON(encoded, graphqlscalar.JSONLimits{})
+	if err != nil {
+		return nil, compileerr.Invariant(err)
+	}
+	return value, nil
 }

@@ -134,6 +134,27 @@ off. A refused introspection query reads `GraphQL introspection is disabled`.
 - A client that matches the old message text must match `extensions.code`, or
   `extensions.limit`, instead.
 
+**A read your document cannot make says which argument and why.** A query or
+subscription that passes validation but whose values cannot be bound used to
+fail with `BAD_USER_INPUT` and the message `GraphQL operation could not be
+bound`. Now the message names the argument and the rule, for example `Argument
+take on User must be between -500 and 500, excluding 0` or `Input where.id.equals
+on User is not a valid UUID`, the error `path` is the response name of the root
+field, and the extensions carry `argument` (the dotted input path, with `[n]` for
+a list item), `reason` (`INVALID_VALUE` or `LIMIT_EXCEEDED`), and `min`, `max` or
+`limit` where they apply. A negative `take` without `orderBy` is refused at the
+root it was sent to (`Argument take on User is negative and requires orderBy`)
+and an omitted `$variable` given to `take` or `skip` reads `cannot be null`.
+Messages name only schema terms and never repeat your values. A failure that a
+valid document cannot cause, such as a contract that does not match the generated
+schema, is `INTERNAL_SERVER_ERROR` and is passed to `ReportInternalError`, where
+before it was shown as `BAD_USER_INPUT`. A refusal raised by the write or
+aggregate binding itself still reads `GraphQL operation could not be bound`;
+those follow in the next change.
+- A subscription that cannot be bound now returns the same typed error from
+  `Subscribe` instead of `GOLEM_SUBSCRIPTION_INVALID: GraphQL subscription could
+  not be bound`. Pass it to `graphql.PresentError`.
+
 ---
 
 ## go/v0.7.3

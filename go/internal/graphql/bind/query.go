@@ -1,10 +1,10 @@
 package bind
 
 import (
-	"fmt"
 	"strconv"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/operator"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -23,10 +23,10 @@ type fieldBinding struct {
 func (s *inputState) step(path string, depth int) error {
 	s.nodes++
 	if s.nodes > s.binder.limits.MaxInputNodes {
-		return fmt.Errorf("P5_BIND_LIMIT: %s exceeds %d input nodes", path, s.binder.limits.MaxInputNodes)
+		return inputNodesExceeded(s.binder.limits.MaxInputNodes)
 	}
 	if depth > s.binder.limits.MaxInputDepth {
-		return fmt.Errorf("P5_BIND_LIMIT: %s exceeds input depth %d", path, s.binder.limits.MaxInputDepth)
+		return compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxInputDepth", s.binder.limits.MaxInputDepth))
 	}
 	return nil
 }
@@ -40,7 +40,7 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 		return policyir.Condition{}, err
 	}
 	if len(value) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_WHERE: %s must not be empty", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	modelID, err := policyModelID(model.ID)
 	if err != nil {
@@ -49,13 +49,13 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 	if all, present := value["all"]; present {
 		truth, ok := all.(bool)
 		if !ok || len(value) != 1 {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_WHERE: %s.all must be the only member and Boolean", path)
+			return policyir.Condition{}, compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedAllAlone, compileerr.Path(joinPath(path, "all")))
 		}
 		condition, err := policyir.NewConstant(modelID, truth)
 		if err != nil {
-			return policyir.Condition{}, err
+			return policyir.Condition{}, compileerr.Invariant(err)
 		}
-		return validateCondition(condition, s.binder.providers)
+		return validateCondition(condition, s.binder.providers, path)
 	}
 	fields := indexFields(model, contract)
 	var conditions []policyir.Condition
@@ -64,22 +64,25 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 		switch key {
 		case "AND", "OR", "NOT":
 			children, childErr := list(rawChild, joinPath(path, key))
-			if childErr != nil || len(children) == 0 {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_WHERE: %s must be a non-empty list", joinPath(path, key))
+			if childErr != nil {
+				return policyir.Condition{}, childErr
+			}
+			if len(children) == 0 {
+				return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(joinPath(path, key)))
 			}
 			if len(children) > s.binder.limits.MaxListItems {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_LIMIT: %s exceeds list item limit", joinPath(path, key))
+				return policyir.Condition{}, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", s.binder.limits.MaxListItems))
 			}
 			bound := make([]policyir.Condition, 0, len(children))
 			for index, child := range children {
-				condition, bindErr := s.where(model, contract, child, fmt.Sprintf("%s[%d]", joinPath(path, key), index), depth+1)
+				condition, bindErr := s.where(model, contract, child, compileerr.Index(joinPath(path, key), index), depth+1)
 				if bindErr != nil {
 					return policyir.Condition{}, bindErr
 				}
 				if key == "NOT" {
 					condition, bindErr = policyir.NewLogical(modelID, policyir.LogicalNot, []policyir.Condition{condition})
 					if bindErr != nil {
-						return policyir.Condition{}, bindErr
+						return policyir.Condition{}, compileerr.Invariant(bindErr)
 					}
 				}
 				bound = append(bound, condition)
@@ -96,7 +99,7 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 		default:
 			field, exists := fields[key]
 			if !exists || !compilerir.ModesReadable(field.contract.Modes) {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s is unknown or not readable", joinPath(path, key))
+				return policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, key)))
 			}
 			condition, bindErr := s.fieldCondition(model, contract, field, rawChild, joinPath(path, key), depth+1)
 			if bindErr != nil {
@@ -109,25 +112,25 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 	if err != nil {
 		return policyir.Condition{}, err
 	}
-	return validateCondition(condition, s.binder.providers)
+	return validateCondition(condition, s.binder.providers, path)
 }
 
 func (s *inputState) fieldCondition(owner compilerir.ModelDeclIR, ownerContract compilerir.ModelContractIR, field fieldBinding, raw any, path string, depth int) (policyir.Condition, error) {
 	if raw == nil {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s cannot be null", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path(path))
 	}
 	if field.model.Kind == compilerir.FieldRelation {
 		return s.relationCondition(owner, field, raw, path, depth)
 	}
 	if field.model.Scalar == nil {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s has no scalar type", path)
+		return policyir.Condition{}, compileerr.Invariantf("field %s has no scalar type", field.model.ID)
 	}
 	filter, err := object(raw, path)
 	if err != nil {
 		return policyir.Condition{}, err
 	}
 	if len(filter) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s must not be empty", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	if field.model.Scalar.Type.Kind == compilerir.TypeScalarList {
 		return s.listCondition(owner, field, filter, path)
@@ -145,7 +148,7 @@ func (s *inputState) scalarCondition(owner compilerir.ModelDeclIR, field fieldBi
 	}
 	mode, err := comparisonMode(filter)
 	if err != nil {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.mode: %w", path, err)
+		return policyir.Condition{}, compileerr.At(err, joinPath(path, "mode"))
 	}
 	modelID, _ := policyModelID(owner.ID)
 	fieldID, _ := policyFieldID(field.model.ID)
@@ -165,7 +168,7 @@ func (s *inputState) scalarCondition(owner compilerir.ModelDeclIR, field fieldBi
 		if name == "isNull" {
 			flag, ok := raw.(bool)
 			if !ok {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.isNull must be Boolean", path)
+				return policyir.Condition{}, compileerr.At(invalid(compileerr.ValueWrongKind, "Boolean"), joinPath(path, "isNull"))
 			}
 			operatorID := policyir.OperatorIsNull
 			if !flag {
@@ -173,50 +176,65 @@ func (s *inputState) scalarCondition(owner compilerir.ModelDeclIR, field fieldBi
 			}
 			condition, conditionErr := s.leafScalar(modelID, fieldID, typ, operatorID, mode, policyir.NoOperand())
 			if conditionErr != nil {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.isNull: %w", path, conditionErr)
+				return policyir.Condition{}, unsupportedOperator(joinPath(path, "isNull"))
 			}
 			conditions = append(conditions, condition)
 			continue
 		}
 		operatorID, ok := operators[name]
 		if !ok {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: unknown operator %s.%s", path, name)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		var operand policyir.Operand
 		if name == "in" || name == "notIn" {
-			items, listErr := list(raw, joinPath(path, name))
-			if listErr != nil || len(items) > s.binder.limits.MaxListItems {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s must be a bounded list", path, name)
-			}
-			values := make([]policyir.Value, len(items))
-			for index, item := range items {
-				value, valueErr := s.value(field.model.Scalar.Type, item)
-				if valueErr != nil {
-					return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.%s[%d]: %w", path, name, index, valueErr)
-				}
-				values[index] = value
+			values, valuesErr := s.valueList(field.model.Scalar.Type, raw, joinPath(path, name))
+			if valuesErr != nil {
+				return policyir.Condition{}, valuesErr
 			}
 			operand, err = policyir.ManyOperand(values)
 		} else {
 			value, valueErr := s.value(field.model.Scalar.Type, raw)
 			if valueErr != nil {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.%s: %w", path, name, valueErr)
+				return policyir.Condition{}, compileerr.At(valueErr, joinPath(path, name))
 			}
 			operand, err = policyir.OneOperand(value)
 		}
 		if err != nil {
-			return policyir.Condition{}, err
+			return policyir.Condition{}, compileerr.Invariant(err)
 		}
 		condition, conditionErr := s.leafScalar(modelID, fieldID, typ, operatorID, mode, operand)
 		if conditionErr != nil {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s: %w", path, name, conditionErr)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		conditions = append(conditions, condition)
 	}
 	if len(conditions) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s contains no operation", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	return combine(modelID, policyir.LogicalAnd, conditions)
+}
+
+func (s *inputState) valueList(logical compilerir.LogicalTypeIR, raw any, path string) ([]policyir.Value, error) {
+	items, err := list(raw, path)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > s.binder.limits.MaxListItems {
+		return nil, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", s.binder.limits.MaxListItems))
+	}
+	values := make([]policyir.Value, len(items))
+	for index, item := range items {
+		value, valueErr := s.value(logical, item)
+		if valueErr != nil {
+			return nil, compileerr.At(valueErr, compileerr.Index(path, index))
+		}
+		values[index] = value
+	}
+	return values, nil
+}
+
+func unsupportedOperator(path string) error {
+	return compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(path))
 }
 
 func (s *inputState) listCondition(owner compilerir.ModelDeclIR, field fieldBinding, filter map[string]any, path string) (policyir.Condition, error) {
@@ -237,7 +255,7 @@ func (s *inputState) listCondition(owner compilerir.ModelDeclIR, field fieldBind
 		case "isNull":
 			flag, ok := raw.(bool)
 			if !ok {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.isNull must be Boolean", path)
+				return policyir.Condition{}, compileerr.At(invalid(compileerr.ValueWrongKind, "Boolean"), joinPath(path, "isNull"))
 			}
 			operatorID = policyir.OperatorListIsNull
 			if !flag {
@@ -247,56 +265,48 @@ func (s *inputState) listCondition(owner compilerir.ModelDeclIR, field fieldBind
 		case "isEmpty":
 			flag, ok := raw.(bool)
 			if !ok {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.isEmpty must be Boolean", path)
+				return policyir.Condition{}, compileerr.At(invalid(compileerr.ValueWrongKind, "Boolean"), joinPath(path, "isEmpty"))
 			}
 			operatorID, operand = policyir.OperatorListIsEmpty, policyir.FlagOperand(flag)
 		case "has":
 			operatorID = operators[name]
 			value, valueErr := s.value(element, raw)
 			if valueErr != nil {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.has: %w", path, valueErr)
+				return policyir.Condition{}, compileerr.At(valueErr, joinPath(path, "has"))
 			}
 			operand, err = policyir.OneOperand(value)
 		case "equals":
 			operatorID = operators[name]
 			value, valueErr := s.value(field.model.Scalar.Type, raw)
 			if valueErr != nil {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.equals: %w", path, valueErr)
+				return policyir.Condition{}, compileerr.At(valueErr, joinPath(path, "equals"))
 			}
 			operand, err = policyir.OneOperand(value)
 		case "hasEvery", "hasSome":
 			operatorID = operators[name]
-			items, listErr := list(raw, joinPath(path, name))
-			if listErr != nil || len(items) > s.binder.limits.MaxListItems {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s must be a bounded list", path, name)
-			}
-			values := make([]policyir.Value, len(items))
-			for index, item := range items {
-				value, valueErr := s.value(element, item)
-				if valueErr != nil {
-					return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.%s[%d]: %w", path, name, index, valueErr)
-				}
-				values[index] = value
+			values, valuesErr := s.valueList(element, raw, joinPath(path, name))
+			if valuesErr != nil {
+				return policyir.Condition{}, valuesErr
 			}
 			operand, err = policyir.ManyOperand(values)
 		default:
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: unknown list operator %s.%s", path, name)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		if err != nil {
-			return policyir.Condition{}, err
+			return policyir.Condition{}, compileerr.Invariant(err)
 		}
 		requirements, shapeErr := operator.ValidateShape(operatorID, operator.Shape{Node: policyir.ConditionList, FieldType: typ, Operand: operand, Mode: policyir.ComparisonSensitive, Providers: s.binder.providers})
 		if shapeErr != nil {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s: %w", path, name, shapeErr)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		condition, conditionErr := policyir.NewList(modelID, fieldID, typ, operatorID, operand, requirements)
 		if conditionErr != nil {
-			return policyir.Condition{}, conditionErr
+			return policyir.Condition{}, compileerr.Invariant(conditionErr)
 		}
 		conditions = append(conditions, condition)
 	}
 	if len(conditions) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s contains no operation", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	return combine(modelID, policyir.LogicalAnd, conditions)
 }
@@ -308,11 +318,11 @@ func (s *inputState) jsonCondition(owner compilerir.ModelDeclIR, field fieldBind
 	}
 	mode, err := comparisonMode(filter)
 	if err != nil {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.mode: %w", path, err)
+		return policyir.Condition{}, compileerr.At(err, joinPath(path, "mode"))
 	}
 	jsonPath, err := jsonPath(filter["path"])
 	if err != nil {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.path: %w", path, err)
+		return policyir.Condition{}, compileerr.At(err, joinPath(path, "path"))
 	}
 	modelID, _ := policyModelID(owner.ID)
 	fieldID, _ := policyFieldID(field.model.ID)
@@ -334,7 +344,7 @@ func (s *inputState) jsonCondition(owner compilerir.ModelDeclIR, field fieldBind
 		if name == "isNull" {
 			flag, ok := raw.(bool)
 			if !ok {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.isNull must be Boolean", path)
+				return policyir.Condition{}, compileerr.At(invalid(compileerr.ValueWrongKind, "Boolean"), joinPath(path, "isNull"))
 			}
 			operatorID = policyir.OperatorJSONIsNull
 			if !flag {
@@ -345,45 +355,48 @@ func (s *inputState) jsonCondition(owner compilerir.ModelDeclIR, field fieldBind
 			var ok bool
 			operatorID, ok = operators[name]
 			if !ok {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: unknown JSON operator %s.%s", path, name)
+				return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 			}
 			if raw == nil && (name == "equals" || name == "not") {
 				operand, err = policyir.JSONNullOperand(policyir.JSONDocumentNull)
 			} else {
 				value, valueErr := jsonPolicyValue(raw)
 				if valueErr != nil {
-					return policyir.Condition{}, fmt.Errorf("P5_BIND_VALUE: %s.%s: %w", path, name, valueErr)
+					return policyir.Condition{}, compileerr.At(valueErr, joinPath(path, name))
 				}
 				wrapped, wrapErr := policyir.NewJSONValue(value)
 				if wrapErr != nil {
-					return policyir.Condition{}, wrapErr
+					return policyir.Condition{}, compileerr.At(invalid(compileerr.ValueOutOfRange, "JSON"), joinPath(path, name))
 				}
 				operand, err = policyir.OneOperand(wrapped)
 			}
 		}
 		if err != nil {
-			return policyir.Condition{}, err
+			return policyir.Condition{}, compileerr.Invariant(err)
 		}
 		requirements, shapeErr := operator.ValidateShape(operatorID, operator.Shape{Node: policyir.ConditionJSON, FieldType: typ, Operand: operand, Mode: mode, Path: jsonPath, Providers: s.binder.providers})
 		if shapeErr != nil {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s: %w", path, name, shapeErr)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		condition, conditionErr := policyir.NewJSON(modelID, fieldID, typ, operatorID, mode, jsonPath, operand, requirements)
 		if conditionErr != nil {
-			return policyir.Condition{}, conditionErr
+			return policyir.Condition{}, compileerr.Invariant(conditionErr)
 		}
 		conditions = append(conditions, condition)
 	}
 	if len(conditions) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s contains no operation", path)
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	return combine(modelID, policyir.LogicalAnd, conditions)
 }
 
 func (s *inputState) relationCondition(owner compilerir.ModelDeclIR, field fieldBinding, raw any, path string, depth int) (policyir.Condition, error) {
 	filter, err := object(raw, path)
-	if err != nil || len(filter) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_RELATION: %s must be a non-empty relation filter", path)
+	if err != nil {
+		return policyir.Condition{}, err
+	}
+	if len(filter) == 0 {
+		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	relation, targetID, err := s.relation(owner.ID, field.model)
 	if err != nil {
@@ -410,12 +423,12 @@ func (s *inputState) relationCondition(owner compilerir.ModelDeclIR, field field
 	for _, name := range sortedKeys(filter) {
 		operatorID, ok := operators[name]
 		if !ok {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: unknown relation operator %s.%s", path, name)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		var child *policyir.Condition
 		if filter[name] == nil {
 			if cardinality != policyir.RelationToOne {
-				return policyir.Condition{}, fmt.Errorf("P5_BIND_RELATION: %s.%s cannot be null", path, name)
+				return policyir.Condition{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path(joinPath(path, name)))
 			}
 			if name == "is" {
 				operatorID = policyir.OperatorRelationIsNull
@@ -431,11 +444,11 @@ func (s *inputState) relationCondition(owner compilerir.ModelDeclIR, field field
 		}
 		requirements, shapeErr := operator.ValidateShape(operatorID, operator.Shape{Node: policyir.ConditionRelation, Operand: policyir.NoOperand(), Mode: policyir.ComparisonSensitive, Cardinality: cardinality, HasChild: child != nil, Providers: s.binder.providers})
 		if shapeErr != nil {
-			return policyir.Condition{}, fmt.Errorf("P5_BIND_OPERATOR: %s.%s: %w", path, name, shapeErr)
+			return policyir.Condition{}, unsupportedOperator(joinPath(path, name))
 		}
 		condition, conditionErr := policyir.NewRelation(modelID, fieldID, policyir.RelationID(relationIDBytes), policyTarget, cardinality, operatorID, child, requirements)
 		if conditionErr != nil {
-			return policyir.Condition{}, conditionErr
+			return policyir.Condition{}, compileerr.Invariant(conditionErr)
 		}
 		conditions = append(conditions, condition)
 	}
@@ -455,13 +468,16 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 		return readir.Selector{}, policyir.Condition{}, err
 	}
 	input, err := object(raw, path)
-	if err != nil || len(input) != 1 {
-		return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s must contain exactly one selector arm", path)
+	if err != nil {
+		return readir.Selector{}, policyir.Condition{}, err
+	}
+	if len(input) != 1 {
+		return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindExactlyOne, compileerr.DetailNone, compileerr.Path(path))
 	}
 	name := sortedKeys(input)[0]
 	rawValue := input[name]
 	if rawValue == nil {
-		return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s cannot be null", path, name)
+		return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path(joinPath(path, name)))
 	}
 	var selector *compilerir.SelectorContractIR
 	for index := range contract.Selectors {
@@ -471,7 +487,7 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 		}
 	}
 	if selector == nil || len(selector.Fields) == 0 {
-		return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s is unknown", path, name)
+		return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, name)))
 	}
 	fields := indexFields(model, contract)
 	components := make(map[compilerir.FieldID]any, len(selector.Fields))
@@ -479,28 +495,31 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 		components[selector.Fields[0]] = rawValue
 	} else {
 		compound, objectErr := object(rawValue, joinPath(path, name))
-		if objectErr != nil || len(compound) != len(selector.Fields) {
-			return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s must contain every compound component exactly once", path, name)
+		if objectErr != nil {
+			return readir.Selector{}, policyir.Condition{}, objectErr
 		}
 		for _, fieldID := range selector.Fields {
 			binding, ok := fieldByID(fields, fieldID)
 			if !ok {
-				return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: selector field %s is absent", fieldID)
+				return readir.Selector{}, policyir.Condition{}, compileerr.Invariantf("selector field %s is absent", fieldID)
 			}
 			value, present := compound[binding.contract.GraphQLName]
-			if !present || value == nil {
-				return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s.%s is required", path, name, binding.contract.GraphQLName)
+			if !present {
+				return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindRequired, compileerr.DetailNone, compileerr.Path(joinPath(joinPath(path, name), binding.contract.GraphQLName)))
+			}
+			if value == nil {
+				return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path(joinPath(joinPath(path, name), binding.contract.GraphQLName)))
 			}
 			components[fieldID] = value
 		}
-		for key := range compound {
+		for _, key := range sortedKeys(compound) {
 			known := false
 			for _, fieldID := range selector.Fields {
 				binding, _ := fieldByID(fields, fieldID)
 				known = known || binding.contract.GraphQLName == key
 			}
 			if !known {
-				return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s.%s is unknown", path, name, key)
+				return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(joinPath(path, name), key)))
 			}
 		}
 	}
@@ -510,21 +529,25 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 	for index, id := range selector.Fields {
 		binding, ok := fieldByID(fields, id)
 		if !ok || !compilerir.ModesReadable(binding.contract.Modes) || binding.model.Scalar == nil {
-			return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s contains an unavailable field", path, name)
+			return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, name)))
 		}
 		fieldID, _ := policyFieldID(id)
 		typ, typeErr := bindType(binding.model.Scalar.Type, binding.model.Scalar.Nullable)
 		if typeErr != nil {
 			return readir.Selector{}, policyir.Condition{}, typeErr
 		}
+		componentPath := joinPath(path, name)
+		if len(selector.Fields) != 1 {
+			componentPath = joinPath(componentPath, binding.contract.GraphQLName)
+		}
 		value, valueErr := s.value(binding.model.Scalar.Type, components[id])
 		if valueErr != nil {
-			return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s component %s: %w", path, name, binding.contract.GraphQLName, valueErr)
+			return readir.Selector{}, policyir.Condition{}, compileerr.At(valueErr, componentPath)
 		}
 		operand, _ := policyir.OneOperand(value)
 		condition, conditionErr := s.leafScalar(modelID, fieldID, typ, policyir.OperatorEqual, policyir.ComparisonSensitive, operand)
 		if conditionErr != nil {
-			return readir.Selector{}, policyir.Condition{}, conditionErr
+			return readir.Selector{}, policyir.Condition{}, unsupportedOperator(componentPath)
 		}
 		selectorFields[index], conditions[index] = fieldID, condition
 	}
@@ -534,52 +557,61 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 	}
 	boundSelector, err := readir.NewSelector(keyID, selectorFields)
 	if err != nil {
-		return readir.Selector{}, policyir.Condition{}, err
+		return readir.Selector{}, policyir.Condition{}, compileerr.Invariant(err)
 	}
 	predicate, err := combine(modelID, policyir.LogicalAnd, conditions)
 	if err != nil {
 		return readir.Selector{}, policyir.Condition{}, err
 	}
-	predicate, err = validateCondition(predicate, s.binder.providers)
+	predicate, err = validateCondition(predicate, s.binder.providers, path)
 	return boundSelector, predicate, err
 }
 
 func (s *inputState) orderBy(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, raw any, path string) ([]readir.Order, error) {
 	items, err := list(raw, path)
-	if err != nil || len(items) == 0 || len(items) > s.binder.limits.MaxListItems {
-		return nil, fmt.Errorf("P5_BIND_ORDER: %s must be a non-empty bounded list", path)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
+	}
+	if len(items) > s.binder.limits.MaxListItems {
+		return nil, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", s.binder.limits.MaxListItems))
 	}
 	fields := indexFields(model, contract)
 	result := make([]readir.Order, len(items))
 	seen := map[compilerir.FieldID]bool{}
 	for index, item := range items {
-		entry, objectErr := object(item, fmt.Sprintf("%s[%d]", path, index))
-		if objectErr != nil || len(entry) != 1 {
-			return nil, fmt.Errorf("P5_BIND_ORDER: %s[%d] must contain exactly one field", path, index)
+		entryPath := compileerr.Index(path, index)
+		entry, objectErr := object(item, entryPath)
+		if objectErr != nil {
+			return nil, objectErr
+		}
+		if len(entry) != 1 {
+			return nil, compileerr.New(compileerr.KindExactlyOne, compileerr.DetailNone, compileerr.Path(entryPath))
 		}
 		name := sortedKeys(entry)[0]
 		field, ok := fields[name]
 		if !ok || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil {
-			return nil, fmt.Errorf("P5_BIND_ORDER: %s[%d].%s is unavailable or relational", path, index, name)
+			return nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(entryPath, name)))
 		}
 		if seen[field.model.ID] {
-			return nil, fmt.Errorf("P5_BIND_ORDER: field %s is duplicated", name)
+			return nil, compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateField, compileerr.Path(path))
 		}
 		seen[field.model.ID] = true
 		direction, ok := entry[name].(string)
-		if !ok {
-			return nil, fmt.Errorf("P5_BIND_ORDER: %s[%d].%s must be asc or desc", path, index, name)
-		}
 		sortDirection := readir.Ascending
-		if direction == "desc" {
+		switch {
+		case ok && direction == "desc":
 			sortDirection = readir.Descending
-		} else if direction != "asc" {
-			return nil, fmt.Errorf("P5_BIND_ORDER: %s[%d].%s must be asc or desc", path, index, name)
+		case ok && direction == "asc":
+		default:
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueNotOneOf, compileerr.Path(joinPath(entryPath, name)))
 		}
 		fieldID, _ := policyFieldID(field.model.ID)
 		order, orderErr := readir.NewOrder(fieldID, sortDirection)
 		if orderErr != nil {
-			return nil, orderErr
+			return nil, compileerr.Invariant(orderErr)
 		}
 		result[index] = order
 	}
@@ -588,8 +620,14 @@ func (s *inputState) orderBy(model compilerir.ModelDeclIR, contract compilerir.M
 
 func (s *inputState) distinct(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, raw any) ([]policyir.FieldID, error) {
 	items, err := list(raw, "distinct")
-	if err != nil || len(items) == 0 || len(items) > s.binder.limits.MaxListItems {
-		return nil, fmt.Errorf("P5_BIND_DISTINCT: distinct must be a non-empty bounded list")
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path("distinct"))
+	}
+	if len(items) > s.binder.limits.MaxListItems {
+		return nil, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", s.binder.limits.MaxListItems))
 	}
 	fields := indexFields(model, contract)
 	result := make([]policyir.FieldID, len(items))
@@ -597,8 +635,11 @@ func (s *inputState) distinct(model compilerir.ModelDeclIR, contract compilerir.
 	for index, item := range items {
 		name, ok := item.(string)
 		field, exists := fields[name]
-		if !ok || !exists || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil || seen[field.model.ID] {
-			return nil, fmt.Errorf("P5_BIND_DISTINCT: item %d is unknown, relational, or duplicate", index)
+		if !ok || !exists || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil {
+			return nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(compileerr.Index("distinct", index)))
+		}
+		if seen[field.model.ID] {
+			return nil, compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateField, compileerr.Path("distinct"))
 		}
 		seen[field.model.ID] = true
 		result[index], _ = policyFieldID(field.model.ID)
@@ -608,11 +649,11 @@ func (s *inputState) distinct(model compilerir.ModelDeclIR, contract compilerir.
 
 func (s *inputState) relation(owner compilerir.ModelID, field compilerir.FieldIR) (compilerir.RelationIR, compilerir.ModelID, error) {
 	if field.Relation == nil {
-		return compilerir.RelationIR{}, "", fmt.Errorf("P5_BIND_RELATION: field %s has no relation metadata", field.ID)
+		return compilerir.RelationIR{}, "", compileerr.Invariantf("field %s has no relation metadata", field.ID)
 	}
 	relation, ok := s.binder.relations[field.Relation.RelationID]
 	if !ok {
-		return compilerir.RelationIR{}, "", fmt.Errorf("P5_BIND_RELATION: relation %s is absent", field.Relation.RelationID)
+		return compilerir.RelationIR{}, "", compileerr.Invariantf("relation %s is absent", field.Relation.RelationID)
 	}
 	target := relation.TargetModel
 	if field.Relation.Role == compilerir.RelationInverse || relation.TargetModel == owner {
@@ -646,12 +687,16 @@ func fieldByID(fields map[string]fieldBinding, id compilerir.FieldID) (fieldBind
 
 func combine(model policyir.ModelID, operation policyir.LogicalOperator, conditions []policyir.Condition) (policyir.Condition, error) {
 	if len(conditions) == 0 {
-		return policyir.Condition{}, fmt.Errorf("P5_BIND_CONDITION: no conditions were supplied")
+		return policyir.Condition{}, compileerr.Invariantf("no conditions were supplied")
 	}
 	if len(conditions) == 1 {
 		return conditions[0], nil
 	}
-	return policyir.NewLogical(model, operation, conditions)
+	logical, err := policyir.NewLogical(model, operation, conditions)
+	if err != nil {
+		return policyir.Condition{}, compileerr.Invariant(err)
+	}
+	return logical, nil
 }
 
 func comparisonMode(filter map[string]any) (policyir.ComparisonMode, error) {
@@ -661,7 +706,7 @@ func comparisonMode(filter map[string]any) (policyir.ComparisonMode, error) {
 	}
 	value, ok := raw.(string)
 	if !ok {
-		return 0, fmt.Errorf("must be sensitive or insensitive")
+		return 0, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueNotOneOf)
 	}
 	switch value {
 	case "sensitive":
@@ -669,7 +714,7 @@ func comparisonMode(filter map[string]any) (policyir.ComparisonMode, error) {
 	case "insensitive":
 		return policyir.ComparisonASCIIInsensitive, nil
 	default:
-		return 0, fmt.Errorf("must be sensitive or insensitive")
+		return 0, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueNotOneOf)
 	}
 }
 
@@ -685,17 +730,21 @@ func jsonPath(raw any) (policyir.JSONPath, error) {
 	for index, item := range items {
 		text, ok := item.(string)
 		if !ok {
-			return policyir.JSONPath{}, fmt.Errorf("segment %d is not String", index)
+			return policyir.JSONPath{}, compileerr.At(invalid(compileerr.ValueWrongKind, "String"), compileerr.Index("", index))
 		}
 		if number, parseErr := strconv.ParseUint(text, 10, 64); parseErr == nil && strconv.FormatUint(number, 10) == text {
 			segments[index] = policyir.JSONIndexSegment(number)
 		} else {
 			segment, segmentErr := policyir.JSONKeySegment(text)
 			if segmentErr != nil {
-				return policyir.JSONPath{}, segmentErr
+				return policyir.JSONPath{}, compileerr.At(invalid(compileerr.ValueMalformed, "JSON path segment"), compileerr.Index("", index))
 			}
 			segments[index] = segment
 		}
 	}
-	return policyir.NewJSONPath(segments...)
+	path, err := policyir.NewJSONPath(segments...)
+	if err != nil {
+		return policyir.JSONPath{}, invalid(compileerr.ValueOutOfRange, "JSON path")
+	}
+	return path, nil
 }

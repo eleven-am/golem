@@ -8,6 +8,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
 	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 )
@@ -221,7 +222,7 @@ func (execution *CallerCustomExecution) Execute(ctx context.Context, operation C
 	}
 	request, err := execution.registry.contract.Prepare(compilerir.CustomOperationKind(operation), name, arguments)
 	if err != nil {
-		return CustomResult{}, err
+		return CustomResult{}, compileerr.Invariant(err)
 	}
 	binding := execution.registry.bindings[request.ExtensionID()]
 	if binding.invoke == nil {
