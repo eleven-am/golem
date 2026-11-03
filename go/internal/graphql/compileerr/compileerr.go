@@ -28,7 +28,6 @@ const (
 	KindFragmentInvalid
 	KindInputLimit
 	KindSelectionLimit
-	KindUnconverted
 )
 
 type Detail uint8
@@ -81,6 +80,20 @@ const (
 	EmptySelection
 
 	IntegerPositive
+	IntegerVersion
+
+	NotAllowedCreateWhere
+	NotAllowedBatchRelation
+	NotAllowedVersionedRelation
+	NotAllowedNestedInCreate
+	NotAllowedNestedToOne
+	NotAllowedNestedNeedsExpectation
+	NotAllowedMustBeTrue
+	NotAllowedNumericOnly
+	NotAllowedVersionedBatch
+	NotAllowedAggregateNeedsMeasure
+	NotAllowedKeyNotInBy
+	NotAllowedRelationGroupNeedsDimension
 )
 
 type Error struct {
@@ -124,18 +137,6 @@ func Invariant(cause error) *Error {
 
 func Invariantf(format string, arguments ...any) *Error {
 	return &Error{kind: KindInvariant, cause: fmt.Errorf(format, arguments...)}
-}
-
-func Unconverted(cause error) error {
-	if cause == nil {
-		return nil
-	}
-	var typed *Error
-	var public *golem.Error
-	if errors.As(cause, &typed) || errors.As(cause, &public) {
-		return cause
-	}
-	return &Error{kind: KindUnconverted, cause: cause}
 }
 
 func (e *Error) Kind() Kind     { return e.kind }
@@ -183,9 +184,6 @@ func (e *Error) Error() string {
 	if e.kind == KindInvariant {
 		return "internal compile failure: " + e.cause.Error()
 	}
-	if e.kind == KindUnconverted {
-		return "GraphQL operation could not be bound: " + e.cause.Error()
-	}
 	return e.Message()
 }
 
@@ -193,8 +191,6 @@ func (e *Error) Message() string {
 	switch e.kind {
 	case KindInvariant:
 		return "internal server error"
-	case KindUnconverted:
-		return "GraphQL operation could not be bound"
 	}
 	template, ok := templates[templateKey{e.kind, e.detail}]
 	if !ok {
@@ -273,7 +269,7 @@ func At(err error, parent string) error {
 	if !known {
 		return Invariant(err)
 	}
-	if typed == nil || typed.kind == KindInvariant {
+	if typed == nil || typed.kind == KindInvariant || typed.limit != "" {
 		return err
 	}
 	copied := *typed

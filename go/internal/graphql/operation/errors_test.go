@@ -98,7 +98,7 @@ func TestCompileInputGuardsAreInvariants(t *testing.T) {
 	}
 }
 
-func TestMutationCompileRefusalsAreRootedAndWriteSideFaultsStayUnconverted(t *testing.T) {
+func TestMutationCompileRefusalsAreRootedAndWriteSideRefusalsAreTyped(t *testing.T) {
 	compilation := social(t)
 	compiler, err := New(compilation, Limits{})
 	if err != nil {
@@ -110,7 +110,7 @@ func TestMutationCompileRefusalsAreRootedAndWriteSideFaultsStayUnconverted(t *te
 		{name: "batch-payload-without-selection", source: `mutation { moved: ` + post.Roots.UpdateMany + `(where: {all: true}, data: {}) }`, kind: compileerr.KindEmpty, message: "Selection must not be empty", root: "moved"},
 		{name: "batch-payload-field-with-selection", source: `mutation { moved: ` + post.Roots.UpdateMany + `(where: {all: true}, data: {}) { count { x } } }`, kind: compileerr.KindSelectionShape, message: "Field count must not have a selection set", root: "moved"},
 		{name: "batch-payload-unknown-field", source: `mutation { moved: ` + post.Roots.UpdateMany + `(where: {all: true}, data: {}) { nope } }`, kind: compileerr.KindInvariant, message: "internal server error", root: "moved"},
-		{name: "write-side-fault-keeps-the-legacy-bind-failure", source: `mutation { made: ` + post.Roots.Create + `(data: {nope: 1}) { id } }`, kind: compileerr.KindUnconverted, message: "GraphQL operation could not be bound", root: "made"},
+		{name: "write-side-unknown-input-field", source: `mutation { made: ` + post.Roots.Create + `(data: {nope: 1}) { id } }`, kind: compileerr.KindFieldUnavailable, message: "Input data.nope on Post is not available for this operation", root: "made"},
 	})
 }
 
@@ -131,7 +131,7 @@ func TestCustomCompileRefusalsAreTypedAndInvariantsAreInternal(t *testing.T) {
 		{name: "predicate-null-field", source: `{ found: searchUsers(where: {name: null}) { id } }`, kind: compileerr.KindNullNotAllowed, message: "Input where.name on User cannot be null", root: "found"},
 		{name: "result-without-selection", source: `{ found: searchUsers(where: {all: true}) }`, kind: compileerr.KindSelectionShape, message: "Field searchUsers requires a selection set", root: "found"},
 		{name: "result-selection-unknown-field", source: `{ found: searchUsers(where: {all: true}) { nope } }`, kind: compileerr.KindFieldUnavailable, message: "Field nope on User is not available for this operation", root: "found"},
-		{name: "scalar-argument-wrong-kind", source: `mutation { imported: importUsers(data: [], metadata: {}, patch: {}) }`, kind: compileerr.KindUnconverted, message: "GraphQL operation could not be bound", root: "imported"},
+		{name: "scalar-argument-wrong-kind", source: `mutation { imported: importUsers(data: [], metadata: {}, patch: {}) }`, kind: compileerr.KindInvalidValue, message: "Argument data on User has the wrong kind of value", root: "imported"},
 	})
 	t.Run("selection-on-a-scalar-result", func(t *testing.T) {
 		scalar := compilation

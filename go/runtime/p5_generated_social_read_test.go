@@ -81,11 +81,11 @@ type p5SocialGeneratedResponse struct {
 	} `json:"errors"`
 }
 
-func newP5SocialGeneratedHarness(t *testing.T, profile p5ExtensionProviderProfile) *p5SocialGeneratedHarness {
+func newP5SocialGeneratedHarness(t testing.TB, profile p5ExtensionProviderProfile) *p5SocialGeneratedHarness {
 	return newP5SocialGeneratedHarnessWithAnalyticsLimits(t, profile, golemruntime.AnalyticsLimits{})
 }
 
-func newP5SocialGeneratedHarnessWithAnalyticsLimits(t *testing.T, profile p5ExtensionProviderProfile, analyticsLimits golemruntime.AnalyticsLimits) *p5SocialGeneratedHarness {
+func newP5SocialGeneratedHarnessWithAnalyticsLimits(t testing.TB, profile p5ExtensionProviderProfile, analyticsLimits golemruntime.AnalyticsLimits) *p5SocialGeneratedHarness {
 	t.Helper()
 	ctx := context.Background()
 	trace := &p5ExtensionSQLTrace{}
@@ -186,7 +186,7 @@ func newP5SocialGeneratedHarnessWithAnalyticsLimits(t *testing.T, profile p5Exte
 	return harness
 }
 
-func p6AcquirePostgreSQLTestLock(t *testing.T, dsn string, key int64) {
+func p6AcquirePostgreSQLTestLock(t testing.TB, dsn string, key int64) {
 	t.Helper()
 	lockDB, _, err := postgresprovider.New().Open(context.Background(), dsn)
 	if err != nil {
@@ -209,7 +209,7 @@ func p6AcquirePostgreSQLTestLock(t *testing.T, dsn string, key int64) {
 	})
 }
 
-func p5CleanupSocialPostgreSQL(t *testing.T, database *sqlx.DB) {
+func p5CleanupSocialPostgreSQL(t testing.TB, database *sqlx.DB) {
 	t.Helper()
 	for _, namespace := range []physical.PhysicalName{p5SocialPostgreSQLNamespace, p5SocialPostgreSQLSystemNamespace} {
 		if _, err := database.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS "`+string(namespace)+`" CASCADE`); err != nil {
@@ -227,7 +227,7 @@ func (h *p5SocialGeneratedHarness) table(name string) string {
 
 func p5SocialID(value int) string { return fmt.Sprintf("00000000-0000-0000-0000-%012d", value) }
 
-func (h *p5SocialGeneratedHarness) seed(t *testing.T) {
+func (h *p5SocialGeneratedHarness) seed(t testing.TB) {
 	t.Helper()
 	exec := func(query string, arguments ...any) {
 		if _, err := h.database.ExecContext(context.Background(), h.database.Rebind(query), arguments...); err != nil {
@@ -267,7 +267,7 @@ func (h *p5SocialGeneratedHarness) seed(t *testing.T) {
 	exec(`INSERT INTO `+h.table("post_tags")+` ("post_id","tag_name") VALUES (?,?)`, p5SocialID(11), "tag-b")
 }
 
-func (h *p5SocialGeneratedHarness) execute(t *testing.T, principal p5social.Principal, query string, variables map[string]any) p5SocialGeneratedResponse {
+func (h *p5SocialGeneratedHarness) execute(t testing.TB, principal p5social.Principal, query string, variables map[string]any) p5SocialGeneratedResponse {
 	t.Helper()
 	response, err := h.executeRaw(context.WithValue(context.Background(), p5SocialPrincipalKey{}, principal), query, variables)
 	if err != nil {

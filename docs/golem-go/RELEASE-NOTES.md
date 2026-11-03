@@ -148,12 +148,27 @@ and an omitted `$variable` given to `take` or `skip` reads `cannot be null`.
 Messages name only schema terms and never repeat your values. A failure that a
 valid document cannot cause, such as a contract that does not match the generated
 schema, is `INTERNAL_SERVER_ERROR` and is passed to `ReportInternalError`, where
-before it was shown as `BAD_USER_INPUT`. A refusal raised by the write or
-aggregate binding itself still reads `GraphQL operation could not be bound`;
-those follow in the next change.
+before it was shown as `BAD_USER_INPUT`.
 - A subscription that cannot be bound now returns the same typed error from
   `Subscribe` instead of `GOLEM_SUBSCRIPTION_INVALID: GraphQL subscription could
   not be bound`. Pass it to `graphql.PresentError`.
+
+**A write or an analytics query your document cannot make says the same.** The
+generic `GraphQL operation could not be bound` is gone. A mutation, a nested
+write, a custom mutation input or selector, and `aggregate`, `groupBy` and
+`relationGroupBy` now refuse with the same typed messages, `path` and
+extensions as a read: `Argument data on User must not be empty`, `Input
+data.id on User is not a valid UUID`, `Argument
+expectedVersion on Note must be at least 1`, `Argument take on Post must be
+between -100 and 100, excluding 0`, `Key id on Post must be listed in by`,
+`Input having.count.gte on Post is not a valid BigInt`. A nested path shows the
+list index, and an input or list bound reports `MaxInputDepth`, `MaxInputNodes`
+or `MaxListItems` without a location. A `having` that filters on a key that is
+not in `by`, and an `orderBy` that names the same term twice, are named instead
+of reading `could not be bound`. A failure a valid document cannot cause is
+`INTERNAL_SERVER_ERROR`, as for reads.
+A `having` comparison that sets `mode` on `equals`, `not`, `lt`, `lte`, `gt` or `gte` is now refused (`Input having.key.title.mode on Post is not supported for this field or provider`). `mode` applies only to `contains`, `startsWith` and `endsWith`. A request that sets it on those operators was accepted before, with `mode` ignored, so an `insensitive` equality compared case-sensitively; it is now refused with `BAD_USER_INPUT`.
+Nothing runs before the refusal, so a refused mutation has no committed effect.
 
 ---
 

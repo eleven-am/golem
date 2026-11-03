@@ -29,6 +29,7 @@ func renderCases() []renderCase {
 		{KindIntegerRange, IntegerTakeNonZero, []Option{Path("take"), Model("Article")}, "Argument take on Article must not be 0"},
 		{KindIntegerRange, IntegerPositive, []Option{Path("take"), Model("search"), Bounds(1, 50)}, "Argument take on search must be between 1 and 50"},
 		{KindIntegerRange, IntegerPlatform, []Option{Path("take"), Model("Article")}, "Argument take on Article is outside the supported integer range"},
+		{KindIntegerRange, IntegerVersion, []Option{Path("expectedVersion"), Model("Note")}, "Argument expectedVersion on Note must be at least 1"},
 		{KindNegativeTakeRequiresOrderBy, DetailNone, []Option{Path("take"), Model("Article")}, "Argument take on Article is negative and requires orderBy"},
 		{KindInvalidValue, ValueMalformed, []Option{Path("where.id.equals"), Model("Article"), Type("UUID")}, "Input where.id.equals on Article is not a valid UUID"},
 		{KindInvalidValue, ValueNotCanonical, []Option{Path("where.id.equals"), Model("Article"), Type("UUID")}, "Input where.id.equals on Article is not a canonical UUID"},
@@ -44,6 +45,18 @@ func renderCases() []renderCase {
 		{KindDuplicate, DuplicateField, []Option{Path("orderBy"), Model("Article")}, "Argument orderBy on Article names a field more than once"},
 		{KindDuplicate, DuplicateArgument, []Option{Path("prefix"), Model("greeting")}, "Argument prefix on greeting is given more than once"},
 		{KindNotAllowedHere, NotAllowedAllAlone, []Option{Path("where.all"), Model("Article")}, "Input where.all on Article must be the only member and Boolean"},
+		{KindNotAllowedHere, NotAllowedCreateWhere, []Option{Path("where"), Model("Article")}, "Argument where on Article is not accepted by create"},
+		{KindNotAllowedHere, NotAllowedBatchRelation, []Option{Path("data.comments"), Model("Article")}, "Input data.comments on Article cannot be a relation in an update-many input"},
+		{KindNotAllowedHere, NotAllowedVersionedRelation, []Option{Path("data"), Model("Note")}, "Argument data on Note cannot carry relation writes without per-row expectations"},
+		{KindNotAllowedHere, NotAllowedNestedInCreate, []Option{Path("data.comments.update"), Model("Article")}, "Input data.comments.update on Article is not allowed while creating"},
+		{KindNotAllowedHere, NotAllowedNestedToOne, []Option{Path("data.author.set"), Model("Article")}, "Input data.author.set on Article is not allowed on a to-one relation"},
+		{KindNotAllowedHere, NotAllowedNestedNeedsExpectation, []Option{Path("data.notes.update"), Model("User")}, "Input data.notes.update on User requires an expectation because the target model is versioned"},
+		{KindNotAllowedHere, NotAllowedMustBeTrue, []Option{Path("data.title.setNull"), Model("Article")}, "Input data.title.setNull on Article must be true"},
+		{KindNotAllowedHere, NotAllowedNumericOnly, []Option{Path("data.title.increment"), Model("Article")}, "Input data.title.increment on Article is only allowed on numeric fields"},
+		{KindNotAllowedHere, NotAllowedVersionedBatch, []Option{Model("Note")}, "Batch writes are not available on Note"},
+		{KindNotAllowedHere, NotAllowedAggregateNeedsMeasure, []Option{Model("Post")}, "An aggregate on Post must select at least one measure"},
+		{KindNotAllowedHere, NotAllowedKeyNotInBy, []Option{Path("title"), Model("Post")}, "Key title on Post must be listed in by"},
+		{KindNotAllowedHere, NotAllowedRelationGroupNeedsDimension, []Option{Model("Post")}, "Relation grouping on Post requires a relation dimension in by"},
 		{KindFieldUnavailable, UnavailableArgument, []Option{Path("extra"), Model("greeting")}, "Argument extra on greeting is not available for this operation"},
 		{KindFieldUnavailable, UnavailableInput, []Option{Path("where.secret"), Model("Account")}, "Input where.secret on Account is not available for this operation"},
 		{KindFieldUnavailable, UnavailableField, []Option{Path("title"), Model("Article")}, "Field title on Article is not available for this operation"},
@@ -85,7 +98,7 @@ func TestRenderTableGivesEveryKindAndDetailItsLiteralMessage(t *testing.T) {
 	}
 }
 
-func TestInvariantAndUnconvertedRenderFixedPublicTextAndKeepTheCause(t *testing.T) {
+func TestInvariantRendersFixedPublicTextAndKeepsTheCause(t *testing.T) {
 	cause := errors.New("relation 0123 is absent")
 	invariant := Invariant(cause)
 	if invariant.Message() != "internal server error" || !invariant.Internal() || invariant.Error() != "internal compile failure: relation 0123 is absent" || invariant.Cause() != cause {
@@ -96,13 +109,6 @@ func TestInvariantAndUnconvertedRenderFixedPublicTextAndKeepTheCause(t *testing.
 	}
 	if got := Invariant(nil).Error(); got != "internal compile failure: unclassified compile failure" {
 		t.Fatalf("Invariant(nil)=%q", got)
-	}
-	converted := Unconverted(cause).(*Error)
-	if converted.Message() != "GraphQL operation could not be bound" || converted.Internal() || converted.Error() != "GraphQL operation could not be bound: relation 0123 is absent" {
-		t.Fatalf("unconverted message=%q internal=%t error=%q", converted.Message(), converted.Internal(), converted.Error())
-	}
-	if Unconverted(nil) != nil {
-		t.Fatal("Unconverted(nil) is not nil")
 	}
 	if got := New(KindInvalidValue, Detail(200)).Message(); got != "GraphQL operation is invalid" {
 		t.Fatalf("unknown template message=%q", got)
@@ -152,6 +158,10 @@ func TestAtOnRootAndEnsureClassifyEveryErrorOnce(t *testing.T) {
 	at := At(inner, "where.id").(*Error)
 	if at.Argument() != "where.id.equals" || inner.Argument() != "equals" {
 		t.Fatalf("At mutated its input or lost the path: at=%q inner=%q", at.Argument(), inner.Argument())
+	}
+	limit := New(KindInputLimit, DetailNone, Limit("MaxListItems", 3))
+	if located := At(limit, "where.AND").(*Error); located != limit || located.Argument() != "" {
+		t.Fatalf("At gave a named limit a location: %q", located.Argument())
 	}
 	on := On(at, "Article").(*Error)
 	if on.Message() != "Input where.id.equals on Article is not a valid UUID" {

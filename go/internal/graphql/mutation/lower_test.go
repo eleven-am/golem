@@ -182,14 +182,14 @@ func TestExplicitCreateNullOmissionLimitsAndInvalidShapes(t *testing.T) {
 
 	deep := &Input{Kind: CreateInput, Model: model}
 	deep.Relations = []Relation{relationValue(1, model, golem.MutationRelationCreate, RelationEntry{Create: &Input{Kind: CreateInput, Model: model}})}
-	if _, err := Lower(RootInput{Operation: Create, Model: model, Data: deep}, Limits{MaxInputDepth: 1}); err == nil || !strings.Contains(err.Error(), "P5_MUTATION_LIMIT") {
+	if _, err := Lower(RootInput{Operation: Create, Model: model, Data: deep}, Limits{MaxInputDepth: 1}); err == nil || err.Error() != "Input exceeds MaxInputDepth (1)" {
 		t.Fatalf("depth error = %v", err)
 	}
 	tooMany := relationValue(2, model, golem.MutationRelationCreate, RelationEntry{Create: &Input{Kind: CreateInput, Model: model}}, RelationEntry{Create: &Input{Kind: CreateInput, Model: model}})
-	if _, err := Lower(RootInput{Operation: Update, Model: model, Target: &target, Data: &Input{Kind: UpdateInput, Model: model, Relations: []Relation{tooMany}}}, Limits{MaxListItems: 1}); err == nil || !strings.Contains(err.Error(), "list items") {
+	if _, err := Lower(RootInput{Operation: Update, Model: model, Target: &target, Data: &Input{Kind: UpdateInput, Model: model, Relations: []Relation{tooMany}}}, Limits{MaxListItems: 1}); err == nil || err.Error() != "Input exceeds MaxListItems (1)" {
 		t.Fatalf("list error = %v", err)
 	}
-	if _, err := Lower(RootInput{Operation: Create, Model: model, Data: &Input{Kind: CreateInput, Model: model, Scalars: []Scalar{{Field: field, Operation: golem.MutationFieldCreate, Value: "x"}}}}, Limits{MaxInputNodes: 1}); err == nil || !strings.Contains(err.Error(), "P5_MUTATION_LIMIT") {
+	if _, err := Lower(RootInput{Operation: Create, Model: model, Data: &Input{Kind: CreateInput, Model: model, Scalars: []Scalar{{Field: field, Operation: golem.MutationFieldCreate, Value: "x"}}}}, Limits{MaxInputNodes: 1}); err == nil || err.Error() != "Input exceeds MaxInputNodes (1)" {
 		t.Fatalf("node error = %v", err)
 	}
 }

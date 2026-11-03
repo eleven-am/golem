@@ -489,7 +489,7 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 		if !ok {
 			analyticsRoot, analyticsOK, analyticsErr := c.analytics.Compile(root.field, document.Fragments, variables)
 			if analyticsErr != nil {
-				return Result{}, compileerr.Root(compileerr.Unconverted(analyticsErr), root.responseName)
+				return Result{}, compileerr.Root(analyticsErr, root.responseName)
 			}
 			if analyticsOK {
 				analyticsRoot.ResponseName = root.responseName
@@ -619,11 +619,11 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 		}
 		compiled.Request, err = c.mutation.LowerValues(binding.operation, binding.model, arguments, selections)
 		if err != nil {
-			return Result{}, compileerr.Root(compileerr.Unconverted(err), root.responseName)
+			return Result{}, compileerr.Root(err, root.responseName)
 		}
 		compiled.Frozen, err = compiled.Request.FreezeExecution(projection)
 		if err != nil {
-			return Result{}, compileerr.Root(compileerr.Unconverted(err), root.responseName)
+			return Result{}, compileerr.Root(err, root.responseName)
 		}
 		result.Mutations = append(result.Mutations, compiled)
 		result.Order = append(result.Order, RootRef{Kind: RootMutation, Index: len(result.Mutations) - 1})
@@ -748,8 +748,11 @@ func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any, path s
 		if !modelKind {
 			return nil, compileerr.Invariantf("selector model %s is absent", typ.Name)
 		}
-		target, err := c.mutation.Target(modelID, raw)
-		return target, compileerr.At(compileerr.Unconverted(err), path)
+		target, err := c.mutation.Target(modelID, raw, path)
+		if err != nil {
+			return nil, err
+		}
+		return target, nil
 	case compilerir.GraphQLTypeCreateInput, compilerir.GraphQLTypeUpdateInput, compilerir.GraphQLTypeUpdateManyInput:
 		if !modelKind {
 			return nil, compileerr.Invariantf("mutation input model %s is absent", typ.Name)
@@ -757,7 +760,7 @@ func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any, path s
 		kind := map[compilerir.GraphQLTypeKind]graphqlmutation.InputKind{compilerir.GraphQLTypeCreateInput: graphqlmutation.CreateInput, compilerir.GraphQLTypeUpdateInput: graphqlmutation.UpdateInput, compilerir.GraphQLTypeUpdateManyInput: graphqlmutation.UpdateManyInput}[typ.Kind]
 		value, err := c.mutation.CustomInput(kind, modelID, raw)
 		if err != nil {
-			return nil, compileerr.At(compileerr.Unconverted(err), path)
+			return nil, compileerr.At(err, path)
 		}
 		publicKind := map[compilerir.GraphQLTypeKind]golem.RuntimeMutationInputKind{compilerir.GraphQLTypeCreateInput: golem.RuntimeMutationCreateInput, compilerir.GraphQLTypeUpdateInput: golem.RuntimeMutationUpdateInput, compilerir.GraphQLTypeUpdateManyInput: golem.RuntimeMutationUpdateManyInput}[typ.Kind]
 		input, err := golem.RuntimeCustomMutationInputValue(publicKind, value)

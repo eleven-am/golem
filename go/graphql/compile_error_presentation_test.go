@@ -139,8 +139,6 @@ func TestPresentCompileErrorCarriesEveryTypedField(t *testing.T) {
 			want: Error{Message: "Input exceeds MaxListItems (7)", Path: []any{"items"}, Extensions: map[string]any{"code": "BAD_USER_INPUT", "reason": "LIMIT_EXCEEDED", "limit": "MaxListItems", "max": 7}}},
 		{name: "explicit-path-wins-over-root", err: root(compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)), path: []any{"explicit"},
 			want: Error{Message: "Selection must not be empty", Path: []any{"explicit"}, Extensions: map[string]any{"code": "BAD_USER_INPUT"}}},
-		{name: "unconverted", err: root(compileerr.Unconverted(errors.New("legacy write failure"))),
-			want: Error{Message: "GraphQL operation could not be bound", Path: []any{"items"}, Extensions: map[string]any{"code": "BAD_USER_INPUT"}}},
 		{name: "golem-error-passthrough", err: root(golem.RuntimeOperationError(golem.CodeNotFound, "read", golem.ModelID{}, golem.FieldID{}, "record not found", nil)),
 			want: Error{Message: "record not found", Path: []any{"items"}, Extensions: map[string]any{"code": string(golem.CodeNotFound)}}},
 	}

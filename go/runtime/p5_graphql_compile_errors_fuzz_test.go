@@ -35,6 +35,13 @@ var compileFuzzTemplates = []compileFuzzTemplate{
 	{query: `query($b: Boolean!) { users @skip(if: $b) { id } }`},
 	{query: `{ users(where: {name: {equals: LITERAL}}) { id } }`, literals: true},
 	{query: `{ users(where: {id: {equals: LITERAL}}, take: 1) { id } }`, literals: true},
+	{query: `mutation($d: UserCreateInput!) { createUser(data: $d) { id } }`},
+	{query: `mutation($w: UserWhereUniqueInput!, $d: UserUpdateInput!) { updateUser(where: $w, data: $d) { id } }`},
+	{query: `mutation($w: UserWhereUniqueInput!, $c: UserCreateInput!, $u: UserUpdateInput!) { upsertUser(where: $w, create: $c, update: $u) { id } }`},
+	{query: `mutation($w: UserWhereInput!, $d: UserUpdateManyInput!) { updateManyUsers(where: $w, data: $d) { count } }`},
+	{query: `mutation($w: UserWhereInput!) { deleteManyUsers(where: $w) { count } }`},
+	{query: `mutation($w: UserWhereUniqueInput!) { deleteUser(where: $w) { id } }`},
+	{query: `mutation($d: PostCreateInput!) { createPost(data: $d) { id } }`},
 }
 
 type compileFuzzSeed struct {
@@ -100,6 +107,38 @@ func compileFuzzSeeds() []compileFuzzSeed {
 		{14, `{}`, `"private-driver-token"`},
 		{14, `{}`, `"00000000-0000-0000-0000-000000000001"`},
 		{14, `{}`, `99999999999999999999`},
+		{15, `{"d":{"id":"private-driver-token","name":"u"}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"create":[]}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"create":null}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"connect":[{}]}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"create":[{"id":"private-driver-token","title":"t"},{"id":"00000000-0000-0000-0000-000000000002","title":"t"}]}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"connectOrCreate":[{"where":{},"create":{"id":"00000000-0000-0000-0000-000000000002","title":"t"}}]}}}`, ""},
+		{15, `{"d":{"id":"00000000-0000-0000-0000-000000000001","name":"u","posts":{"create":[{"id":"00000000-0000-0000-0000-000000000002","title":"a"},{"id":"00000000-0000-0000-0000-000000000003","title":"b"},{"id":"00000000-0000-0000-0000-000000000004","title":"c"},{"id":"00000000-0000-0000-0000-000000000005","title":"d"}]}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{}}`, ""},
+		{16, `{"w":{},"d":{"name":{"set":"x"}}}`, ""},
+		{16, `{"w":{"id":"private-driver-token"},"d":{"name":{"set":"x"}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"name":{}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"name":{"set":null}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"id":{"set":"private-driver-token"}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"posts":{"update":[{"where":{},"data":{}}]}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"posts":{"deleteMany":[{}]}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"posts":{"updateMany":[{"where":{"AND":[]},"data":{"title":{"set":"x"}}}]}}}`, ""},
+		{16, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"d":{"posts":{"upsert":[{"where":{},"create":{},"update":{}}]}}}`, ""},
+		{17, `{"w":{"id":"00000000-0000-0000-0000-000000000001"},"c":{"id":"00000000-0000-0000-0000-000000000001","name":"u"},"u":{}}`, ""},
+		{17, `{"w":{},"c":{"id":"private-driver-token","name":"u"},"u":{"name":{"set":"x"}}}`, ""},
+		{18, `{"w":{},"d":{"name":{"set":"x"}}}`, ""},
+		{18, `{"w":{"all":true},"d":{}}`, ""},
+		{18, `{"w":{"AND":[]},"d":{"name":{"set":"x"}}}`, ""},
+		{18, `{"w":{"name":{"equals":"private-driver-token"}},"d":{"id":{"set":"private-driver-token"}}}`, ""},
+		{19, `{"w":{}}`, ""},
+		{19, `{"w":{"all":true,"name":{"equals":"private-driver-token"}}}`, ""},
+		{19, `{"w":{"NOT":[{"name":null}]}}`, ""},
+		{20, `{"w":{}}`, ""},
+		{20, `{"w":{"id":"private-driver-token"}}`, ""},
+		{21, `{"d":{"id":"00000000-0000-0000-0000-000000000002","title":"t","author":{"connect":{}}}}`, ""},
+		{21, `{"d":{"id":"private-driver-token","title":"t","author":{"connect":{"id":"00000000-0000-0000-0000-000000000001"}}}}`, ""},
+		{21, `{"d":{"id":"00000000-0000-0000-0000-000000000002","title":"t","author":{"create":{}}}}`, ""},
 	}
 }
 
@@ -175,7 +214,7 @@ func FuzzCompileErrorsAreTypedAndNeverEcho(f *testing.F) {
 				t.Fatalf("a caller-reachable failure was presented as internal: %s (query %q variables %q)", encoded, query, rawVariables)
 			}
 			if failure.Extensions["code"] == "BAD_USER_INPUT" && failure.Message == "GraphQL operation could not be bound" {
-				t.Fatalf("a read-side compile failure kept the generic bind message: %s (query %q variables %q)", encoded, query, rawVariables)
+				t.Fatalf("a compile failure kept the generic bind message: %s (query %q variables %q)", encoded, query, rawVariables)
 			}
 		}
 		if bytes.Contains(encoded, []byte(compileErrorMarker)) {

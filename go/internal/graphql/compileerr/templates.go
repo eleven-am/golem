@@ -17,6 +17,7 @@ var templates = map[templateKey]string{
 	{KindIntegerRange, IntegerPositive}:    "{Subject} on {model} must be between {min} and {max}",
 	{KindIntegerRange, IntegerTakeNonZero}: "{Subject} on {model} must not be 0",
 	{KindIntegerRange, IntegerPlatform}:    "{Subject} on {model} is outside the supported integer range",
+	{KindIntegerRange, IntegerVersion}:     "{Subject} on {model} must be at least 1",
 
 	{KindNegativeTakeRequiresOrderBy, DetailNone}: "{Subject} on {model} is negative and requires orderBy",
 
@@ -36,7 +37,19 @@ var templates = map[templateKey]string{
 	{KindDuplicate, DuplicateField}:    "{Subject} on {model} names a field more than once",
 	{KindDuplicate, DuplicateArgument}: "{Subject} on {model} is given more than once",
 
-	{KindNotAllowedHere, NotAllowedAllAlone}: "{Subject} on {model} must be the only member and Boolean",
+	{KindNotAllowedHere, NotAllowedAllAlone}:                    "{Subject} on {model} must be the only member and Boolean",
+	{KindNotAllowedHere, NotAllowedCreateWhere}:                 "{Subject} on {model} is not accepted by create",
+	{KindNotAllowedHere, NotAllowedBatchRelation}:               "{Subject} on {model} cannot be a relation in an update-many input",
+	{KindNotAllowedHere, NotAllowedVersionedRelation}:           "{Subject} on {model} cannot carry relation writes without per-row expectations",
+	{KindNotAllowedHere, NotAllowedNestedInCreate}:              "{Subject} on {model} is not allowed while creating",
+	{KindNotAllowedHere, NotAllowedNestedToOne}:                 "{Subject} on {model} is not allowed on a to-one relation",
+	{KindNotAllowedHere, NotAllowedNestedNeedsExpectation}:      "{Subject} on {model} requires an expectation because the target model is versioned",
+	{KindNotAllowedHere, NotAllowedMustBeTrue}:                  "{Subject} on {model} must be true",
+	{KindNotAllowedHere, NotAllowedNumericOnly}:                 "{Subject} on {model} is only allowed on numeric fields",
+	{KindNotAllowedHere, NotAllowedVersionedBatch}:              "Batch writes are not available on {model}",
+	{KindNotAllowedHere, NotAllowedAggregateNeedsMeasure}:       "An aggregate on {model} must select at least one measure",
+	{KindNotAllowedHere, NotAllowedKeyNotInBy}:                  "Key {path} on {model} must be listed in by",
+	{KindNotAllowedHere, NotAllowedRelationGroupNeedsDimension}: "Relation grouping on {model} requires a relation dimension in by",
 
 	{KindFieldUnavailable, UnavailableArgument}: "{Subject} on {model} is not available for this operation",
 	{KindFieldUnavailable, UnavailableInput}:    "{Subject} on {model} is not available for this operation",

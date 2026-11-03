@@ -1878,6 +1878,14 @@ carry a numeric range.
 | `Input x on M is not available for this operation` | an unknown or unreadable field |
 | `Field f on M requires a selection set`, `... must not have a selection set` | a selection that does not match the field's type |
 | `Directive @skip requires a Boolean if` | a `@skip` or `@include` without a Boolean `if` |
+| `Input x on M is only allowed on numeric fields`, `... must be true`, `Argument where on M is not accepted by create` | a write operation the field, the relation or the root does not allow |
+| `Input x on M is not allowed while creating`, `... is not allowed on a to-one relation`, `... requires an expectation because the target model is versioned` | a nested write the relation or the target model does not allow |
+| `Argument expectedVersion on M must be at least 1`, `Argument expectation on M must set exactly one member` | an optimistic-concurrency claim that is missing a version or names none or several |
+| `Batch writes are not available on M` | `updateMany` or `deleteMany` on an optimistic-concurrency model |
+| `An aggregate on M must select at least one measure` | an `aggregate` that selects only `__typename` |
+| `Input having.….mode on M is not supported for this field or provider` | `mode` set on `equals`, `not`, `lt`, `lte`, `gt` or `gte`; it applies only to `contains`, `startsWith` and `endsWith` |
+| `Key x on M must be listed in by` | a selected key, an `orderBy` key or a `having` key that `by` does not group |
+| `Relation grouping on M requires a relation dimension in by` | `relationGroupBy` whose `by` names only local fields |
 | `Input exceeds L (N)`, `Selection exceeds L (N)` | the input or selection bound named by `extensions.limit` |
 
 `M` is a model, operation or computed field name from your schema. The message
@@ -1886,8 +1894,14 @@ cannot compile it, because its own contract is inconsistent, the response is
 `INTERNAL_SERVER_ERROR` with `internal server error`, and the cause goes to
 `ReportInternalError`. A subscription that cannot be bound returns the same typed
 error from `Subscribe`; `graphql.PresentError` turns it into this response.
-A refusal raised by the write or aggregate binding itself still reads
-`GraphQL operation could not be bound`.
+
+The same forms cover writes and analytics. A mutation names the input it
+refused (`Input data.name on User must set exactly one member`,
+`Input data.posts.create[1].id on Post is not a valid UUID`); a list
+position is shown as `[n]`. An optimistic-concurrency write adds
+`Argument expectedVersion on M must be at least 1`. `aggregate`, `groupBy` and
+`relationGroupBy` add the forms below. A request refused here has run no SQL, so
+a refused mutation has no effect.
 
 ## Errors you will meet early
 

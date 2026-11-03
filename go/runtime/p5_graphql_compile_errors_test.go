@@ -105,7 +105,7 @@ func compileErrorCases() []compileErrorCase {
 	}
 }
 
-func TestGraphQLReadCompileErrorsAreTypedAndPrecise(t *testing.T) {
+func TestGraphQLCompileErrorsAreTypedAndPrecise(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		assertCompileErrorCases(t, newSocialMutationFixture(t, golem.ModelID{}, nil))
 	})
@@ -124,7 +124,7 @@ func assertCompileErrorCases(t *testing.T, fixture socialMutationFixture) {
 	t.Helper()
 	var begins atomic.Int64
 	harness := newP5SocialGraphQLHarnessWith(t, fixture, compileErrorLimits, func() { begins.Add(1) }, nil)
-	for _, test := range compileErrorCases() {
+	for _, test := range allCompileErrorCases() {
 		t.Run(test.name, func(t *testing.T) {
 			response := harness.server.Execute(context.Background(), graphMutationPrincipal{}, publicgraphql.Request{Query: test.query, Variables: test.variables})
 			if response.Data != nil || len(response.Errors) != 1 {
