@@ -10,6 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
@@ -635,6 +636,9 @@ func (state *mutationState) committed(ctx context.Context, report func(context.C
 	state.after = nil
 	state.mu.Unlock()
 
+	if dirty {
+		commitreport.From(ctx).Committed()
+	}
 	if dirty && invalidate != nil {
 		invalidate()
 	}

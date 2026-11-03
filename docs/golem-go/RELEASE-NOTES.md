@@ -44,6 +44,18 @@ deadline where you resolve the principal, or mark API-key principals and set
 `RevalidateEvery`; see the GUIDE section "The socket deadline". New public API:
 `golem.WithoutCredentialExpiry` and `golem.HasNoCredentialExpiry`.
 
+**Partial commits are never reported as clean failures.** A GraphQL response
+that has errors after the operation committed at least one write now carries
+`extensions.golem.commit`: `"PARTIAL"` when a write was committed, or
+`"UNKNOWN"` when a `COMMIT` failed without saying whether the database applied
+it. A failure that committed nothing, a no-op update and a response without
+errors carry no extension, and their bytes are unchanged. The report is one
+request-scoped record, shared with `COMMITTED_RESULT_UNAVAILABLE`: a response
+whose error says `committed: true` is always `PARTIAL`. A client that retried
+every errored mutation must stop retrying a response that carries the
+extension; see the GUIDE section "Partial commits are never reported as clean
+failures".
+
 ## go/v0.8.0
 
 **GraphQL subscriptions no longer report a cancelled operation as an internal
