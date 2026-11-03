@@ -224,6 +224,19 @@ of reading `could not be bound`. A failure a valid document cannot cause is
 A `having` comparison that sets `mode` on `equals`, `not`, `lt`, `lte`, `gt` or `gte` is now refused (`Input having.key.title.mode on Post is not supported for this field or provider`). `mode` applies only to `contains`, `startsWith` and `endsWith`. A request that sets it on those operators was accepted before, with `mode` ignored, so an `insensitive` equality compared case-sensitively; it is now refused with `BAD_USER_INPUT`.
 Nothing runs before the refusal, so a refused mutation has no committed effect.
 
+**The generated schema no longer advertises types no operation can reach.** The
+SDL used to carry the whole input family of every model whatever you enabled:
+a model without `create` still had `PostCreateInput`, an application without
+analytics still had every `*AnalyticsFilter`, and every scalar filter and
+update envelope was emitted even when no field used it. `golem generate` now
+keeps only the types a client can reach from `Query`, `Mutation` and
+`Subscription` through fields, arguments and input fields, and drops the rest.
+Introspection and `server.SDL()` describe the smaller schema, and a client
+generator no longer produces dead types. Nothing a request could send before is
+refused now. A type that is reachable stays byte for byte as it was, and
+`@oneOf` is declared only when an input uses it. Regenerate to get the smaller
+schema.
+
 ---
 
 ## go/v0.7.3

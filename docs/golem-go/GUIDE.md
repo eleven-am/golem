@@ -1092,6 +1092,12 @@ operation. They describe exactly the SDL that `server.SDL()` returns:
 - An operation you did not generate is absent from both.
 - A field that policy can mask is present in both, because masking happens per
   row at read time, not in the schema.
+- A type no operation can reach is absent from both. The generated schema keeps
+  the types reachable from `Query`, `Mutation` and `Subscription` through
+  fields, arguments and input fields. Turning an operation off, such as
+  `create` on a model or analytics, removes the inputs only that operation
+  used. For example, a model without `create` has no `PostCreateInput` unless
+  another input nests it.
 
 An operation that selects only `__schema`, `__type` or `__typename` roots
 still resolves the principal through your `ResolvePrincipal`. A principal it

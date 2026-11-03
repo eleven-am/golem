@@ -605,16 +605,20 @@ func TestGraphQLNestedInputCompileAndSchemaFixturesExposeOnlyLegalCardinalityOpe
 
 	requireFieldNames(t, requireDefinition(t, parsed, "UUIDUpdateOperationsInput"), "set")
 	requireFieldNames(t, requireDefinition(t, parsed, "NullableUUIDUpdateOperationsInput"), "set", "setNull")
-	requireFieldNames(t, requireDefinition(t, parsed, "BigIntUpdateOperationsInput"), "decrement", "increment", "set")
+	preludeSchema, err := gqlparser.LoadSchema(astSource(prelude()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "BigIntUpdateOperationsInput"), "decrement", "increment", "set")
 	if requireDefinition(t, parsed, "UUIDUpdateOperationsInput").Fields.ForName("setNull") != nil {
 		t.Fatal("non-null UUID update envelope exposes setNull")
 	}
 
-	requireFieldNames(t, requireDefinition(t, parsed, "BooleanFilter"), "equals", "in", "not", "notIn")
-	requireFieldNames(t, requireDefinition(t, parsed, "StringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "lt", "lte", "mode", "not", "notIn", "startsWith")
-	requireFieldNames(t, requireDefinition(t, parsed, "NullableStringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "isNull", "lt", "lte", "mode", "not", "notIn", "startsWith")
-	requireFieldNames(t, requireDefinition(t, parsed, "JSONFilter"), "arrayContains", "arrayEndsWith", "arrayStartsWith", "equals", "gt", "gte", "lt", "lte", "mode", "not", "path", "stringContains", "stringEndsWith", "stringStartsWith")
-	if parsed.Types["BytesListFilter"] != nil || parsed.Types["NullableBytesListFilter"] != nil {
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "BooleanFilter"), "equals", "in", "not", "notIn")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "StringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "lt", "lte", "mode", "not", "notIn", "startsWith")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "NullableStringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "isNull", "lt", "lte", "mode", "not", "notIn", "startsWith")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "JSONFilter"), "arrayContains", "arrayEndsWith", "arrayStartsWith", "equals", "gt", "gte", "lt", "lte", "mode", "not", "path", "stringContains", "stringEndsWith", "stringStartsWith")
+	if preludeSchema.Types["BytesListFilter"] != nil || preludeSchema.Types["NullableBytesListFilter"] != nil {
 		t.Fatal("SDL exposes scalar-list operators for provider-ineligible Bytes elements")
 	}
 

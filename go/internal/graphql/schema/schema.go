@@ -33,8 +33,20 @@ func validateOptimisticConcurrencyProjection(model ir.ModelDeclIR, contract ir.M
 }
 
 func Build(compilation ir.CompilationIR) (Document, error) {
+	assembled, err := assemble(compilation)
+	if err != nil {
+		return Document{}, err
+	}
+	pruned, err := pruneUnreachable(assembled)
+	if err != nil {
+		return Document{}, err
+	}
+	return Document{SDL: pruned}, nil
+}
+
+func assemble(compilation ir.CompilationIR) (string, error) {
 	if compilation.Contract.GraphQLABIVersion == 0 {
-		return Document{}, fmt.Errorf("GraphQL ContractIR is not normalized")
+		return "", fmt.Errorf("GraphQL ContractIR is not normalized")
 	}
 	models := make(map[ir.ModelID]ir.ModelDeclIR, len(compilation.Model.Models))
 	for _, model := range compilation.Model.Models {
@@ -58,10 +70,10 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 		}
 		model, ok := models[contract.ModelID]
 		if !ok {
-			return Document{}, fmt.Errorf("GraphQL contract references unknown model %s", contract.ModelID)
+			return "", fmt.Errorf("GraphQL contract references unknown model %s", contract.ModelID)
 		}
 		if err := validateOptimisticConcurrencyProjection(model, contract); err != nil {
-			return Document{}, err
+			return "", err
 		}
 		fieldContracts := make(map[ir.FieldID]ir.FieldContractIR, len(contract.Fields))
 		for _, field := range contract.Fields {
@@ -85,27 +97,27 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 	for _, view := range views {
 		section, err := renderModel(view, models, contractByModel, enumByID)
 		if err != nil {
-			return Document{}, err
+			return "", err
 		}
 		sections = append(sections, section...)
 		analytics, err := renderAnalyticsModel(view, models, contractByModel, enumByID)
 		if err != nil {
-			return Document{}, err
+			return "", err
 		}
 		sections = append(sections, analytics...)
 	}
 	withoutInputs, err := allRelationWithoutInputTypes(views, models, contractByModel, enumByID, relations)
 	if err != nil {
-		return Document{}, err
+		return "", err
 	}
 	sections = append(sections, withoutInputs...)
 	sections = append(sections, allRelationFilterTypes(views, contractByModel)...)
 	query, mutation, subscription, err := renderRoots(views, compilation)
 	if err != nil {
-		return Document{}, err
+		return "", err
 	}
 	if query == "" {
-		return Document{}, fmt.Errorf("generated GraphQL schema requires at least one enabled query root")
+		return "", fmt.Errorf("generated GraphQL schema requires at least one enabled query root")
 	}
 	sections = append(sections, query)
 	if mutation != "" {
@@ -114,12 +126,12 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 	if subscription != "" {
 		events, eventErr := renderEventTypes(views, enumByID)
 		if eventErr != nil {
-			return Document{}, eventErr
+			return "", eventErr
 		}
 		sections = append(sections, events...)
 		sections = append(sections, subscription)
 	}
-	return Document{SDL: strings.Join(sections, "\n\n") + "\n"}, nil
+	return strings.Join(sections, "\n\n") + "\n", nil
 }
 
 func prelude() string {
