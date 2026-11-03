@@ -47,29 +47,29 @@ func newCDCEventEncoder(registry *schema.Registry, history *eventSchemaHistory, 
 	}, nil
 }
 
-func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.EncodeInput) (events.Notice, error) {
+func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.EncodeInput) (eventcdc.Encoded, error) {
 	if encoder == nil || encoder.registry == nil || encoder.history == nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_ENCODER_CONFIG: encoder is incomplete")
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_ENCODER_CONFIG: encoder is incomplete")
 	}
 	if ctx == nil || ctx.Err() != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_ENCODER_INPUT: context is unavailable")
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_ENCODER_INPUT: context is unavailable")
 	}
 	if err := validateCDCEncodeInput(encoder.registry, input); err != nil {
-		return events.Notice{}, err
+		return eventcdc.Encoded{}, err
 	}
 
 	modelID := policyir.ModelID(input.Model)
 	requirement, eventSchema, err := cdcFactRequirement(encoder.registry, modelID, input.Action)
 	if err != nil {
-		return events.Notice{}, err
+		return eventcdc.Encoded{}, err
 	}
 	before, err := decodeCDCExactImage(encoder.registry, modelID, input.Before)
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_IMAGE: before: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_IMAGE: before: %w", err)
 	}
 	after, err := decodeCDCExactImage(encoder.registry, modelID, input.After)
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_IMAGE: after: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_IMAGE: after: %w", err)
 	}
 
 	fact, err := mutationfact.NewV2(
@@ -83,24 +83,24 @@ func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.En
 		after,
 	)
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_FACT: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_FACT: %w", err)
 	}
 	row, err := fact.OutboxRow(input.RecordedAt)
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_FACT: canonical row: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_FACT: canonical row: %w", err)
 	}
 	envelope, err := eventcodec.EncodeStoredRow(row, encoder.history, encoder.limits)
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_EVENT: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_EVENT: %w", err)
 	}
 	if envelope.EventID() != input.EventID || envelope.CausationID() != input.CausationID || envelope.TransactionOrdinal() != input.Ordinal || envelope.ModelID() != input.Model || envelope.Action() != input.Action || envelope.ResolvedEventSchemaDigest() != golem.EventSchemaDigest(eventSchema) {
-		return events.Notice{}, fmt.Errorf("P7_CDC_EVENT: canonical metadata differs from injected input")
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_EVENT: canonical metadata differs from injected input")
 	}
 	notice, err := eventvalue.NewRoutedNotice(envelope.EventID(), envelope.GenerationDigest(), envelope.ResolvedEventSchemaDigest(), envelope.ModelID(), envelope.Action(), envelope.CausationID(), envelope.TransactionOrdinal(), envelope.Encoded())
 	if err != nil {
-		return events.Notice{}, fmt.Errorf("P7_CDC_EVENT: sealed notice: %w", err)
+		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_EVENT: sealed notice: %w", err)
 	}
-	return notice, nil
+	return eventcdc.Encoded{Notice: notice, Fact: row}, nil
 }
 
 func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInput) error {

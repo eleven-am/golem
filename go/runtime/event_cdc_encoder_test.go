@@ -20,9 +20,14 @@ func TestProductionCDCEncoderUsesCanonicalV2FactAndEventPath(t *testing.T) {
 	encoder, history := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "created")
 	input := testCDCEncodeInput(fixture, golem.EventCreated, nil, &after)
-	notice, err := encoder.EncodeCDC(context.Background(), input)
+	encoded, err := encoder.EncodeCDC(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
+	}
+	notice := encoded.Notice
+	stored, err := eventcodec.EncodeStoredRow(encoded.Fact, history, eventcodec.Limits{})
+	if err != nil || !bytes.Equal(stored.Encoded(), notice.Encoded()) || encoded.Fact.EventID != golem.UUID(input.EventID).String() || encoded.Fact.CausationID != golem.UUID(input.CausationID).String() || !encoded.Fact.RecordedAt.Equal(input.RecordedAt) {
+		t.Fatalf("CDC outbox fact is not the canonical row behind the notice: %v", err)
 	}
 	if !notice.Valid() || notice.EventID() != input.EventID || notice.CausationID() != input.CausationID || notice.TransactionOrdinal() != input.Ordinal || notice.ModelID() != input.Model || notice.Action() != input.Action {
 		t.Fatalf("notice metadata=%#v", notice)
@@ -58,7 +63,7 @@ func TestProductionCDCReplayKeepsExactEventIDAndCanonicalBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.EventID() != second.EventID() || !bytes.Equal(first.Encoded(), second.Encoded()) {
+	if first.Notice.EventID() != second.Notice.EventID() || !bytes.Equal(first.Notice.Encoded(), second.Notice.Encoded()) || !bytes.Equal(first.Fact.Metadata, second.Fact.Metadata) {
 		t.Fatal("stable CDC source transaction replay changed event identity or canonical bytes")
 	}
 }
@@ -88,11 +93,11 @@ func TestProductionCDCEncoderCapturesCompilerOwnedDeleteSnapshot(t *testing.T) {
 	encoder, history := testCDCEventEncoder(t, fixture)
 	before := testCDCPostRow(t, fixture, false, "deleted")
 	input := testCDCEncodeInput(fixture, golem.EventDeleted, &before, nil)
-	notice, err := encoder.EncodeCDC(context.Background(), input)
+	encoded, err := encoder.EncodeCDC(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := eventcodec.Decode(notice.Encoded(), history, eventcodec.Limits{})
+	envelope, err := eventcodec.Decode(encoded.Notice.Encoded(), history, eventcodec.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}

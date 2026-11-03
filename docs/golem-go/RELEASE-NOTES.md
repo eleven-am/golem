@@ -246,6 +246,31 @@ refused now. A type that is reachable stays byte for byte as it was, and
 `@oneOf` is declared only when an input uses it. Regenerate to get the smaller
 schema.
 
+**CDC deletes are decided like ordinary deletes.** A CDC batch is now recorded
+in `_golem_outbox` before it is published, so a delete whose read policy reaches
+a related parent consults the facts of the same source transaction, exactly as
+a delete written through golem does. Before, every such CDC delete ended the
+subscriber's stream with `GOLEM_SUBSCRIPTION_RESYNC`; now it is delivered or
+suppressed exactly, and resyncs only when a parent the same source transaction
+created or updated decides it, or when retention has already removed the batch.
+- The batch's facts and a `delivered` delivery row are written in one database
+  transaction, so the outbox publisher never publishes a CDC batch a second time.
+- A replayed batch records nothing new and is published again. A replay whose
+  facts differ from the recorded ones fails with `GOLEM_CDC_INVALID` and is not
+  published.
+- A batch with more facts than `MutationLimits.MaxFacts` or more fact bytes than
+  `MutationLimits.MaxOutboxBytes` fails with `GOLEM_CDC_INVALID` instead of
+  being published.
+- Batches the adapter correlates with a golem transaction are still suppressed
+  and are not recorded.
+
+**For CDC adapter authors: the emitter now writes to golem's database.** Each
+non-correlated batch is recorded before `Emit` publishes it, so the database
+the App opened must accept writes to `_golem_outbox` and
+`_golem_outbox_delivery`. If recording fails, `Emit` returns
+`GOLEM_CDC_UNAVAILABLE` and publishes nothing; keep the checkpoint and retry, as
+for a transport failure.
+
 ---
 
 ## go/v0.7.3

@@ -112,3 +112,58 @@ func testOutboxRow(ordinal int64) OutboxRow {
 		RecordedAt:            time.Unix(1_700_000_000, 123_456_789),
 	}
 }
+
+func TestRenderIdempotentInsertsIgnoreExistingFactsOnly(t *testing.T) {
+	rows := []OutboxRow{testOutboxRow(1), testOutboxRow(2)}
+	rows[1].EventID = "00000000-0000-0000-0000-000000000003"
+	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
+		plain, err := RenderInsertsAt(provider, "closed_system", rows, OutboxColumnCount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idempotent, err := RenderIdempotentInsertsAt(provider, "closed_system", rows, OutboxColumnCount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plain) != 2 || len(idempotent) != 2 {
+			t.Fatalf("provider %d chunked %d/%d statements", provider, len(plain), len(idempotent))
+		}
+		for index := range plain {
+			if strings.Contains(plain[index].SQL(), "ON CONFLICT") || idempotent[index].SQL() != plain[index].SQL()+" ON CONFLICT DO NOTHING" {
+				t.Fatalf("provider %d statement %d plain=%q idempotent=%q", provider, index, plain[index].SQL(), idempotent[index].SQL())
+			}
+		}
+	}
+}
+
+func TestRenderDeliveredInsertRecordsAnAlreadyDeliveredCausation(t *testing.T) {
+	rows := []OutboxRow{testOutboxRow(1), testOutboxRow(2)}
+	rows[1].RecordedAt = time.Unix(1_600_000_000, 0)
+	for provider, now := range map[policyir.Provider]string{
+		policyir.ProviderSQLite:     `CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)`,
+		policyir.ProviderPostgreSQL: `clock_timestamp()`,
+	} {
+		statement, err := RenderDeliveredInsertAt(provider, "closed_system", rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sql := statement.SQL()
+		if !strings.Contains(sql, `"closed_system"."_golem_outbox_delivery"`) || !strings.Contains(sql, `'delivered'`) || strings.Count(sql, now) != 3 ||
+			!strings.Contains(sql, `"delivered_at"`) || strings.Contains(sql, `"lease_token"`) || !strings.HasSuffix(sql, `ON CONFLICT ("causation_id") DO NOTHING`) {
+			t.Fatalf("provider %d delivered insert=%q", provider, sql)
+		}
+		args := statement.Args()
+		if len(args) != 2 || args[0] != rows[0].CausationID {
+			t.Fatalf("provider %d args=%#v", provider, args)
+		}
+		first := rows[1].RecordedAt.UTC()
+		if provider == policyir.ProviderSQLite && args[1] != first.UnixMicro() || provider == policyir.ProviderPostgreSQL && !args[1].(time.Time).Equal(first) {
+			t.Fatalf("provider %d first_recorded_at=%v", provider, args[1])
+		}
+	}
+	foreign := append([]OutboxRow(nil), rows...)
+	foreign[1].CausationID = "00000000-0000-0000-0000-000000000004"
+	if _, err := RenderDeliveredInsertAt(policyir.ProviderPostgreSQL, "closed_system", foreign); err == nil {
+		t.Fatal("mixed causations produced one delivered row")
+	}
+}

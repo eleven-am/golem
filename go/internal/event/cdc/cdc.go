@@ -14,10 +14,20 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 )
 
 type Encoder interface {
-	EncodeCDC(context.Context, EncodeInput) (events.Notice, error)
+	EncodeCDC(context.Context, EncodeInput) (Encoded, error)
+}
+
+type Encoded struct {
+	Notice events.Notice
+	Fact   mutationfact.OutboxRow
+}
+
+type Recorder interface {
+	RecordCDC(context.Context, []mutationfact.OutboxRow) error
 }
 
 type Correlator interface {
@@ -52,6 +62,7 @@ type Config struct {
 	Adapter       events.CDCAdapter
 	Transport     events.EventTransport
 	Encoder       Encoder
+	Recorder      Recorder
 	Observer      events.Observer
 	MaxBatchBytes int
 }
@@ -59,7 +70,7 @@ type Config struct {
 type Emitter struct{ config Config }
 
 func NewEmitter(config Config) (*Emitter, error) {
-	if config.Adapter == nil || events.ValidateCDCIdentity(config.Adapter.Identity()) != nil || config.Transport == nil || config.Encoder == nil {
+	if config.Adapter == nil || events.ValidateCDCIdentity(config.Adapter.Identity()) != nil || config.Transport == nil || config.Encoder == nil || config.Recorder == nil {
 		return nil, events.Failure(events.CodeCDCInvalid)
 	}
 	if config.MaxBatchBytes == 0 {
@@ -92,23 +103,32 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 	}
 	causation := deriveCausationID(identity, owned.SourceTransactionID)
 	notices := make([]events.Notice, len(owned.Changes))
+	facts := make([]mutationfact.OutboxRow, len(owned.Changes))
 	for index, change := range owned.Changes {
 		eventID := deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)
-		notice, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
+		encoded, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
 			Adapter: identity, SourceTransactionID: owned.SourceTransactionID,
 			RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: eventID, CausationID: causation,
 			Ordinal: change.Ordinal, Model: change.Model, Action: change.Action,
 			Before: cloneRowPointer(change.Before), After: cloneRowPointer(change.After),
 		})
-		if encodeErr != nil || !notice.Valid() || notice.EventID() != eventID || notice.CausationID() != causation || notice.TransactionOrdinal() != change.Ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
+		notice, fact := encoded.Notice, encoded.Fact
+		if encodeErr != nil || !notice.Valid() || !factMatches(fact, eventID, causation, change.Ordinal) || notice.EventID() != eventID || notice.CausationID() != causation || notice.TransactionOrdinal() != change.Ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
 			return events.Failure(events.CodeCDCInvalid)
 		}
 		notices[index] = notice
+		facts[index] = fact
 		events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCReceive, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
 	}
 	batch, err := eventvalue.NewEventBatchBounded(causation, notices, emitter.config.MaxBatchBytes)
 	if err != nil {
 		return events.Failure(events.CodeCDCInvalid)
+	}
+	if err := emitter.config.Recorder.RecordCDC(ctx, facts); err != nil {
+		if code, ok := events.CodeOf(err); ok && code == events.CodeCDCInvalid {
+			return events.Failure(events.CodeCDCInvalid)
+		}
+		return events.Failure(events.CodeCDCUnavailable)
 	}
 	if err := emitter.config.Transport.Publish(ctx, batch); err != nil {
 		return events.Failure(events.CodeCDCUnavailable)
@@ -117,6 +137,10 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 		events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCAck, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
 	}
 	return nil
+}
+
+func factMatches(fact mutationfact.OutboxRow, eventID golem.EventID, causation golem.CausationID, ordinal uint32) bool {
+	return fact.EventID == golem.UUID(eventID).String() && fact.CausationID == golem.UUID(causation).String() && fact.TransactionOrdinal == int64(ordinal)
 }
 
 func cloneAndValidate(input events.CDCBatchInput) (events.CDCBatchInput, error) {
