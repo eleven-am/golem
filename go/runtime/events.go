@@ -111,6 +111,7 @@ type callerEventSubscription[P any] struct {
 	originalWhere  *policyir.Condition
 	metadata       golem.EventModelMetadata
 	entitySelected bool
+	judge          *eventJudgeSpec
 }
 
 type callerEventStream[E any] struct{ stream *subscription.Stream[any] }
@@ -242,6 +243,7 @@ func callerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 	state := &callerEventSubscription[P]{
 		context: ctx, principal: principal, model: model, readRequest: readRequest,
 		originalWhere: originalWhere, metadata: metadata, entitySelected: entitySelected,
+		judge: caller.app.newEventJudgeSpec(initial, model, metadata, originalWhere),
 	}
 	release, err := caller.app.reserveSubscription(principal)
 	if err != nil {
@@ -437,12 +439,15 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 		Source: func(ctx context.Context, request events.Subscription) (events.Stream, error) {
 			return app.eventTransport.Subscribe(ctx, request)
 		},
-		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any) (subscription.Evaluation[any], error) {
+		PrepareNotice: func(ctx context.Context, notice events.Notice, retained []any) any {
+			return app.prepareEventNotice(ctx, notice, metadata, retained)
+		},
+		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any, shared any) (subscription.Evaluation[any], error) {
 			state, ok := retained.(*callerEventSubscription[P])
 			if !ok || state == nil {
 				return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 			}
-			return app.evaluateEvent(ctx, notice, state)
+			return app.evaluateEvent(ctx, state, shared)
 		},
 		Clone:    func(value any) (any, error) { return value, nil },
 		Observer: app.eventObserver,
@@ -454,7 +459,7 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 	return hub, nil
 }
 
-func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, state *callerEventSubscription[P]) (subscription.Evaluation[any], error) {
+func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubscription[P], sharedValue any) (subscription.Evaluation[any], error) {
 	if ctx == nil || state == nil || state.context == nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
@@ -467,12 +472,22 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 	if state.context.Err() != nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionCancelled)
 	}
-	envelope, err := eventcodec.Decode(notice.Encoded(), app.eventSchemas, eventcodec.Limits{MaxEncodedBytes: app.eventLimits.MaxEncodedEventBytes})
-	if err != nil || !eventNoticeMatchesEnvelope(notice, envelope) {
+	shared, ok := sharedValue.(*eventNoticeShared)
+	if !ok || shared == nil || shared.failed {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
+	envelope := shared.envelope
 	if envelope.ResolvedEventSchemaDigest() != state.metadata.EventSchemaDigest() || envelope.ModelID() != state.metadata.ModelID() {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
+	}
+	if state.judge != nil && (envelope.Action() == golem.EventCreated || envelope.Action() == golem.EventUpdated) {
+		verdict, verdictErr := shared.verdict(state.judge)
+		if verdictErr != nil {
+			return subscription.Evaluation[any]{}, verdictErr
+		}
+		if verdict == deleteFalse {
+			return subscription.Suppress[any](events.SuppressionFiltered), nil
+		}
 	}
 	fresh, err := app.ForPrincipal(eventContext, state.principal)
 	if err != nil {

@@ -23,7 +23,8 @@ const (
 type SourceClassifier func(error) SourceDisposition
 
 type Evaluator[T any] func(context.Context, events.Notice, SubscriberKey) (Evaluation[T], error)
-type StatefulEvaluator[T any] func(context.Context, events.Notice, SubscriberKey, any) (Evaluation[T], error)
+type StatefulEvaluator[T any] func(ctx context.Context, notice events.Notice, key SubscriberKey, retained any, shared any) (Evaluation[T], error)
+type NoticePreparer func(ctx context.Context, notice events.Notice, retained []any) any
 type Cloner[T any] func(T) (T, error)
 
 type Evaluation[T any] struct {
@@ -46,6 +47,7 @@ type Config[T any] struct {
 	ClassifySource SourceClassifier
 	Evaluate       Evaluator[T]
 	EvaluateState  StatefulEvaluator[T]
+	PrepareNotice  NoticePreparer
 	Clone          Cloner[T]
 	Observer       events.Observer
 }
@@ -100,6 +102,7 @@ type evaluationJob[T any] struct {
 	state   any
 	members []uint64
 	runID   uint64
+	shared  any
 	done    chan struct{}
 }
 
@@ -125,6 +128,9 @@ func NewModelHub[T any](config Config[T]) (*ModelHub[T], error) {
 	}
 	if (config.Evaluate == nil) == (config.EvaluateState == nil) {
 		return nil, events.Failf(events.CodeEventConfig, "exactly one of Evaluate and EvaluateState must be set")
+	}
+	if config.PrepareNotice != nil && config.EvaluateState == nil {
+		return nil, events.Failf(events.CodeEventConfig, "PrepareNotice requires EvaluateState")
 	}
 	if config.Clone == nil {
 		return nil, events.Failf(events.CodeEventConfig, "Clone must not be nil")
@@ -303,8 +309,10 @@ func (hub *ModelHub[T]) dispatchLoop(run *hubRun[T]) {
 			return
 		case notice := <-run.input:
 			groups := hub.groupsFor(run.id, notice)
+			shared := hub.prepare(run.ctx, notice, groups)
 			pending := make([]chan struct{}, 0, len(groups))
 			for _, job := range groups {
+				job.shared = shared
 				select {
 				case <-run.ctx.Done():
 					return
@@ -382,6 +390,22 @@ func (hub *ModelHub[T]) evaluationWorker(run *hubRun[T]) {
 	}
 }
 
+func (hub *ModelHub[T]) prepare(ctx context.Context, notice events.Notice, groups []evaluationJob[T]) (shared any) {
+	if hub.config.PrepareNotice == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			shared = nil
+		}
+	}()
+	retained := make([]any, len(groups))
+	for index := range groups {
+		retained[index] = groups[index].state
+	}
+	return hub.config.PrepareNotice(ctx, notice, retained)
+}
+
 // evaluate is the process-safety boundary around per-subscriber application
 // work. In production EvaluateState rebuilds the caller and invokes generated
 // policy factories, so a panic here is an untrusted policy-build failure, not
@@ -394,7 +418,7 @@ func (hub *ModelHub[T]) evaluate(ctx context.Context, job evaluationJob[T]) (res
 		}
 	}()
 	if hub.config.EvaluateState != nil {
-		return hub.config.EvaluateState(ctx, job.notice, job.key, job.state)
+		return hub.config.EvaluateState(ctx, job.notice, job.key, job.state, job.shared)
 	}
 	return hub.config.Evaluate(ctx, job.notice, job.key)
 }

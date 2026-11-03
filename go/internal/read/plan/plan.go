@@ -253,6 +253,24 @@ func System(request readir.Request, registry *schema.Registry, limits Limits) (P
 	return build(request, registry, nil, limits, true, 0, limits.MaxTake)
 }
 
+func SystemSnapshot(request readir.Request, registry *schema.Registry, limits Limits, tree dependency.Tree) (Plan, error) {
+	result, err := System(request, registry, limits)
+	if err != nil {
+		return Plan{}, err
+	}
+	planned := make(map[policyir.FieldID]int, len(result.fields))
+	for index, field := range result.fields {
+		planned[field.id] = index
+	}
+	if err := hydrateDependencies(&result, tree, registry, nil, limits, true, true, 0, planned); err != nil {
+		return Plan{}, err
+	}
+	if len(result.fields)+len(result.hydrations) > limits.MaxSelected {
+		return Plan{}, failLimit(golem.LimitSelectedFields, limits.MaxSelected, result.model, "snapshot fields exceed the limit")
+	}
+	return result, nil
+}
+
 // WithAdditionalWhere returns a cloned plan whose already-authorized predicate
 // is conjoined with one runtime-owned correlation predicate. The additional
 // predicate must target the plan model; callers cannot use it to reopen or
@@ -593,7 +611,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		if dependencyErr != nil {
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "field-mask dependencies could not be derived", dependencyErr)
 		}
-		if hydrationErr := hydrateDependencies(&result, dependencies.Dependencies(), registry, policies, limits, system, depth, planned); hydrationErr != nil {
+		if hydrationErr := hydrateDependencies(&result, dependencies.Dependencies(), registry, policies, limits, system, false, depth, planned); hydrationErr != nil {
 			return Plan{}, hydrationErr
 		}
 	}
@@ -609,7 +627,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 // hydrateDependencies adds the exact private record graph required by mask
 // evaluation. Public relation plans are never reused here: their caller-owned
 // where/skip/take/distinct shape must not influence authorization.
-func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system bool, depth int, planned map[policyir.FieldID]int) error {
+func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system, toOneOnly bool, depth int, planned map[policyir.FieldID]int) error {
 	if tree.ModelID() != plan.model {
 		return fail(CodePolicy, plan.model, policyir.FieldID{}, "field-mask dependency root does not match the read model", nil)
 	}
@@ -637,11 +655,14 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 			if !ok || policyir.ModelID(endpoint.TargetModelID()) != target {
 				return fail(CodePolicy, plan.model, entry.FieldID(), "relation dependency does not match the schema endpoint", nil)
 			}
+			if toOneOnly && endpoint.Cardinality() == compilerir.RelationMany {
+				continue
+			}
 			childCap := 0
 			if endpoint.Cardinality() == compilerir.RelationMany {
 				childCap = limits.MaxRelationFanout
 			}
-			child, err := dependencyReadPlan(entry.Children(), registry, policies, limits, system, depth+1, childCap)
+			child, err := dependencyReadPlan(entry.Children(), registry, policies, limits, system, toOneOnly, depth+1, childCap)
 			if err != nil {
 				return err
 			}
@@ -659,7 +680,7 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 	return nil
 }
 
-func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system bool, depth, configuredRowCap int) (Plan, error) {
+func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system, toOneOnly bool, depth, configuredRowCap int) (Plan, error) {
 	model := tree.ModelID()
 	if model == (policyir.ModelID{}) || depth > limits.MaxRelationDepth {
 		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only relation depth limit exceeded")
@@ -690,7 +711,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		result.resultLimit = effectiveRowCap
 	}
 	planned := make(map[policyir.FieldID]int)
-	if err := hydrateDependencies(&result, tree, registry, policies, limits, system, depth, planned); err != nil {
+	if err := hydrateDependencies(&result, tree, registry, policies, limits, system, toOneOnly, depth, planned); err != nil {
 		return Plan{}, err
 	}
 	modelFact, ok := registry.Model(golem.ModelID(model))
