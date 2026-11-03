@@ -510,7 +510,7 @@ func TestDeleteEventNestedParentUpdatedInSameTransactionResyncs(t *testing.T) {
 	})
 }
 
-func TestDeleteEventHopTargetPolicyUnavailableSuppresses(t *testing.T) {
+func TestDeleteEventHopTargetPolicyUnavailableEndsStream(t *testing.T) {
 	broken := &atomic.Bool{}
 	runDeleteEvalProfiles(t, deleteEvalPolicies{
 		postUnavailable: broken,
@@ -524,8 +524,7 @@ func TestDeleteEventHopTargetPolicyUnavailableSuppresses(t *testing.T) {
 		fixture.app.InvalidatePolicies()
 		fixture.removeComment(t, deleteEvalOnPub)
 		fixture.commit(t, 230, fixture.commentFact(t, 231, 1, deleteEvalOnPub, deleteEvalPublished))
-		fixture.awaitSuppression(t, events.SuppressionPolicyUnavailable)
-		expectDeleteSilent(t, stream)
+		expectStreamEnds(t, stream, events.CodeSubscriptionRevalidation)
 		if fixture.suppressions(events.SuppressionDeletionUnverifiable) != 0 {
 			t.Fatal("an unavailable hop policy was reported unverifiable")
 		}

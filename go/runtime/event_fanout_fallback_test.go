@@ -285,3 +285,20 @@ func TestEventForARowThatNoLongerExistsSuppressesEveryMemberWithoutAnotherRead(t
 		}
 	})
 }
+
+func TestEventPolicyUnavailableMidStreamEndsStreamWithRevalidation(t *testing.T) {
+	broken := &atomic.Bool{}
+	runDeleteEvalProfiles(t, deleteEvalPolicies{
+		postUnavailable: broken,
+		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
+			return fields.commentPost.Is(fields.postTitle.Eq("published")), true
+		},
+	}, func(t *testing.T, fixture deleteEvalFixture) {
+		broken.Store(false)
+		stream := fixture.subscribeComments(t, "alice")
+		broken.Store(true)
+		fixture.app.InvalidatePolicies()
+		fixture.publishCommentEvent(t, golem.EventUpdated, 1, deleteEvalUUID(deleteEvalOnPub), deleteEvalUUID(deleteEvalPublished), "edited")
+		expectStreamEnds(t, stream, events.CodeSubscriptionRevalidation)
+	})
+}

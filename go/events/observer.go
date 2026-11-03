@@ -52,7 +52,6 @@ const (
 	SuppressionEntityAbsent         SuppressionReason = "entity_absent"
 	SuppressionDeleteFiltered       SuppressionReason = "delete_filtered"
 	SuppressionCorrelatedGolemWrite SuppressionReason = "correlated_golem_write"
-	SuppressionPolicyUnavailable    SuppressionReason = "policy_unavailable"
 	SuppressionDeleteOverDelivered  SuppressionReason = "delete_over_delivered"
 )
 
@@ -123,7 +122,7 @@ func validOutcome(outcome Outcome) bool {
 func validSuppressionReason(reason SuppressionReason) bool {
 	switch reason {
 	case "", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable,
-		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite, SuppressionPolicyUnavailable,
+		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite,
 		SuppressionDeleteOverDelivered:
 		return true
 	default:
