@@ -209,7 +209,7 @@ func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *socia
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInitPayload()}); err != nil {
 		t.Fatal(err)
 	}
 	var frame map[string]any
@@ -1570,4 +1570,8 @@ func settleFailureGoroutines() {
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func liveInitPayload() map[string]any {
+	return map[string]any{"golem": map[string]any{"protocol": 1, "contract": social.GolemGeneratedSchemaBundle().Contract().Fingerprint().String()}}
 }

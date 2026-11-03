@@ -184,7 +184,7 @@ func assertResponseOrderSubscription(t *testing.T, application *social.App[socia
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveExtensions()}); err != nil {
 		t.Fatal(err)
 	}
 	readWSFrame(t, connection, "connection_ack")

@@ -132,6 +132,14 @@ func encodeResponseInto(buffer *bytes.Buffer, response Response) error {
 		buffer.WriteString(`,"errors":`)
 		buffer.Write(failures)
 	}
+	if len(response.Extensions) != 0 {
+		extensions, err := json.Marshal(response.Extensions)
+		if err != nil {
+			return err
+		}
+		buffer.WriteString(`,"extensions":`)
+		buffer.Write(extensions)
+	}
 	buffer.WriteByte('}')
 	return nil
 }

@@ -20,6 +20,8 @@ import (
 
 type sseAuthKey struct{}
 
+var sseTicksBody = string(liveBody("subscription { ticks }"))
+
 type sseTestStream struct {
 	values    chan Response
 	failure   error
@@ -200,6 +202,11 @@ func (connection *sseConnection) expectNext(t *testing.T, want string) {
 	}
 }
 
+func (connection *sseConnection) expectAck(t *testing.T) {
+	t.Helper()
+	connection.expectNext(t, string(liveAckPayload))
+}
+
 func (connection *sseConnection) expectComplete(t *testing.T) {
 	t.Helper()
 	frame := connection.event(t)
@@ -214,7 +221,7 @@ func (connection *sseConnection) expectComplete(t *testing.T) {
 func TestSSESubscriptionStreamsEachEventThenCompletes(t *testing.T) {
 	stream := newSSETestStream()
 	_, executor, host := newSSEServer(t, events.Limits{}, stream)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
 	if connection.response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", connection.response.StatusCode)
 	}
@@ -223,6 +230,7 @@ func TestSSESubscriptionStreamsEachEventThenCompletes(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", header, got, want)
 		}
 	}
+	connection.expectAck(t)
 	for tick := range 3 {
 		stream.values <- Response{Data: map[string]any{"ticks": int32(tick)}}
 		connection.expectNext(t, `{"data":{"ticks":`+string(rune('0'+tick))+`}}`)
@@ -255,7 +263,8 @@ func TestSSETerminalErrorIsANextFrameThenComplete(t *testing.T) {
 	stream := newSSETestStream()
 	stream.failure = events.Failure(events.CodeSubscriptionOverflow)
 	_, _, host := newSSEServer(t, events.Limits{}, stream)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
+	connection.expectAck(t)
 	stream.values <- Response{Data: map[string]any{"ticks": int32(1)}}
 	connection.expectNext(t, `{"data":{"ticks":1}}`)
 	close(stream.values)
@@ -274,7 +283,8 @@ func TestSSETerminalErrorIsANextFrameThenComplete(t *testing.T) {
 func TestSSEPanickingStreamIsSanitizedThenCompletes(t *testing.T) {
 	panicking := &panicResponseStream{}
 	_, _, host := newSSEServer(t, events.Limits{}, panicking)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
+	connection.expectAck(t)
 	frame := connection.event(t)
 	if frame.event != "next" || strings.Contains(frame.data, "private") || !strings.Contains(frame.data, `"code":"INTERNAL_SERVER_ERROR"`) {
 		t.Fatalf("panic frame = %#v", frame)
@@ -292,7 +302,8 @@ func TestSSEPanickingStreamIsSanitizedThenCompletes(t *testing.T) {
 func TestSSEClientDisconnectCancelsTheSubscription(t *testing.T) {
 	stream := newSSETestStream()
 	server, _, host := newSSEServer(t, events.Limits{}, stream)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
+	connection.expectAck(t)
 	stream.values <- Response{Data: map[string]any{"ticks": int32(1)}}
 	connection.expectNext(t, `{"data":{"ticks":1}}`)
 	connection.cancel()
@@ -314,7 +325,8 @@ func TestSSEClientDisconnectCancelsTheSubscription(t *testing.T) {
 func TestSSEShutdownEndsActiveStreams(t *testing.T) {
 	stream := newSSETestStream()
 	server, _, host := newSSEServer(t, events.Limits{}, stream)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
+	connection.expectAck(t)
 	stream.values <- Response{Data: map[string]any{"ticks": int32(1)}}
 	connection.expectNext(t, `{"data":{"ticks":1}}`)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -336,7 +348,7 @@ func TestSSEShutdownEndsActiveStreams(t *testing.T) {
 	}
 	<-stream.closed
 	for _, accept := range []string{"text/event-stream", "application/json, text/event-stream"} {
-		response, body := postGraphQL(t, host.URL, `{"query":"subscription { ticks }"}`, accept)
+		response, body := postGraphQL(t, host.URL, sseTicksBody, accept)
 		if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Content-Type") != "application/json; charset=utf-8" || body != "{\"errors\":[{\"message\":\"GraphQL server is shutting down\",\"extensions\":{\"code\":\"SERVICE_UNAVAILABLE\"}}]}\n" {
 			t.Fatalf("post-shutdown Accept %q: status=%d type=%q body=%q", accept, response.StatusCode, response.Header.Get("Content-Type"), body)
 		}
@@ -351,7 +363,8 @@ func TestSSEKeepAliveComments(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stream := newSSETestStream()
 			_, _, host := newSSEServer(t, limits, stream)
-			connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+			connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
+			connection.expectAck(t)
 			for comments := 0; comments < 2; {
 				frame, err := connection.next()
 				if err != nil {
@@ -405,7 +418,7 @@ func TestSSESubscriptionsNeedASubscriptionExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"subscription { ticks }"}`))
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(sseTicksBody))
 	request.Header.Set("Accept", "text/event-stream")
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)

@@ -83,10 +83,10 @@ func postGraphQL(t *testing.T, url, body, accept string) (*http.Response, string
 
 func TestSSEAcceptNegotiationChoosesTheTransportPerOperation(t *testing.T) {
 	const query = `{"query":"query Current { viewer }","operationName":"Current"}`
-	const subscription = `{"query":"subscription { ticks }"}`
+	subscription := string(liveBody("subscription { ticks }"))
 	const queryJSON = "{\"data\":{\"viewer\":41}}\n"
 	const queryStream = "event: next\ndata: {\"data\":{\"viewer\":41}}\n\nevent: complete\n\n"
-	const tickStream = "event: next\ndata: {\"data\":{\"ticks\":1}}\n\nevent: complete\n\n"
+	tickStream := liveAckFrame + "event: next\ndata: {\"data\":{\"ticks\":1}}\n\nevent: complete\n\n"
 	const jsonType = "application/json; charset=utf-8"
 	for _, testCase := range []struct {
 		name, accept, body, contentType, want string
@@ -123,7 +123,7 @@ func TestSSEAcceptNegotiationChoosesTheTransportPerOperation(t *testing.T) {
 }
 
 func TestSSESubscriptionRefusalsFollowTheNegotiatedConvention(t *testing.T) {
-	const subscription = `{"query":"subscription { ticks }"}`
+	subscription := string(liveBody("subscription { ticks }"))
 	const jsonType = "application/json; charset=utf-8"
 	unsubscribable, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
 		PrincipalFromContext: func(ctx context.Context) (int, bool) {

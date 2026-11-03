@@ -157,7 +157,7 @@ func (world *recheckWorld) dial(t *testing.T, user golem.UUID) *websocket.Conn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveExtensions()}); err != nil {
 		t.Fatal(err)
 	}
 	readWSFrame(t, connection, "connection_ack")
@@ -244,7 +244,7 @@ type recheckSSE struct {
 
 func (world *recheckWorld) openSSE(t *testing.T, ctx context.Context, user golem.UUID, query string, variables map[string]any) *recheckSSE {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	body, err := json.Marshal(map[string]any{"query": query, "variables": variables, "extensions": liveExtensions()})
 	if err != nil {
 		t.Fatal(err)
 	}
