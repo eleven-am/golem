@@ -54,6 +54,8 @@ type deleteEvalPolicies struct {
 	hook    func(deleteEvalFields) golem.Predicate[deleteEvalComment]
 
 	postUnavailable *atomic.Bool
+	postTitleRule   func(deleteEvalFields, deleteEvalActor) golem.Predicate[deleteEvalPost]
+	resolveFails    *atomic.Bool
 }
 
 type deleteEvalFixture struct {
@@ -183,6 +185,10 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		} else if predicate, ok := policies.post(fields, actor); ok {
 			rules.CanRead(predicate)
 		}
+		if policies.postTitleRule != nil {
+			rules.CannotReadFields(golem.All[deleteEvalPost](), fields.postTitle)
+			rules.CanReadFields(policies.postTitleRule(fields, actor), fields.postTitle)
+		}
 		return rules.Freeze(schemaFixture.Post)
 	})
 	commentBinding := golem.GeneratedPolicyBinding[deleteEvalActor, deleteEvalComment](schemaFixture.Comment, func(actor deleteEvalActor) (golem.FrozenPolicy, error) {
@@ -241,6 +247,9 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		EventRegistry: eventRegistry, EventFactories: factoryRegistry, EventTransport: transport,
 		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 		ResolvePrincipal: func(_ context.Context, principal deleteEvalPrincipal) (deleteEvalActor, error) {
+			if policies.resolveFails != nil && policies.resolveFails.Load() {
+				return deleteEvalActor{}, errors.New("principal could not be resolved")
+			}
 			return deleteEvalActor(principal), nil
 		},
 	})

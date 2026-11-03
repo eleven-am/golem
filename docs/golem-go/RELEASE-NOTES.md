@@ -56,6 +56,34 @@ every errored mutation must stop retrying a response that carries the
 extension; see the GUIDE section "Partial commits are never reported as clean
 failures".
 
+**Created and updated events no longer read the row once per subscriber.**
+Each event now reads the changed row once, with the to-one relations your
+policies and filters reference, and judges every subscriber against that read.
+A subscriber it proves cannot see the row costs nothing further. Before, every
+subscriber of a model ran its own principal resolution, read hooks and read for
+every event, so the work grew with subscribers times events and streams ended
+under load. Subscribers that can see the row, or that the shared read cannot
+decide (to-many relations and conditions the evaluator refuses), run exactly the
+path they ran before, with a fresh principal resolution per delivery, so what is
+delivered and what a payload holds is unchanged.
+
+Two behaviours differ from v0.8.0:
+
+- **The exclusion decision uses the policy as it was when the stream opened.**
+  A stream whose rule was false on a row when it opened does not receive events
+  for that row after the policy broadens, until the stream is reopened (at its
+  deadline, or when `InvalidatePolicies` ends it). Access
+  that is revoked takes effect on the next event as before.
+- **Read hooks do not run for subscribers the shared read excludes.** A
+  read-before or read-after hook now runs once per candidate subscriber of an
+  event instead of once per subscriber. Hooks used for audit or counting see
+  fewer calls.
+
+If the shared read fails, the streams that needed it end with
+`GOLEM_SUBSCRIPTION_REVALIDATION`.
+
+---
+
 ## go/v0.8.0
 
 **GraphQL subscriptions no longer report a cancelled operation as an internal

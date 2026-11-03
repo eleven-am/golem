@@ -1452,6 +1452,52 @@ for {
 An event that your policy or your filter excludes is not delivered, and
 nothing tells you it existed.
 
+### Who receives a created or updated event
+
+Delivery reads the changed row **once per event**, not once per subscriber.
+Before it reads anything for a subscriber, golem judges the subscriber's read
+rule and stream filter against that one shared row, with the same three
+results as a delete:
+
+- **false:** the event is not delivered, and golem runs nothing for that
+  subscriber: no principal resolution, no read hooks, no read of its own;
+- **true or unknown:** golem runs the full path for that subscriber exactly as
+  before. It resolves the principal afresh, runs the read hooks, and reads the
+  row under the subscriber's policy, filter and hooks. That read, and only
+  that read, decides what is delivered and what the payload holds.
+
+The shared read takes the row and the to-one relations (at any depth within
+the relation limit) that your policies and filters reference, in a bounded
+number of statements that does not grow with the number of subscribers. An
+event therefore costs a fixed number of reads plus one full path per
+candidate, where it used to cost one full path per subscriber.
+
+A condition is **unknown**, and goes to the full path, when the shared read
+cannot decide it:
+
+- a to-many relation (`Some`, `Every`, `None`);
+- a field the shared read did not load, or any condition the policy evaluator
+  refuses;
+- a policy for the model that is unavailable.
+
+Two consequences are deliberate:
+
+- **The decision uses the policy as it was when the stream opened.** A
+  subscriber whose rule was false on the row at that time stays excluded for
+  that row until the stream is reopened (at its deadline, or when
+  `InvalidatePolicies` ends it), even if the policy has since broadened. Revocation is never late: a subscriber the frozen rule would admit
+  still goes through the full path, which resolves the principal afresh, so a
+  revoked actor never receives a row. Reopening the stream picks up
+  broadened access.
+- **A read hook does not run for a subscriber the shared read excludes.** A
+  hook used for audit or counting sees one call per candidate subscriber of an
+  event, not one per subscriber. A policy that is constant false already
+  behaved this way.
+
+If the shared read itself fails, the streams that needed it end with
+`GOLEM_SUBSCRIPTION_REVALIDATION`. A row that no longer exists when the event
+is judged is not delivered to anyone.
+
 ### Who receives a delete
 
 A deleted row cannot be read back, so golem judges a delete against the

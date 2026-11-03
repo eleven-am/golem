@@ -103,6 +103,9 @@ func (evaluator *deleteEvaluator) leaf(condition policyir.Condition) deleteTruth
 	if _, present := evaluator.cells[field]; !present {
 		return deleteUnknown
 	}
+	if evaluator.shared.fromRecord && !judgeKindsProven(condition) {
+		return deleteUnknown
+	}
 	value, err := evaluate.Condition(condition, evaluator.record, evaluator.shared.providers)
 	if err != nil {
 		return deleteUnknown
@@ -128,5 +131,51 @@ func (node *deleteEvaluator) fromSnapshot(operator policyir.OperatorID, child *p
 		return node.truthAt(*child, !positive).not()
 	default:
 		return deleteUnknown
+	}
+}
+
+func (evaluator *deleteEvaluator) relationFromRecord(condition policyir.Condition) deleteTruth {
+	_, _, _, cardinality, _, ok := condition.Relation()
+	if !ok || cardinality != policyir.RelationToOne || !judgeKindsProven(condition) {
+		return deleteUnknown
+	}
+	value, err := evaluate.Condition(condition, evaluator.record, evaluator.shared.providers)
+	if err != nil {
+		return deleteUnknown
+	}
+	return deleteTruthOf(value)
+}
+
+var judgeProvenKinds = map[policyir.ValueKind]bool{
+	policyir.ValueBool:     true,
+	policyir.ValueInt32:    true,
+	policyir.ValueInt64:    true,
+	policyir.ValueDecimal:  true,
+	policyir.ValueDateTime: true,
+	policyir.ValueEnum:     true,
+	policyir.ValueUUID:     true,
+	policyir.ValueString:   true,
+}
+
+func judgeKindsProven(condition policyir.Condition) bool {
+	switch condition.Kind() {
+	case policyir.ConditionConstant:
+		return true
+	case policyir.ConditionLogical:
+		_, children, _ := condition.Logical()
+		for _, child := range children {
+			if !judgeKindsProven(child) {
+				return false
+			}
+		}
+		return true
+	case policyir.ConditionScalar:
+		typ, ok := condition.FieldType()
+		return ok && judgeProvenKinds[typ.Kind()]
+	case policyir.ConditionRelation:
+		_, _, _, _, child, _ := condition.Relation()
+		return child == nil || judgeKindsProven(*child)
+	default:
+		return false
 	}
 }

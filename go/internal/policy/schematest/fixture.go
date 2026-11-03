@@ -35,6 +35,9 @@ type Fixture struct {
 	PostJSON         golem.FieldID
 	PostList         golem.FieldID
 	PostDateTime     golem.FieldID
+	PostBool         golem.FieldID
+	PostInt32        golem.FieldID
+	PostEnum         golem.FieldID
 	PostAt           golem.FieldID
 	PostStamps       golem.FieldID
 	PostAuthorName   golem.FieldID
@@ -201,6 +204,8 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 	postAuthor := compilerir.FieldID(id(24))
 	postBigInt, postDecimal, postOptionalInt := compilerir.FieldID(id(25)), compilerir.FieldID(id(26)), compilerir.FieldID(id(27))
 	postNullableText, postBytes, postJSON, postList, postDateTime := compilerir.FieldID(id(28)), compilerir.FieldID(id(29)), compilerir.FieldID(id(30)), compilerir.FieldID(id(32)), compilerir.FieldID(id(33))
+	postBool, postInt32, postEnum := compilerir.FieldID(id(34)), compilerir.FieldID(id(35)), compilerir.FieldID(id(36))
+	postStatus := compilerir.EnumID(id(70))
 	authorship := compilerir.RelationID(id(31))
 	userKey, postKey := compilerir.KeyID(id(41)), compilerir.KeyID(id(42))
 
@@ -262,7 +267,11 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 			compilerir.FieldIR{ID: postJSON, GoName: "JSON", LogicalName: "JSON", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: "json_value", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeJSON}, Nullable: true}},
 			compilerir.FieldIR{ID: postList, GoName: "List", LogicalName: "List", Kind: compilerir.FieldScalarList, Scalar: &compilerir.ScalarFieldIR{Column: "list_value", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeScalarList, Element: &listElement, Capability: &listCapability}, Nullable: true}},
 			compilerir.FieldIR{ID: postDateTime, GoName: "DateTime", LogicalName: "DateTime", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: "datetime_value", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeDateTime, Precision: &precision}, Nullable: true}},
+			scalar(postBool, "Bool", "bool_value", compilerir.TypeBool, true),
+			scalar(postInt32, "Int32", "int32_value", compilerir.TypeInt32, true),
+			compilerir.FieldIR{ID: postEnum, GoName: "Enum", LogicalName: "Enum", Kind: compilerir.FieldEnum, Scalar: &compilerir.ScalarFieldIR{Column: "enum_value", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeEnum, EnumID: &postStatus}, Nullable: true}},
 		)
+		model.Enums = append(model.Enums, compilerir.EnumIR{ID: postStatus, LogicalName: "Status", Values: []compilerir.EnumValueIR{{ID: compilerir.EnumValueID(id(71)), GoName: "draft", WireValue: "draft"}, {ID: compilerir.EnumValueID(id(72)), GoName: "published", WireValue: "published"}}})
 	}
 	if indexedAuthor {
 		indexID := compilerir.IndexID(id(43))
@@ -274,6 +283,9 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 		{ModelID: user, Fields: []compilerir.FieldContractIR{{FieldID: userID, Modes: modes.UserID}, {FieldID: userName, Modes: modes.UserName}, {FieldID: userPosts, Modes: modes.UserPosts}}, Limits: compilerir.LimitContractIR{MaxTake: userMaxTake}},
 		{ModelID: post, Fields: []compilerir.FieldContractIR{{FieldID: postID, Modes: modes.PostID}, {FieldID: authorID, Modes: modes.AuthorID}, {FieldID: postTitle, Modes: modes.PostTitle}, {FieldID: postAuthor, Modes: modes.PostAuthor}}, Limits: compilerir.LimitContractIR{MaxTake: postMaxTake}, Subscriptions: postSubscriptions},
 	}}
+	if fullExactValues {
+		contract.Enums = append(contract.Enums, compilerir.EnumContractIR{EnumID: postStatus, GraphQLName: "Status", Values: []compilerir.EnumValueContractIR{{ValueID: compilerir.EnumValueID(id(71)), GraphQLName: "DRAFT"}, {ValueID: compilerir.EnumValueID(id(72)), GraphQLName: "PUBLISHED"}}})
+	}
 	contract.Models[1].ScopedReads = scopedReads
 	contract.Models[0].ScopedReads = scopedReads
 	if exactValues {
@@ -295,7 +307,8 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 	if fullExactValues {
 		contract.Models[1].Fields = append(contract.Models[1].Fields,
 			compilerir.FieldContractIR{FieldID: postNullableText}, compilerir.FieldContractIR{FieldID: postBytes},
-			compilerir.FieldContractIR{FieldID: postJSON}, compilerir.FieldContractIR{FieldID: postList}, compilerir.FieldContractIR{FieldID: postDateTime})
+			compilerir.FieldContractIR{FieldID: postJSON}, compilerir.FieldContractIR{FieldID: postList}, compilerir.FieldContractIR{FieldID: postDateTime},
+			compilerir.FieldContractIR{FieldID: postBool}, compilerir.FieldContractIR{FieldID: postInt32}, compilerir.FieldContractIR{FieldID: postEnum})
 	}
 	var declared map[compilerir.ModelID][]compilerir.FieldID
 	if fullPostDeleteSnapshot {
@@ -394,6 +407,9 @@ func newFixtureWithDeleteSnapshot(t testing.TB, userMaxTake, postMaxTake uint32,
 		fixture.PostJSON = golem.FieldID(mustFixed(t, string(postJSON)))
 		fixture.PostList = golem.FieldID(mustFixed(t, string(postList)))
 		fixture.PostDateTime = golem.FieldID(mustFixed(t, string(postDateTime)))
+		fixture.PostBool = golem.FieldID(mustFixed(t, string(postBool)))
+		fixture.PostInt32 = golem.FieldID(mustFixed(t, string(postInt32)))
+		fixture.PostEnum = golem.FieldID(mustFixed(t, string(postEnum)))
 	}
 	return fixture
 }

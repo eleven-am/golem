@@ -50,6 +50,7 @@ type deleteEvaluation struct {
 	generation golem.SchemaDigest
 	maxDepth   int
 	providers  policyir.ProviderSet
+	fromRecord bool
 	forward    func(policyir.ModelID, policyir.FieldID, policyir.RelationID) (deleteForwardHop, bool)
 	equality   func(policyir.ModelID, []mutationdecode.IdentityComponent) (policyir.Condition, error)
 	identity   func(policyir.ModelID, []mutationdecode.IdentityComponent) ([]byte, bool)
@@ -544,6 +545,9 @@ func deleteProbeKey(probe deleteProbe) (string, error) {
 }
 
 func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positive bool) deleteTruth {
+	if evaluator.shared.fromRecord {
+		return evaluator.relationFromRecord(condition)
+	}
 	field, _, target, cardinality, child, ok := condition.Relation()
 	if !ok || cardinality != policyir.RelationToOne {
 		return deleteUnknown

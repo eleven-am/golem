@@ -51,7 +51,7 @@ func runP7HubPanicChild(t *testing.T, scenario string) {
 	stateful := scenario == "evaluate-state" || scenario == "policy-factory"
 	if stateful {
 		config.Evaluate = nil
-		config.EvaluateState = func(context.Context, events.Notice, SubscriberKey, any) (Evaluation[golem.EventID], error) {
+		config.EvaluateState = func(context.Context, events.Notice, SubscriberKey, any, any) (Evaluation[golem.EventID], error) {
 			if scenario == "policy-factory" {
 				invokePanickingGeneratedPolicyFactory(t)
 			}
