@@ -702,6 +702,9 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 	}
 	var failure *golem.Error
 	if errors.As(err, &failure) {
+		if report != nil && failure.Code == golem.CodeLimitExceeded && failure.Limit == golem.LimitListItems {
+			report(ctx, err)
+		}
 		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: publicErrorExtensions(failure)}
 	}
 	if code, ok := events.CodeOf(err); ok {

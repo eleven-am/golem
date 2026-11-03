@@ -2,6 +2,7 @@ package contract
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -344,5 +345,69 @@ func TestEventSchemaDigestIgnoresGraphQLOnlyChangesButTracksLogicalEventShape(t 
 	changed := compile(changedLogical, contract, "postEvents")
 	if left.Contract.Models[0].Event.SchemaFingerprint == changed.Contract.Models[0].Event.SchemaFingerprint {
 		t.Fatal("logical event value shape did not change event schema fingerprint")
+	}
+}
+
+func listBoundCompilation(result ir.GraphQLTypeIR, arguments []ir.GraphQLArgumentContractIR, computed ir.GraphQLTypeIR) ir.CompilationIR {
+	modelID := ir.ModelID("10000000000000000000000000000000")
+	model := ir.ModelContractIR{
+		ModelID: modelID, GraphQLName: "Post", Exposed: true,
+		Fields: []ir.FieldContractIR{{FieldID: "20000000000000000000000000000000", GraphQLName: "id", Modes: []ir.FieldMode{ir.ModeVisible}}},
+	}
+	if computed.Kind != "" {
+		model.Computed = []ir.ComputedFieldContractIR{{ExtensionID: "ext-related", Name: "related", Result: computed}}
+	}
+	return ir.CompilationIR{Contract: ir.ContractIR{
+		FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{model},
+		CustomOperations: []ir.CustomOperationContractIR{{
+			ExtensionID: "ext-search", Operation: ir.CustomOperationQuery, Name: "search", Arguments: arguments, Result: result,
+			Resolver: ir.AttachedMethodIR{PackagePath: "example/app", Name: "Search", Kind: "customQuery"}, Capability: ir.CustomOperationCallerOnly,
+		}},
+	}}
+}
+
+func postList(maxItems uint32) ir.GraphQLTypeIR {
+	return ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: maxItems, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "Post"}}
+}
+
+func TestNormalizeRejectsListBoundsMissingOrMisplacedInAHandBuiltContract(t *testing.T) {
+	stringList := func(maxItems uint32) []ir.GraphQLArgumentContractIR {
+		return []ir.GraphQLArgumentContractIR{{Name: "ids", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: maxItems, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String"}}}}
+	}
+	cases := []struct {
+		name        string
+		compilation ir.CompilationIR
+		code        string
+		mention     string
+	}{
+		{"custom result without a maximum", listBoundCompilation(postList(0), nil, ir.GraphQLTypeIR{}), "P5_GRAPHQL_LIST_MAX_REQUIRED", "custom query search result list level 1"},
+		{"custom nested result with an unbounded inner level", listBoundCompilation(ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: 4, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "Post"}}}, nil, ir.GraphQLTypeIR{}), "P5_GRAPHQL_LIST_MAX_REQUIRED", "result list level 2"},
+		{"computed result without a maximum", listBoundCompilation(ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String"}, nil, postList(0)), "P5_GRAPHQL_LIST_MAX_REQUIRED", "computed field Post.related result list level 1"},
+		{"maximum on an argument list", listBoundCompilation(ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String"}, stringList(5), ir.GraphQLTypeIR{}), "P5_GRAPHQL_LIST_MAX_SCALAR", "custom query search argument ids"},
+		{"maximum on a non-list result", listBoundCompilation(ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String", MaxItems: 3}, nil, ir.GraphQLTypeIR{}), "P5_GRAPHQL_LIST_MAX_SCALAR", "custom query search result level 1"},
+		{"maximum on a list element", listBoundCompilation(ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: 2, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "Post", MaxItems: 9}}, nil, ir.GraphQLTypeIR{}), "P5_GRAPHQL_LIST_MAX_SCALAR", "result level 2"},
+	}
+	for _, test := range cases {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			compilation := test.compilation
+			found := false
+			for _, diagnostic := range Normalize(&compilation, nil) {
+				if diagnostic.Code == test.code && strings.Contains(diagnostic.Message, test.mention) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("missing %s mentioning %q", test.code, test.mention)
+			}
+		})
+	}
+}
+
+func TestNormalizeAcceptsDeclaredListBoundsAtEveryLevel(t *testing.T) {
+	nested := ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: 10, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, MaxItems: 5, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "Post"}}}
+	compilation := listBoundCompilation(nested, []ir.GraphQLArgumentContractIR{{Name: "ids", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String"}}}}, postList(7))
+	if diagnostics := Normalize(&compilation, nil); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }

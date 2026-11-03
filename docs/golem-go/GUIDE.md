@@ -1155,7 +1155,7 @@ A schema package may declare its own query and mutation roots:
 
 ```go
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
-	golem.Query(graphql, "searchInvites", SearchInvites)
+	golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))
 	golem.Mutation(graphql, "inviteMember", InviteMember)
 }
 
@@ -1238,6 +1238,57 @@ through a `golem.Within` grant, still gets a `golem.Row` back with no readable
 cells. It carries the new row's primary key privately, so golem can report it as
 `RESULT_NOT_READABLE` instead of treating it as a fault. A create without a
 projection returns a row with no key and cannot be returned as a model result.
+
+#### How many items a list may hold
+
+Every list a custom operation or a computed field returns declares its
+maximum size. A custom root states it after its resolver, one value for each
+list level, outermost first:
+
+```go
+golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))
+golem.Query(graphql, "groupedInvites", GroupedInvites, golem.MaxItems(10, 2)) // [][]golem.Row[Invite]
+```
+
+A computed field states it where it writes the list type, once for each
+`golem.GraphQLList`:
+
+```go
+golem.ComputedField(graphql, "openInvites", golem.GraphQLList(golem.GraphQLObject[Invite]().NonNull(), 20).NonNull(), Team{}.OpenInvites)
+```
+
+Each value is a constant of at least 1. `golem generate` fails when a list level
+has no maximum (`P5_GRAPHQL_LIST_MAX_REQUIRED`), when `MaxItems` gives a
+different number of values than the result has list levels
+(`P5_GRAPHQL_LIST_MAX_ARITY`), when a value is 0 (`P5_GRAPHQL_LIST_MAX_ZERO`),
+when it is not a constant (`P5_GRAPHQL_LIST_MAX_CONSTANT`), or when the result is
+not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). `[]byte` is a `Bytes` scalar, not a
+list.
+
+The maximum is the most the resolver may return. It is not a page size and is
+independent of `MaxPageSize`, which stays the ceiling for a `take` argument. A
+resolver that returns more fails, and the list is never shortened:
+
+```json
+{
+  "message": "custom query searchInvites returned more than 20 items",
+  "path": ["searchInvites"],
+  "extensions": { "code": "LIMIT_EXCEEDED", "reason": "LIMIT_EXCEEDED", "limit": "list_items", "max": 20 }
+}
+```
+
+The error is also passed to `ReportInternalError`, because the resolver, not the
+caller, broke the contract. The check runs on the resolver's own return value,
+before golem reads the rows again. For a computed field it runs for each parent
+row, and `computed field Team.openInvites returned more than 20 items` is the
+error at that field's path. For a custom mutation the writes are already
+committed, so the root is `COMMITTED_RESULT_UNAVAILABLE` with `committed: true`,
+`reason: LIMIT_EXCEEDED`, `limit: list_items` and `max`. `golem.LimitListItems`
+names the limit in Go.
+
+Generated semantic and full-text search roots declare their own maximum: the
+smallest of the search engines' ceiling, the model's `MaxPageSize` and its
+`MaxTake`.
 
 To run a custom mutation from Go, call the generated `Mutate`:
 
@@ -1728,6 +1779,7 @@ as `FORBIDDEN: mutation is not authorized`, is still possible.
 | `take` | `ReadLimits.MaxTake`, or a model's own maximum | none |
 | `fanout` | `ReadLimits.MaxRelationFanout` | none |
 | `transaction_ordinal` | the number of events one transaction can number | 2³² − 1 |
+| `list_items` | the `golem.MaxItems` or `golem.GraphQLList` maximum a custom operation or computed field declares for its list result | declared |
 
 The mutation defaults are also ceilings: you may lower them, never raise them.
 A limit that only the fields or relation hops your policy needs would exceed is

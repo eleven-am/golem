@@ -1943,6 +1943,7 @@ golem.CreateHookResult[M any] type struct
 golem.CreateInput[M any] type struct
 golem.CreateValue[M any] type interface {} sealed
 golem.Cursor func[M any](UniqueSelectorValue[M]) ReadOption[M]
+golem.CustomOption type interface {} sealed
 golem.DBNull const dbNullSentinel = 1
 golem.Date comparable
 golem.Date type struct
@@ -2432,7 +2433,7 @@ golem.GraphQLHidden func() GraphQLOption
 golem.GraphQLHookOwned func[M any](...Column[M]) GraphQLOption
 golem.GraphQLInt func() GraphQLType[int32]
 golem.GraphQLJSON func() GraphQLType[JSON[any]]
-golem.GraphQLList func[T any](GraphQLType[T]) GraphQLType[[]T]
+golem.GraphQLList func[T any](GraphQLType[T], uint32) GraphQLType[[]T]
 golem.GraphQLModel[M any] type struct
 golem.GraphQLObject func[M any]() GraphQLType[Row[M]]
 golem.GraphQLOperation comparable
@@ -2557,6 +2558,7 @@ golem.LimitBatchRows const Limit = "batch_rows"
 golem.LimitDepth const Limit = "depth"
 golem.LimitFacts const Limit = "facts"
 golem.LimitFanout const Limit = "fanout"
+golem.LimitListItems const Limit = "list_items"
 golem.LimitNestedDepth const Limit = "nested_depth"
 golem.LimitOutboxBytes const Limit = "outbox_bytes"
 golem.LimitSelectedFields const Limit = "selected_fields"
@@ -2576,6 +2578,7 @@ golem.LockKey type struct
 golem.Lower func[M any, V ~string](SchemaValue[M, V]) SchemaExpr[M, V]
 golem.Many func[M any, R any](Row[M], ToMany[M, R]) ReadValue[[]Row[R]]
 golem.MaskedDependency func(string, string) error
+golem.MaxItems func(uint32, ...uint32) CustomOption
 golem.Measure[M any, V any] type struct
 golem.MigrationManifestDocument type struct
 golem.ModeJSONField unkeyed literal {JSONField}
@@ -2599,7 +2602,7 @@ golem.ModelSpec[M any] type struct
 golem.MustLockKey func(string, ...string) LockKey
 golem.MustParseExactDecimal func(string) ExactDecimal
 golem.MustParseExactInteger func(string) ExactInteger
-golem.Mutation func[Resolver any](*GraphQLSchema, string, Resolver)
+golem.Mutation func[Resolver any](*GraphQLSchema, string, Resolver, ...CustomOption)
 golem.MutationFieldCreate const MutationFieldOperation = 1
 golem.MutationFieldDecrement const MutationFieldOperation = 5
 golem.MutationFieldIncrement const MutationFieldOperation = 4
@@ -2734,7 +2737,7 @@ golem.Provider comparable
 golem.Provider type string
 golem.ProviderSchemaDocument type struct
 golem.Providers func(*Schema, ...Provider)
-golem.Query func[Resolver any](*GraphQLSchema, string, Resolver)
+golem.Query func[Resolver any](*GraphQLSchema, string, Resolver, ...CustomOption)
 golem.RankBM25 const TextRankingMode = "bm25"
 golem.ReadCommitted const IsolationLevel = "read_committed"
 golem.ReadCount const ReadOperation = 4

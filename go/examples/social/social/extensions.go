@@ -77,7 +77,7 @@ type PublishPostArgs struct {
 }
 
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
-	golem.Query(graphql, "searchPosts", SearchPosts)
+	golem.Query(graphql, "searchPosts", SearchPosts, golem.MaxItems(50))
 	golem.Mutation(graphql, "publishPost", PublishPost)
 }
 

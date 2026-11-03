@@ -32,7 +32,7 @@ func (User) Greeting(context.Context, g.Row[User], GreetingArgs) (string, error)
 }
 
 func DefineGraphQL(graphql *g.GraphQLSchema) {
-	g.Query(graphql, "searchUsers", SearchUsers)
+	g.Query(graphql, "searchUsers", SearchUsers, g.MaxItems(10))
 	g.Mutation(graphql, "renameUser", RenameUser)
 }
 

@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"time"
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 )
 
@@ -193,6 +195,13 @@ func (registry *Registry) Finish(request Request, value any) (Result, error) {
 	contract, ok := registry.byID[request.operation.ExtensionID]
 	if !ok || contract.Operation != request.operation.Operation || contract.Name != request.operation.Name || contract.Resolver != request.operation.Resolver {
 		return Result{}, fmt.Errorf("P5_CUSTOM_REQUEST: request is not owned by this registry")
+	}
+	if err := graphqlcontract.CheckListBounds(contract.Result, reflect.ValueOf(value)); err != nil {
+		operation := "customQuery"
+		if contract.Operation == compilerir.CustomOperationMutation {
+			operation = "customMutation"
+		}
+		return Result{}, graphqlcontract.ListItemsError(operation, fmt.Sprintf("custom %s %s", contract.Operation, contract.Name), err)
 	}
 	if err := registry.validateValue(contract.Result, value, false); err != nil {
 		return Result{}, fmt.Errorf("P5_CUSTOM_RESULT: %s: %w", contract.Name, err)

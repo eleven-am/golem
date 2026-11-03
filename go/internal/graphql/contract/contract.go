@@ -188,6 +188,7 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 	// fields and custom roots cannot bypass generated/reserved-name checks when
 	// a caller supplies already-interpreted declarations.
 	diagnostics = append(diagnostics, graphqlextension.Normalize(compilation, nil, nil)...)
+	diagnostics = append(diagnostics, graphqlextension.ValidateListBounds(compilation.Contract)...)
 	ir.SortDiagnostics(diagnostics)
 	return diagnostics
 }

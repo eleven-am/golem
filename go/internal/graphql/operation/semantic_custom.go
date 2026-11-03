@@ -6,7 +6,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
-	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 )
 
 type semanticCustomRoot struct {
@@ -21,10 +20,7 @@ func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationCo
 	if !ok {
 		return false, compileerr.Invariantf("semantic search result model is absent")
 	}
-	maximum := semanticruntime.MaximumResults
-	maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxPageSize))
-	maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxTake))
-	maximum = readir.NarrowCap(maximum, c.limits.Bind.MaxPageSize)
+	maximum := readir.NarrowCap(int(graphqlextension.SearchMaximum(contract)), c.limits.Bind.MaxPageSize)
 	value := int(contract.Limits.DefaultPageSize)
 	if value < 1 {
 		value = 50

@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
@@ -22,6 +24,7 @@ type computedExecution struct {
 	loaders  map[string]*computedLoader
 	maxBatch uint32
 	hydrator *resultHydrator
+	owners   map[compilerir.ExtensionID]string
 }
 
 type computedLoader struct {
@@ -61,9 +64,11 @@ func newComputedExecution(compilation compilerir.CompilationIR, supplied []Compu
 		bindings[id] = binding
 	}
 	wanted := map[compilerir.ExtensionID]bool{}
+	owners := map[compilerir.ExtensionID]string{}
 	for _, contract := range compilation.Contract.Models {
 		for _, field := range contract.Computed {
 			wanted[field.ExtensionID] = true
+			owners[field.ExtensionID] = fmt.Sprintf("computed field %s.%s", contract.GraphQLName, field.Name)
 			binding, present := bindings[field.ExtensionID]
 			if !present {
 				return nil, fmt.Errorf("GraphQL computed field %s.%s has no generated binding", contract.GraphQLName, field.Name)
@@ -81,7 +86,7 @@ func newComputedExecution(compilation compilerir.CompilationIR, supplied []Compu
 	if maximum <= 0 {
 		maximum = int(graphqlextension.DefaultMaxBatchSize)
 	}
-	return &computedExecution{scope: graphqlextension.NewExecution(), bindings: bindings, loaders: map[string]*computedLoader{}, maxBatch: uint32(maximum)}, nil
+	return &computedExecution{scope: graphqlextension.NewExecution(), bindings: bindings, loaders: map[string]*computedLoader{}, maxBatch: uint32(maximum), owners: owners}, nil
 }
 
 func (execution *computedExecution) close() {
@@ -102,7 +107,24 @@ func (execution *computedExecution) resolve(ctx context.Context, model compileri
 	if err != nil && !errors.As(err, &failures) {
 		return values, err
 	}
-	return execution.hydrateValues(ctx, slot, values, failures)
+	return execution.hydrateValues(ctx, slot, values, execution.checkListBounds(slot, values, failures))
+}
+
+func (execution *computedExecution) checkListBounds(slot selectset.Slot, values []any, failures *computedFieldFailures) *computedFieldFailures {
+	for index, value := range values {
+		if failures != nil && failures.byIndex[index] != nil {
+			continue
+		}
+		err := graphqlcontract.CheckListBounds(slot.Computed.Result, reflect.ValueOf(value))
+		if err == nil {
+			continue
+		}
+		if failures == nil {
+			failures = &computedFieldFailures{byIndex: map[int]error{}}
+		}
+		failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, graphqlcontract.ListItemsError("computed", execution.owners[slot.Computed.ExtensionID], err))
+	}
+	return failures
 }
 
 func (execution *computedExecution) hydrateValues(ctx context.Context, slot selectset.Slot, values []any, failures *computedFieldFailures) ([]any, error) {

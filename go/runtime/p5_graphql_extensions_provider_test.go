@@ -34,6 +34,7 @@ type p5ExtensionGraphQLResponse struct {
 	Data   map[string]any `json:"data"`
 	Errors []struct {
 		Message    string         `json:"message"`
+		Path       []any          `json:"path"`
 		Extensions map[string]any `json:"extensions"`
 	} `json:"errors"`
 }
@@ -362,6 +363,11 @@ func TestGeneratedBatchedComputedCancellationReachesLoaderAcrossProviders(t *tes
 
 func newP5ExtensionProviderFixture(t *testing.T, profile p5ExtensionProviderProfile) (*p5extensions.GraphQLServer, *sqlx.DB, *atomic.Int64) {
 	t.Helper()
+	return newP5ExtensionReportingFixture(t, profile, func(err error) { t.Logf("reported GraphQL error: %v", err) })
+}
+
+func newP5ExtensionReportingFixture(t *testing.T, profile p5ExtensionProviderProfile, report func(error)) (*p5extensions.GraphQLServer, *sqlx.DB, *atomic.Int64) {
+	t.Helper()
 	ctx := context.Background()
 	var database *sqlx.DB
 	var apply func(context.Context, *sqlx.DB, physical.PhysicalSchema) error
@@ -429,7 +435,7 @@ func newP5ExtensionProviderFixture(t *testing.T, profile p5ExtensionProviderProf
 			principal, ok := ctx.Value(p5ExtensionPrincipalKey{}).(p5extensions.Principal)
 			return principal, ok
 		},
-		ReportInternalError: func(_ context.Context, err error) { t.Logf("reported GraphQL error: %v", err) },
+		ReportInternalError: func(_ context.Context, err error) { report(err) },
 	})
 	if err != nil {
 		t.Fatal(err)

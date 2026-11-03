@@ -118,6 +118,7 @@ type User {
   name: String
   counter: Int
   batchGreeting(prefix: String!): String!
+  counterSteps: [Int!]
   greeting(prefix: String!): String!
 }
 

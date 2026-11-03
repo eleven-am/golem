@@ -50,7 +50,7 @@ type NoArgs struct{}
 func (Team) DefineGraphQL(graphql *golem.GraphQLModel[Team]) {
 	golem.ComputedField(graphql, "newestInvite", golem.GraphQLObject[Invite](), Team{}.NewestInvite, golem.Requires(Teams.Owner))
 	golem.ComputedField(graphql, "pinnedInvite", golem.GraphQLObject[Invite]().NonNull(), Team{}.PinnedInvite, golem.Requires(Teams.Owner))
-	golem.ComputedField(graphql, "openInvites", golem.GraphQLList(golem.GraphQLObject[Invite]().NonNull()).NonNull(), Team{}.OpenInvites, golem.Requires(Teams.Owner))
+	golem.ComputedField(graphql, "openInvites", golem.GraphQLList(golem.GraphQLObject[Invite]().NonNull(), 20).NonNull(), Team{}.OpenInvites, golem.Requires(Teams.Owner))
 }
 
 func (Team) NewestInvite(ctx context.Context, row golem.Row[Team], _ NoArgs) (golem.Row[Invite], error) {
@@ -113,6 +113,7 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	golem.Within(rules, SubmitInvite).CanCreate(Invites.Status.Eq("submitted"))
 	golem.Within(rules, SubmitInviteMaybe).CanCreate(Invites.Status.Eq("submitted"))
 	golem.Within(rules, SubmitInvites).CanCreate(Invites.Status.Eq("submitted"))
+	golem.Within(rules, SubmitCappedInvites).CanCreate(Invites.Status.Eq("submitted"))
 	golem.Within(rules, SubmitBlank).CanCreate(Invites.Status.Eq("submitted"))
 	golem.Within(rules, SubmitNested).CanCreate(Invites.Status.Eq("submitted"))
 	golem.Within(rules, NestedTeamInvite).CanCreate(owned)
@@ -240,6 +241,13 @@ type TeamArgs struct {
 	Owner string     `golem:"graphql=owner"`
 }
 
+type CappedSubmitArgs struct {
+	First  golem.UUID `golem:"graphql=first"`
+	Second golem.UUID `golem:"graphql=second"`
+	Third  golem.UUID `golem:"graphql=third"`
+	TeamID golem.UUID `golem:"graphql=teamID"`
+}
+
 type SubmitManyArgs struct {
 	First   golem.UUID `golem:"graphql=first"`
 	Second  golem.UUID `golem:"graphql=second"`
@@ -257,15 +265,17 @@ func DefineGraphQL(graphql *golem.GraphQLSchema) {
 	golem.Mutation(graphql, "renewInvite", UpsertInvite)
 	golem.Mutation(graphql, "submitInvite", SubmitInvite)
 	golem.Mutation(graphql, "submitInviteMaybe", SubmitInviteMaybe)
-	golem.Mutation(graphql, "submitInvites", SubmitInvites)
+	golem.Mutation(graphql, "submitInvites", SubmitInvites, golem.MaxItems(3))
+	golem.Mutation(graphql, "submitCappedInvites", SubmitCappedInvites, golem.MaxItems(2))
 	golem.Mutation(graphql, "submitBlank", SubmitBlank)
 	golem.Mutation(graphql, "submitNested", SubmitNested)
 	golem.Mutation(graphql, "submitTeam", SubmitTeam)
-	golem.Query(graphql, "searchInvites", SearchInvites)
+	golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))
+	golem.Query(graphql, "cappedInvites", CappedInvites, golem.MaxItems(2))
 	golem.Query(graphql, "firstInvite", FirstInvite)
 	golem.Query(graphql, "requiredInvite", RequiredInvite)
-	golem.Query(graphql, "searchTeams", SearchTeams)
-	golem.Query(graphql, "groupedInvites", GroupedInvites)
+	golem.Query(graphql, "searchTeams", SearchTeams, golem.MaxItems(20))
+	golem.Query(graphql, "groupedInvites", GroupedInvites, golem.MaxItems(10, 2))
 }
 
 func DefineOperations(operations *golem.Operations) {
@@ -389,6 +399,11 @@ func SearchInvites(ctx context.Context, caller *Caller[Principal], arguments Sea
 	return inviteRows(ctx, caller, arguments.Owner)
 }
 
+func CappedInvites(ctx context.Context, caller *Caller[Principal], arguments SearchArgs) ([]golem.Row[Invite], error) {
+	recordResolver("cappedInvites")
+	return inviteRows(ctx, caller, arguments.Owner)
+}
+
 func FirstInvite(ctx context.Context, caller *Caller[Principal], arguments SearchArgs) (*golem.Row[Invite], error) {
 	recordResolver("firstInvite")
 	rows, err := inviteRows(ctx, caller, arguments.Owner)
@@ -487,6 +502,19 @@ func SubmitInvites(ctx context.Context, caller *Caller[Principal], arguments Sub
 			owner = arguments.Foreign
 		}
 		row, err := submitted(ctx, caller, id, arguments.TeamID, owner, "batch@example.test")
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func SubmitCappedInvites(ctx context.Context, caller *Caller[Principal], arguments CappedSubmitArgs) ([]golem.Row[Invite], error) {
+	recordResolver("submitCappedInvites")
+	var rows []golem.Row[Invite]
+	for _, id := range []golem.UUID{arguments.First, arguments.Second, arguments.Third} {
+		row, err := submitted(ctx, caller, id, arguments.TeamID, "alpha", "capped@example.test")
 		if err != nil {
 			return nil, err
 		}

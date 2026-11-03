@@ -98,6 +98,38 @@ is gone is `null`, or `NOT_FOUND` when the field is non-null.
   `RuntimeIdentityHydrationRequest` replace them). They were generated-code
   plumbing, not application API.
 
+**Every list a custom operation or computed field returns declares its maximum.**
+`golem generate` now fails with `P5_GRAPHQL_LIST_MAX_REQUIRED`, naming the
+operation or `Model.field` and the list level, for each custom or computed list
+without one. `golem.Query` and `golem.Mutation` take a trailing
+`golem.MaxItems(outermost, nested...)`, with one value for each list level, and
+`golem.GraphQLList` takes the maximum as a second argument. Each value is at
+least 1. The maximum is independent of `MaxPageSize`, which stays the ceiling
+for `take`. Before:
+
+```go
+golem.Query(graphql, "searchPosts", SearchPosts)
+golem.ComputedField(graphql, "related", golem.GraphQLList(golem.GraphQLObject[Post]().NonNull()).NonNull(), Post{}.Related)
+```
+
+After:
+
+```go
+golem.Query(graphql, "searchPosts", SearchPosts, golem.MaxItems(50))
+golem.ComputedField(graphql, "related", golem.GraphQLList(golem.GraphQLObject[Post]().NonNull(), 10).NonNull(), Post{}.Related)
+golem.Query(graphql, "grouped", Grouped, golem.MaxItems(10, 5)) // [][]golem.Row[Post]
+```
+
+A resolver that returns more items fails with `LIMIT_EXCEEDED`,
+`extensions.limit` `list_items` and `extensions.max`, is passed to
+`ReportInternalError`, and is never shortened. For a custom mutation, whose
+writes have committed, the error is `COMMITTED_RESULT_UNAVAILABLE` with
+`committed: true` and `reason: LIMIT_EXCEEDED`. New: `golem.MaxItems`,
+`golem.CustomOption`, `golem.LimitListItems`. Generated semantic and full-text
+searches declare their maximum themselves: the smallest of 1000, the model's
+`MaxPageSize` and its `MaxTake`. `golem.GraphQLList` changes signature, so call
+sites that passed one argument no longer compile.
+
 **Hooks see the same input values on every path.** `FrozenMutationField.Value()`
 returned an internal `policyir.Value` when a write came from a GraphQL mutation
 (or from a nested connect or disconnect), and a Go value when it came from the

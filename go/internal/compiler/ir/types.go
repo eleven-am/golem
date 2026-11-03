@@ -855,6 +855,7 @@ type GraphQLTypeIR struct {
 	Name     string          `json:"name,omitempty"`
 	Nullable bool            `json:"nullable"`
 	Element  *GraphQLTypeIR  `json:"element,omitempty"`
+	MaxItems uint32          `json:"maxItems,omitempty"`
 }
 
 type GraphQLArgumentContractIR struct {

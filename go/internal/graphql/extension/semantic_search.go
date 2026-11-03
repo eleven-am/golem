@@ -140,7 +140,7 @@ func semanticSearchOperation(contract ir.ModelContractIR, index semanticcontract
 			{Name: "take", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "Int", Nullable: true}},
 			{Name: "where", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypePredicate, Name: contract.GraphQLName, Nullable: true}},
 		},
-		Result: ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Nullable: false, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: contract.GraphQLName, Nullable: false}},
+		Result: searchResult(contract),
 		Resolver: ir.AttachedMethodIR{
 			PackagePath: packagePath,
 			Name:        index.Name,

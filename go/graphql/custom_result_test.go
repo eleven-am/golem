@@ -10,6 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	contract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
@@ -244,10 +245,11 @@ func TestPresentCommittedResultNamesWhatHappenedWithoutEchoingTheCause(t *testin
 		limit      any
 		reported   int
 	}{
-		"unreadable rows":     {cause: &unreadableResult{count: 2}, reason: "RESULT_NOT_READABLE", unreadable: 2},
-		"limit exceeded":      {cause: &CustomResultError{cause: limited}, reason: "LIMIT_EXCEEDED", limit: "take", reported: 1},
-		"public read failure": {cause: forbidden},
-		"internal fault":      {cause: &CustomResultError{cause: errCustomTest("secret internal detail")}, reported: 1},
+		"unreadable rows":       {cause: &unreadableResult{count: 2}, reason: "RESULT_NOT_READABLE", unreadable: 2},
+		"limit exceeded":        {cause: &CustomResultError{cause: limited}, reason: "LIMIT_EXCEEDED", limit: "take", reported: 1},
+		"list maximum exceeded": {cause: &CustomResultError{cause: contract.ListItemsError("customMutation", "custom mutation importUsers", &contract.ListBoundError{Max: 3})}, reason: "LIMIT_EXCEEDED", limit: "list_items", reported: 1},
+		"public read failure":   {cause: forbidden},
+		"internal fault":        {cause: &CustomResultError{cause: errCustomTest("secret internal detail")}, reported: 1},
 	}
 	for name, test := range cases {
 		test := test
@@ -449,5 +451,30 @@ func TestComputedModelValuesAreHydratedOncePerSlotAndFailPerOccurrence(t *testin
 	scalar := slotFor(compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeScalar, Name: "String"})
 	if scalarValues, err := (&computedExecution{}).hydrateValues(context.Background(), scalar, []any{"x"}, nil); err != nil || scalarValues[0] != "x" {
 		t.Fatalf("scalar results must pass through untouched: %v %v", scalarValues, err)
+	}
+}
+
+func TestPresentErrorReportsAnExceededListMaximumOnceAndOtherLimitsNever(t *testing.T) {
+	cases := map[string]struct {
+		cause    error
+		limit    string
+		max      int
+		reported int
+	}{
+		"list items": {cause: contract.ListItemsError("customQuery", "custom query searchLibrary", &contract.ListBoundError{Max: 100}), limit: "list_items", max: 100, reported: 1},
+		"take":       {cause: golem.RuntimeLimitError("customQuery", golem.ModelID{}, golem.LimitTake, 7, "take is too large", nil), limit: "take", max: 7},
+	}
+	for name, test := range cases {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			var reported []error
+			presented := PresentError(context.Background(), &CustomResultError{cause: test.cause}, []any{"root"}, func(_ context.Context, err error) { reported = append(reported, err) })
+			if presented.Extensions["code"] != "LIMIT_EXCEEDED" || presented.Extensions["reason"] != "LIMIT_EXCEEDED" || presented.Extensions["limit"] != test.limit || presented.Extensions["max"] != test.max {
+				t.Fatalf("presented = %#v", presented)
+			}
+			if len(reported) != test.reported {
+				t.Fatalf("reported %d times, want %d: %v", len(reported), test.reported, reported)
+			}
+		})
 	}
 }

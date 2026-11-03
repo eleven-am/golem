@@ -137,6 +137,14 @@ func Normalize(compilation *ir.CompilationIR, computed []ComputedDeclaration, cu
 			diagnostics = append(diagnostics, argumentDiagnostics...)
 			valid = false
 		}
+		boundOwner := "computed field " + field.Name
+		if exists {
+			boundOwner = fmt.Sprintf("computed field %s.%s", contracts[index].GraphQLName, field.Name)
+		}
+		if boundDiagnostics := append(ResultBoundDiagnostics(boundOwner, ComputedBoundHint, field.Result, declaration.Span), argumentBoundDiagnostics(boundOwner, field.Arguments, declaration.Span)...); len(boundDiagnostics) != 0 {
+			diagnostics = append(diagnostics, boundDiagnostics...)
+			valid = false
+		}
 		if modelExists {
 			resolverValid := validComputedResolver(field.Resolver, model)
 			if field.Batch != nil {
@@ -205,6 +213,10 @@ func Normalize(compilation *ir.CompilationIR, computed []ComputedDeclaration, cu
 		}
 		if typeDiagnostics := typeContext.validate(operation.Result, typeCustomResult, declaration.Span); len(typeDiagnostics) != 0 {
 			diagnostics = append(diagnostics, typeDiagnostics...)
+			valid = false
+		}
+		if boundDiagnostics := append(ResultBoundDiagnostics(owner, CustomBoundHint, operation.Result, declaration.Span), argumentBoundDiagnostics(owner, operation.Arguments, declaration.Span)...); len(boundDiagnostics) != 0 {
+			diagnostics = append(diagnostics, boundDiagnostics...)
 			valid = false
 		}
 		if !validCallable(operation.Resolver) {

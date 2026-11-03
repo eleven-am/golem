@@ -71,7 +71,7 @@ func GreetingCacheKey(value golem.UUID) (string, error) {
 }
 
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
-	golem.Query(graphql, "searchUsers", SearchUsers)
+	golem.Query(graphql, "searchUsers", SearchUsers, golem.MaxItems(10))
 	golem.Mutation(graphql, "importUsers", ImportUsers)
 }
 

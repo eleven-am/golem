@@ -1117,6 +1117,7 @@ const (
 	LimitFanout              Limit = "fanout"
 	LimitSelectedFields      Limit = "selected_fields"
 	LimitDepth               Limit = "depth"
+	LimitListItems           Limit = "list_items"
 )
 
 // Error is the transport-neutral public operation error. Cause is retained for

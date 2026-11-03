@@ -56,7 +56,7 @@ func GraphQLJSON() GraphQLType[JSON[any]]     { return GraphQLType[JSON[any]]{} 
 // compiler before these become ContractIR.
 func GraphQLObject[M any]() GraphQLType[Row[M]] { return GraphQLType[Row[M]]{} }
 func GraphQLEnum[E ~string]() GraphQLType[E]    { return GraphQLType[E]{} }
-func GraphQLList[T any](_ GraphQLType[T]) GraphQLType[[]T] {
+func GraphQLList[T any](_ GraphQLType[T], _ uint32) GraphQLType[[]T] {
 	return GraphQLType[[]T]{}
 }
 
@@ -97,8 +97,15 @@ func BatchedComputedFieldWithCacheKey[M any, K comparable, Loader any](_ *GraphQ
 // signatures are statically required to receive context.Context followed by
 // the generated *Caller[Principal] and a typed argument struct. In particular,
 // no declaration API exists for System, DB, Tx, or raw SQL capabilities.
-func Query[Resolver any](_ *GraphQLSchema, _ string, _ Resolver)    {}
-func Mutation[Resolver any](_ *GraphQLSchema, _ string, _ Resolver) {}
+func Query[Resolver any](_ *GraphQLSchema, _ string, _ Resolver, _ ...CustomOption)    {}
+func Mutation[Resolver any](_ *GraphQLSchema, _ string, _ Resolver, _ ...CustomOption) {}
+
+type CustomOption interface{ customOption() }
+type customOption struct{}
+
+func (customOption) customOption() {}
+
+func MaxItems(_ uint32, _ ...uint32) CustomOption { return customOption{} }
 
 type maskedDependencyError struct {
 	field      string

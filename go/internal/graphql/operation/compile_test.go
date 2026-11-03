@@ -230,13 +230,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 }
 
 func TestSemanticCustomSearchDefaultsToModelMaxTake(t *testing.T) {
-	compilation := semanticSocial(t)
-	post := contractNamed(t, compilation.Contract, "Post")
-	for index := range compilation.Contract.Models {
-		if compilation.Contract.Models[index].ModelID == post.ModelID {
-			compilation.Contract.Models[index].Limits.MaxTake = 1
-		}
-	}
+	compilation := semanticSocialWithMaxTake(t, 1)
 	compiler, err := New(compilation, Limits{})
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +240,29 @@ func TestSemanticCustomSearchDefaultsToModelMaxTake(t *testing.T) {
 		bound, bindErr := compiler.bindSemanticSearchTake(operation, arguments, false)
 		if bindErr != nil || !bound || arguments["take"] != int32(1) {
 			t.Fatalf("omitted %s take bound=%t arguments=%#v error=%v", operation.Name, bound, arguments, bindErr)
+		}
+	}
+}
+
+func TestSemanticDeclaredMaximumIsItsTakeMaximum(t *testing.T) {
+	for _, maxTake := range []uint32{0, 30} {
+		compilation := semanticSocialWithMaxTake(t, maxTake)
+		compiler, err := New(compilation, Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, operation := range compilation.Contract.CustomOperations {
+			declared := int32(operation.Result.MaxItems)
+			if declared < 1 || (maxTake != 0 && declared != int32(maxTake)) {
+				t.Fatalf("%s declared maximum = %d with MaxTake %d", operation.Name, declared, maxTake)
+			}
+			atMaximum := map[string]any{"take": declared}
+			if bound, bindErr := compiler.bindSemanticSearchTake(operation, atMaximum, true); bindErr != nil || !bound || atMaximum["take"] != declared {
+				t.Fatalf("%s rejected a take equal to its declared maximum %d: bound=%t error=%v", operation.Name, declared, bound, bindErr)
+			}
+			if _, bindErr := compiler.bindSemanticSearchTake(operation, map[string]any{"take": declared + 1}, true); bindErr == nil {
+				t.Fatalf("%s accepted a take above its declared maximum %d", operation.Name, declared)
+			}
 		}
 	}
 }
@@ -783,8 +800,18 @@ func social(t *testing.T) compilerir.CompilationIR {
 
 func semanticSocial(t *testing.T) compilerir.CompilationIR {
 	t.Helper()
+	return semanticSocialWithMaxTake(t, 0)
+}
+
+func semanticSocialWithMaxTake(t *testing.T, maxTake uint32) compilerir.CompilationIR {
+	t.Helper()
 	compilation := social(t)
 	post := contractNamed(t, compilation.Contract, "Post")
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].ModelID == post.ModelID {
+			compilation.Contract.Models[index].Limits.MaxTake = maxTake
+		}
+	}
 	model := modelByIDForTest(t, compilation.Model, post.ModelID)
 	title := generatedFieldNamedForTest(t, model, "Title")
 	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{string(title.ID)}, Metric: "cosine"})
