@@ -13,6 +13,7 @@ type Counters struct {
 	claimSizes   []float64
 	evaluations  int64
 	evaluationNs time.Duration
+	suppressedNs time.Duration
 	suppressions map[string]int64
 }
 
@@ -34,6 +35,7 @@ func (counters *Counters) ObserveGolem(_ context.Context, observation observe.Ob
 		counters.evaluationNs += observation.Duration()
 	case observe.OperationSubscriptionSuppression:
 		counters.suppressions[string(observation.Reason())] += observation.AggregateCount()
+		counters.suppressedNs += observation.Duration()
 	}
 }
 
@@ -59,7 +61,7 @@ func (counters *Counters) report() CounterReport {
 	}
 	if report.Claimed != 0 {
 		report.EvaluationsPerNotice = float64(counters.evaluations) / float64(report.Claimed)
-		report.JudgeMsPerNotice = milliseconds(counters.evaluationNs) / float64(report.Claimed)
+		report.JudgeMsPerNotice = milliseconds(counters.evaluationNs+counters.suppressedNs) / float64(report.Claimed)
 	}
 	return report
 }

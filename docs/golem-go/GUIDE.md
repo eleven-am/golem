@@ -1468,9 +1468,15 @@ results as a delete:
 
 The shared read takes the row and the to-one relations (at any depth within
 the relation limit) that your policies and filters reference, in a bounded
-number of statements that does not grow with the number of subscribers. An
-event therefore costs a fixed number of reads plus one full path per
-candidate, where it used to cost one full path per subscriber.
+number of statements that does not grow with the number of subscribers: one
+statement for the row plus one per level of to-one relation the policies and
+filters reach. An event therefore costs those shared statements plus one full
+path (principal resolution, hooks and one exact read) per **candidate**, a
+subscriber the shared read could not exclude. Before, it cost one full path per
+subscriber. A model with an owner rule and 128 subscribers, of which one is the
+owner, runs 2 statements per event (1 shared, 1 exact); a rule through one
+to-one relation runs 4 (2 shared, 2 exact). The judgement itself runs in memory
+over the shared row, once per subscriber, and reads nothing.
 
 A condition is **unknown**, and goes to the full path, when the shared read
 cannot decide it:
@@ -1478,7 +1484,18 @@ cannot decide it:
 - a to-many relation (`Some`, `Every`, `None`);
 - a field the shared read did not load, or any condition the policy evaluator
   refuses;
+- a comparison over a column kind that has not been proven to agree with the
+  database: only boolean, 32 and 64-bit integer, decimal, datetime, enum, UUID
+  and string columns are judged. Bytes, JSON, scalar lists, date, time of day,
+  floating point and 16-bit integer columns, and any to-one relation whose
+  condition reaches one, are always unknown;
+- a set of subscribers whose combined relations the planner cannot read in one
+  bounded plan (for example one past the relation limit): every subscriber of
+  that event is then unknown and takes the full path;
 - a policy for the model that is unavailable.
+
+Unknown never costs correctness, only the saving: the event costs what it cost
+before for that subscriber.
 
 Two consequences are deliberate:
 
