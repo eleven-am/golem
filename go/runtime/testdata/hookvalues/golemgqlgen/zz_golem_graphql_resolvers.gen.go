@@ -12,11 +12,6 @@ import (
 
 type Resolver struct{}
 
-func (r *batchPayloadResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (int, error) {
-	return graphql1.ResolvePreparedField[int](ctx, obj)
-
-}
-
 func (r *entryResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
 	return graphql1.ResolvePreparedField[any](ctx, obj)
 
@@ -177,8 +172,6 @@ func (r *queryResolver) Owner(ctx context.Context, where OwnerWhereUniqueInput) 
 
 }
 
-func (r *Resolver) BatchPayload() BatchPayloadResolver { return &batchPayloadResolver{r} }
-
 func (r *Resolver) Entry() EntryResolver { return &entryResolver{r} }
 
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
@@ -189,7 +182,6 @@ func (r *Resolver) OwnerCountOutput() OwnerCountOutputResolver { return &ownerCo
 
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
-type batchPayloadResolver struct{ *Resolver }
 type entryResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type ownerResolver struct{ *Resolver }

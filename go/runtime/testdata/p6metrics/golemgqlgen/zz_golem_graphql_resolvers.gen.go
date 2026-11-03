@@ -12,11 +12,6 @@ import (
 
 type Resolver struct{}
 
-func (r *batchPayloadResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (int, error) {
-	return graphql1.ResolvePreparedField[int](ctx, obj)
-
-}
-
 func (r *categoryResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
 	return graphql1.ResolvePreparedField[any](ctx, obj)
 
@@ -707,8 +702,6 @@ func (r *queryResolver) GroupByMetrics(ctx context.Context, by []MetricGroupFiel
 
 }
 
-func (r *Resolver) BatchPayload() BatchPayloadResolver { return &batchPayloadResolver{r} }
-
 func (r *Resolver) Category() CategoryResolver { return &categoryResolver{r} }
 
 func (r *Resolver) CategoryCountOutput() CategoryCountOutputResolver {
@@ -747,7 +740,6 @@ func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
-type batchPayloadResolver struct{ *Resolver }
 type categoryResolver struct{ *Resolver }
 type categoryCountOutputResolver struct{ *Resolver }
 type metricResolver struct{ *Resolver }

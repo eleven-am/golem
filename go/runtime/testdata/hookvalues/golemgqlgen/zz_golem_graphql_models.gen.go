@@ -9,16 +9,6 @@ import (
 	"strconv"
 )
 
-type BigIntAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
 type BigIntFilter struct {
 	Equals any   `json:"equals,omitempty"`
 	Not    any   `json:"not,omitempty"`
@@ -30,28 +20,10 @@ type BigIntFilter struct {
 	Gte    any   `json:"gte,omitempty"`
 }
 
-type BigIntListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type BigIntListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
-}
-
 type BigIntUpdateOperationsInput struct {
 	Set       any `json:"set,omitempty"`
 	Increment any `json:"increment,omitempty"`
 	Decrement any `json:"decrement,omitempty"`
-}
-
-type BooleanAnalyticsFilter struct {
-	Equals *bool `json:"equals,omitempty"`
-	Not    *bool `json:"not,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type BooleanFilter struct {
@@ -59,18 +31,6 @@ type BooleanFilter struct {
 	Not    *bool  `json:"not,omitempty"`
 	In     []bool `json:"in,omitempty"`
 	NotIn  []bool `json:"notIn,omitempty"`
-}
-
-type BooleanListFilter struct {
-	Equals   []bool `json:"equals,omitempty"`
-	Has      *bool  `json:"has,omitempty"`
-	HasEvery []bool `json:"hasEvery,omitempty"`
-	HasSome  []bool `json:"hasSome,omitempty"`
-	IsEmpty  *bool  `json:"isEmpty,omitempty"`
-}
-
-type BooleanListUpdateOperationsInput struct {
-	Set []bool `json:"set,omitempty"`
 }
 
 type BooleanUpdateOperationsInput struct {
@@ -88,16 +48,6 @@ type BytesUpdateOperationsInput struct {
 	Set any `json:"set,omitempty"`
 }
 
-type DateAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
 type DateFilter struct {
 	Equals any   `json:"equals,omitempty"`
 	Not    any   `json:"not,omitempty"`
@@ -107,28 +57,6 @@ type DateFilter struct {
 	Lte    any   `json:"lte,omitempty"`
 	Gt     any   `json:"gt,omitempty"`
 	Gte    any   `json:"gte,omitempty"`
-}
-
-type DateListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type DateListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
-}
-
-type DateTimeAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type DateTimeFilter struct {
@@ -142,34 +70,12 @@ type DateTimeFilter struct {
 	Gte    any   `json:"gte,omitempty"`
 }
 
-type DateTimeListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type DateTimeListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
-}
-
 type DateTimeUpdateOperationsInput struct {
 	Set any `json:"set,omitempty"`
 }
 
 type DateUpdateOperationsInput struct {
 	Set any `json:"set,omitempty"`
-}
-
-type DecimalAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type DecimalFilter struct {
@@ -181,18 +87,6 @@ type DecimalFilter struct {
 	Lte    any   `json:"lte,omitempty"`
 	Gt     any   `json:"gt,omitempty"`
 	Gte    any   `json:"gte,omitempty"`
-}
-
-type DecimalListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type DecimalListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
 }
 
 type DecimalUpdateOperationsInput struct {
@@ -412,16 +306,6 @@ type EntryWhereUniqueInput struct {
 	ID any `json:"ID,omitempty"`
 }
 
-type FloatAnalyticsFilter struct {
-	Equals *float64 `json:"equals,omitempty"`
-	Not    *float64 `json:"not,omitempty"`
-	Lt     *float64 `json:"lt,omitempty"`
-	Lte    *float64 `json:"lte,omitempty"`
-	Gt     *float64 `json:"gt,omitempty"`
-	Gte    *float64 `json:"gte,omitempty"`
-	IsNull *bool    `json:"isNull,omitempty"`
-}
-
 type FloatFilter struct {
 	Equals *float64  `json:"equals,omitempty"`
 	Not    *float64  `json:"not,omitempty"`
@@ -433,32 +317,10 @@ type FloatFilter struct {
 	Gte    *float64  `json:"gte,omitempty"`
 }
 
-type FloatListFilter struct {
-	Equals   []float64 `json:"equals,omitempty"`
-	Has      *float64  `json:"has,omitempty"`
-	HasEvery []float64 `json:"hasEvery,omitempty"`
-	HasSome  []float64 `json:"hasSome,omitempty"`
-	IsEmpty  *bool     `json:"isEmpty,omitempty"`
-}
-
-type FloatListUpdateOperationsInput struct {
-	Set []float64 `json:"set,omitempty"`
-}
-
 type FloatUpdateOperationsInput struct {
 	Set       *float64 `json:"set,omitempty"`
 	Increment *float64 `json:"increment,omitempty"`
 	Decrement *float64 `json:"decrement,omitempty"`
-}
-
-type IntAnalyticsFilter struct {
-	Equals *int  `json:"equals,omitempty"`
-	Not    *int  `json:"not,omitempty"`
-	Lt     *int  `json:"lt,omitempty"`
-	Lte    *int  `json:"lte,omitempty"`
-	Gt     *int  `json:"gt,omitempty"`
-	Gte    *int  `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type IntFilter struct {
@@ -472,49 +334,10 @@ type IntFilter struct {
 	Gte    *int  `json:"gte,omitempty"`
 }
 
-type IntListFilter struct {
-	Equals   []int `json:"equals,omitempty"`
-	Has      *int  `json:"has,omitempty"`
-	HasEvery []int `json:"hasEvery,omitempty"`
-	HasSome  []int `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type IntListUpdateOperationsInput struct {
-	Set []int `json:"set,omitempty"`
-}
-
 type IntUpdateOperationsInput struct {
 	Set       *int `json:"set,omitempty"`
 	Increment *int `json:"increment,omitempty"`
 	Decrement *int `json:"decrement,omitempty"`
-}
-
-type JSONFilter struct {
-	Equals           any        `json:"equals,omitempty"`
-	Not              any        `json:"not,omitempty"`
-	Lt               any        `json:"lt,omitempty"`
-	Lte              any        `json:"lte,omitempty"`
-	Gt               any        `json:"gt,omitempty"`
-	Gte              any        `json:"gte,omitempty"`
-	StringContains   *string    `json:"stringContains,omitempty"`
-	StringStartsWith *string    `json:"stringStartsWith,omitempty"`
-	StringEndsWith   *string    `json:"stringEndsWith,omitempty"`
-	ArrayContains    any        `json:"arrayContains,omitempty"`
-	ArrayStartsWith  any        `json:"arrayStartsWith,omitempty"`
-	ArrayEndsWith    any        `json:"arrayEndsWith,omitempty"`
-	Path             []string   `json:"path,omitempty"`
-	Mode             *QueryMode `json:"mode,omitempty"`
-}
-
-type JSONUpdateOperationsInput struct {
-	Set any `json:"set,omitempty"`
-}
-
-type KindAnalyticsFilter struct {
-	Equals *Kind `json:"equals,omitempty"`
-	Not    *Kind `json:"not,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type KindFilter struct {
@@ -552,276 +375,11 @@ type NullableBigIntFilter struct {
 	IsNull *bool `json:"isNull,omitempty"`
 }
 
-type NullableBigIntListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableBigIntListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
 type NullableBigIntUpdateOperationsInput struct {
 	Set       any   `json:"set,omitempty"`
 	SetNull   *bool `json:"setNull,omitempty"`
 	Increment any   `json:"increment,omitempty"`
 	Decrement any   `json:"decrement,omitempty"`
-}
-
-type NullableBooleanFilter struct {
-	Equals *bool  `json:"equals,omitempty"`
-	Not    *bool  `json:"not,omitempty"`
-	In     []bool `json:"in,omitempty"`
-	NotIn  []bool `json:"notIn,omitempty"`
-	IsNull *bool  `json:"isNull,omitempty"`
-}
-
-type NullableBooleanListFilter struct {
-	Equals   []bool `json:"equals,omitempty"`
-	Has      *bool  `json:"has,omitempty"`
-	HasEvery []bool `json:"hasEvery,omitempty"`
-	HasSome  []bool `json:"hasSome,omitempty"`
-	IsEmpty  *bool  `json:"isEmpty,omitempty"`
-	IsNull   *bool  `json:"isNull,omitempty"`
-}
-
-type NullableBooleanListUpdateOperationsInput struct {
-	Set     []bool `json:"set,omitempty"`
-	SetNull *bool  `json:"setNull,omitempty"`
-}
-
-type NullableBooleanUpdateOperationsInput struct {
-	Set     *bool `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableBytesFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	In     []any `json:"in,omitempty"`
-	NotIn  []any `json:"notIn,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableBytesUpdateOperationsInput struct {
-	Set     any   `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDateFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	In     []any `json:"in,omitempty"`
-	NotIn  []any `json:"notIn,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableDateListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableDateListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDateTimeFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	In     []any `json:"in,omitempty"`
-	NotIn  []any `json:"notIn,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableDateTimeListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableDateTimeListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDateTimeUpdateOperationsInput struct {
-	Set     any   `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDateUpdateOperationsInput struct {
-	Set     any   `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDecimalFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	In     []any `json:"in,omitempty"`
-	NotIn  []any `json:"notIn,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableDecimalListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableDecimalListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableDecimalUpdateOperationsInput struct {
-	Set       any   `json:"set,omitempty"`
-	SetNull   *bool `json:"setNull,omitempty"`
-	Increment any   `json:"increment,omitempty"`
-	Decrement any   `json:"decrement,omitempty"`
-}
-
-type NullableFloatFilter struct {
-	Equals *float64  `json:"equals,omitempty"`
-	Not    *float64  `json:"not,omitempty"`
-	In     []float64 `json:"in,omitempty"`
-	NotIn  []float64 `json:"notIn,omitempty"`
-	Lt     *float64  `json:"lt,omitempty"`
-	Lte    *float64  `json:"lte,omitempty"`
-	Gt     *float64  `json:"gt,omitempty"`
-	Gte    *float64  `json:"gte,omitempty"`
-	IsNull *bool     `json:"isNull,omitempty"`
-}
-
-type NullableFloatListFilter struct {
-	Equals   []float64 `json:"equals,omitempty"`
-	Has      *float64  `json:"has,omitempty"`
-	HasEvery []float64 `json:"hasEvery,omitempty"`
-	HasSome  []float64 `json:"hasSome,omitempty"`
-	IsEmpty  *bool     `json:"isEmpty,omitempty"`
-	IsNull   *bool     `json:"isNull,omitempty"`
-}
-
-type NullableFloatListUpdateOperationsInput struct {
-	Set     []float64 `json:"set,omitempty"`
-	SetNull *bool     `json:"setNull,omitempty"`
-}
-
-type NullableFloatUpdateOperationsInput struct {
-	Set       *float64 `json:"set,omitempty"`
-	SetNull   *bool    `json:"setNull,omitempty"`
-	Increment *float64 `json:"increment,omitempty"`
-	Decrement *float64 `json:"decrement,omitempty"`
-}
-
-type NullableIntFilter struct {
-	Equals *int  `json:"equals,omitempty"`
-	Not    *int  `json:"not,omitempty"`
-	In     []int `json:"in,omitempty"`
-	NotIn  []int `json:"notIn,omitempty"`
-	Lt     *int  `json:"lt,omitempty"`
-	Lte    *int  `json:"lte,omitempty"`
-	Gt     *int  `json:"gt,omitempty"`
-	Gte    *int  `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableIntListFilter struct {
-	Equals   []int `json:"equals,omitempty"`
-	Has      *int  `json:"has,omitempty"`
-	HasEvery []int `json:"hasEvery,omitempty"`
-	HasSome  []int `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableIntListUpdateOperationsInput struct {
-	Set     []int `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableIntUpdateOperationsInput struct {
-	Set       *int  `json:"set,omitempty"`
-	SetNull   *bool `json:"setNull,omitempty"`
-	Increment *int  `json:"increment,omitempty"`
-	Decrement *int  `json:"decrement,omitempty"`
-}
-
-type NullableJSONFilter struct {
-	Equals           any        `json:"equals,omitempty"`
-	Not              any        `json:"not,omitempty"`
-	Lt               any        `json:"lt,omitempty"`
-	Lte              any        `json:"lte,omitempty"`
-	Gt               any        `json:"gt,omitempty"`
-	Gte              any        `json:"gte,omitempty"`
-	StringContains   *string    `json:"stringContains,omitempty"`
-	StringStartsWith *string    `json:"stringStartsWith,omitempty"`
-	StringEndsWith   *string    `json:"stringEndsWith,omitempty"`
-	ArrayContains    any        `json:"arrayContains,omitempty"`
-	ArrayStartsWith  any        `json:"arrayStartsWith,omitempty"`
-	ArrayEndsWith    any        `json:"arrayEndsWith,omitempty"`
-	Path             []string   `json:"path,omitempty"`
-	Mode             *QueryMode `json:"mode,omitempty"`
-	IsNull           *bool      `json:"isNull,omitempty"`
-}
-
-type NullableJSONUpdateOperationsInput struct {
-	Set     any   `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableKindFilter struct {
-	Equals *Kind  `json:"equals,omitempty"`
-	Not    *Kind  `json:"not,omitempty"`
-	In     []Kind `json:"in,omitempty"`
-	NotIn  []Kind `json:"notIn,omitempty"`
-	IsNull *bool  `json:"isNull,omitempty"`
-}
-
-type NullableKindListFilter struct {
-	Equals   []Kind `json:"equals,omitempty"`
-	Has      *Kind  `json:"has,omitempty"`
-	HasEvery []Kind `json:"hasEvery,omitempty"`
-	HasSome  []Kind `json:"hasSome,omitempty"`
-	IsEmpty  *bool  `json:"isEmpty,omitempty"`
-	IsNull   *bool  `json:"isNull,omitempty"`
-}
-
-type NullableKindListUpdateOperationsInput struct {
-	Set     []Kind `json:"set,omitempty"`
-	SetNull *bool  `json:"setNull,omitempty"`
-}
-
-type NullableKindUpdateOperationsInput struct {
-	Set     *Kind `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
 }
 
 type NullableStringFilter struct {
@@ -840,54 +398,9 @@ type NullableStringFilter struct {
 	IsNull     *bool      `json:"isNull,omitempty"`
 }
 
-type NullableStringListFilter struct {
-	Equals   []string `json:"equals,omitempty"`
-	Has      *string  `json:"has,omitempty"`
-	HasEvery []string `json:"hasEvery,omitempty"`
-	HasSome  []string `json:"hasSome,omitempty"`
-	IsEmpty  *bool    `json:"isEmpty,omitempty"`
-	IsNull   *bool    `json:"isNull,omitempty"`
-}
-
-type NullableStringListUpdateOperationsInput struct {
-	Set     []string `json:"set,omitempty"`
-	SetNull *bool    `json:"setNull,omitempty"`
-}
-
 type NullableStringUpdateOperationsInput struct {
 	Set     *string `json:"set,omitempty"`
 	SetNull *bool   `json:"setNull,omitempty"`
-}
-
-type NullableTimeFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	In     []any `json:"in,omitempty"`
-	NotIn  []any `json:"notIn,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableTimeListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableTimeListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
-}
-
-type NullableTimeUpdateOperationsInput struct {
-	Set     any   `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
 }
 
 type NullableUUIDFilter struct {
@@ -896,20 +409,6 @@ type NullableUUIDFilter struct {
 	In     []any `json:"in,omitempty"`
 	NotIn  []any `json:"notIn,omitempty"`
 	IsNull *bool `json:"isNull,omitempty"`
-}
-
-type NullableUUIDListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-	IsNull   *bool `json:"isNull,omitempty"`
-}
-
-type NullableUUIDListUpdateOperationsInput struct {
-	Set     []any `json:"set,omitempty"`
-	SetNull *bool `json:"setNull,omitempty"`
 }
 
 type NullableUUIDUpdateOperationsInput struct {
@@ -954,11 +453,6 @@ type OwnerEntriesUpdateRelationInput struct {
 	Upsert          []*EntryUpsertWithWhereWithoutOwnerInput     `json:"upsert,omitempty"`
 }
 
-type OwnerOrderByInput struct {
-	ID   *SortOrder `json:"id,omitempty"`
-	Name *SortOrder `json:"name,omitempty"`
-}
-
 type OwnerRelationFilter struct {
 	Is    *OwnerWhereInput `json:"is,omitempty"`
 	IsNot *OwnerWhereInput `json:"isNot,omitempty"`
@@ -968,11 +462,6 @@ type OwnerUpdateInput struct {
 	ID      *UUIDUpdateOperationsInput       `json:"id,omitempty"`
 	Name    *StringUpdateOperationsInput     `json:"name,omitempty"`
 	Entries *OwnerEntriesUpdateRelationInput `json:"entries,omitempty"`
-}
-
-type OwnerUpdateManyInput struct {
-	ID   *UUIDUpdateOperationsInput   `json:"id,omitempty"`
-	Name *StringUpdateOperationsInput `json:"name,omitempty"`
 }
 
 type OwnerUpdateWithoutEntriesInput struct {
@@ -997,20 +486,6 @@ type OwnerWhereInput struct {
 
 type OwnerWhereUniqueInput struct {
 	ID any `json:"ID,omitempty"`
-}
-
-type StringAnalyticsFilter struct {
-	Equals     *string    `json:"equals,omitempty"`
-	Not        *string    `json:"not,omitempty"`
-	Lt         *string    `json:"lt,omitempty"`
-	Lte        *string    `json:"lte,omitempty"`
-	Gt         *string    `json:"gt,omitempty"`
-	Gte        *string    `json:"gte,omitempty"`
-	Contains   *string    `json:"contains,omitempty"`
-	StartsWith *string    `json:"startsWith,omitempty"`
-	EndsWith   *string    `json:"endsWith,omitempty"`
-	Mode       *QueryMode `json:"mode,omitempty"`
-	IsNull     *bool      `json:"isNull,omitempty"`
 }
 
 type StringFilter struct {
@@ -1044,16 +519,6 @@ type StringUpdateOperationsInput struct {
 	Set *string `json:"set,omitempty"`
 }
 
-type TimeAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	Lt     any   `json:"lt,omitempty"`
-	Lte    any   `json:"lte,omitempty"`
-	Gt     any   `json:"gt,omitempty"`
-	Gte    any   `json:"gte,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
-}
-
 type TimeFilter struct {
 	Equals any   `json:"equals,omitempty"`
 	Not    any   `json:"not,omitempty"`
@@ -1065,26 +530,8 @@ type TimeFilter struct {
 	Gte    any   `json:"gte,omitempty"`
 }
 
-type TimeListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type TimeListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
-}
-
 type TimeUpdateOperationsInput struct {
 	Set any `json:"set,omitempty"`
-}
-
-type UUIDAnalyticsFilter struct {
-	Equals any   `json:"equals,omitempty"`
-	Not    any   `json:"not,omitempty"`
-	IsNull *bool `json:"isNull,omitempty"`
 }
 
 type UUIDFilter struct {
@@ -1092,18 +539,6 @@ type UUIDFilter struct {
 	Not    any   `json:"not,omitempty"`
 	In     []any `json:"in,omitempty"`
 	NotIn  []any `json:"notIn,omitempty"`
-}
-
-type UUIDListFilter struct {
-	Equals   []any `json:"equals,omitempty"`
-	Has      any   `json:"has,omitempty"`
-	HasEvery []any `json:"hasEvery,omitempty"`
-	HasSome  []any `json:"hasSome,omitempty"`
-	IsEmpty  *bool `json:"isEmpty,omitempty"`
-}
-
-type UUIDListUpdateOperationsInput struct {
-	Set []any `json:"set,omitempty"`
 }
 
 type UUIDUpdateOperationsInput struct {
@@ -1225,47 +660,6 @@ func (e *Kind) UnmarshalGQL(v any) error {
 }
 
 func (e Kind) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-type OwnerScalarField string
-
-const (
-	OwnerScalarFieldID   OwnerScalarField = "id"
-	OwnerScalarFieldName OwnerScalarField = "name"
-)
-
-var AllOwnerScalarField = []OwnerScalarField{
-	OwnerScalarFieldID,
-	OwnerScalarFieldName,
-}
-
-func (e OwnerScalarField) IsValid() bool {
-	switch e {
-	case OwnerScalarFieldID, OwnerScalarFieldName:
-		return true
-	}
-	return false
-}
-
-func (e OwnerScalarField) String() string {
-	return string(e)
-}
-
-func (e *OwnerScalarField) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = OwnerScalarField(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid OwnerScalarField", str)
-	}
-	return nil
-}
-
-func (e OwnerScalarField) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
