@@ -356,3 +356,5 @@ func fuzzLimitMaximum(index int) int {
 func setFuzzLimit(limits *Limits, index, value int) {
 	*limitBounds[index].field(limits) = value
 }
+
+func (fuzzExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

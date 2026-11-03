@@ -25,7 +25,12 @@ import (
 type orderExecutor struct {
 	response func(graphql.Operation) graphql.Response
 	event    graphql.Response
+	bounds   map[string]int
 }
+
+var p5SocialListBounds = map[string]int{"Query.groupByPosts": 10_000, "Query.relationGroupByPosts": 10_000}
+
+var abstractListBounds = map[string]int{"Query.pets": 2, "Query.nodes": 2}
 
 func (executor orderExecutor) Execute(_ context.Context, _ int, operation graphql.Operation) graphql.Response {
 	return executor.response(operation)
@@ -192,7 +197,7 @@ func TestHTTPResponsesFollowSelectionOrderThroughTheExecutable(t *testing.T) {
 	sdl := p5SocialSDL(t)
 	for _, testCase := range executableOrderCases() {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := orderServer(t, sdl, p5SocialExecutable(), orderExecutor{response: testCase.response})
+			server := orderServer(t, sdl, p5SocialExecutable(), orderExecutor{response: testCase.response, bounds: p5SocialListBounds})
 			if got := orderHTTP(t, server, testCase.query); got != testCase.want+"\n" {
 				t.Fatalf("body\n got=%s\nwant=%s", got, testCase.want)
 			}
@@ -224,7 +229,7 @@ func TestHTTPResponsesFollowSelectionOrderWithoutAnExecutable(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			server := orderServer(t, sdl, nil, orderExecutor{response: testCase.response})
+			server := orderServer(t, sdl, nil, orderExecutor{response: testCase.response, bounds: p5SocialListBounds})
 			body, err := json.Marshal(map[string]any{"query": testCase.query, "variables": map[string]any{"hide": true}})
 			if err != nil {
 				t.Fatal(err)
@@ -245,7 +250,7 @@ func TestDirectExecuteKeepsDecodedGoValues(t *testing.T) {
 	for _, executable := range []gqlgengraphql.ExecutableSchema{p5SocialExecutable(), nil} {
 		server := orderServer(t, sdl, executable, orderExecutor{response: staticData(map[string]any{
 			"zeta": []any{map[string]any{"name": "Ada", "id": "u1"}},
-		})})
+		}), bounds: p5SocialListBounds})
 		response := server.Execute(context.Background(), 1, graphql.Request{Query: `{ zeta: users { name id } }`})
 		data, ok := response.Data.(map[string]any)
 		if !ok || len(response.Errors) != 0 {
@@ -325,7 +330,7 @@ func largeListData(users, posts int) map[string]any {
 const largeListQuery = `{ users(take: 1000) { name id __typename _count { posts comments } posts(take: 5) { title id } } }`
 
 func benchmarkLargeList(b *testing.B, executable gqlgengraphql.ExecutableSchema) {
-	server := orderServerWithLimits(b, p5SocialSDL(b), executable, orderExecutor{response: staticData(largeListData(1000, 5))}, graphql.Limits{MaxComplexity: 100_000, MaxPageSize: 1_000})
+	server := orderServerWithLimits(b, p5SocialSDL(b), executable, orderExecutor{response: staticData(largeListData(1000, 5)), bounds: p5SocialListBounds}, graphql.Limits{MaxComplexity: 100_000, MaxPageSize: 1_000})
 	body, err := json.Marshal(map[string]any{"query": largeListQuery})
 	if err != nil {
 		b.Fatal(err)
@@ -554,10 +559,14 @@ func TestAbstractRuntimeTypeResolutionTable(t *testing.T) {
 				t.Fatalf("oracle chose %s for a conforming Dog with a distinguishable shape", typename)
 			}
 			want := row.want(t, typename)
-			server := orderServer(t, abstractOrderSchema, nil, orderExecutor{response: staticData(map[string]any{row.root: []any{row.object()}})})
+			server := orderServer(t, abstractOrderSchema, nil, orderExecutor{response: staticData(map[string]any{row.root: []any{row.object()}}), bounds: abstractListBounds})
 			if got := orderHTTP(t, server, row.query()); got != want+"\n" {
 				t.Fatalf("query %s\n got=%s\nwant=%s (%s)", row.query(), got, want, typename)
 			}
 		})
 	}
+}
+
+func (executor orderExecutor) ListBounds() graphql.ListBounds {
+	return graphql.NewListBounds(executor.bounds)
 }

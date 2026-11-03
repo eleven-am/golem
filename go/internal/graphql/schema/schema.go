@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
 type Document struct{ SDL string }
@@ -99,7 +100,7 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 	}
 	sections = append(sections, withoutInputs...)
 	sections = append(sections, allRelationFilterTypes(views, contractByModel)...)
-	query, mutation, subscription, err := renderRoots(views, compilation.Contract.CustomOperations)
+	query, mutation, subscription, err := renderRoots(views, compilation)
 	if err != nil {
 		return Document{}, err
 	}
@@ -361,7 +362,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			many := field.Relation.Kind == ir.RelationHasMany
 			if readable {
 				if many {
-					fmt.Fprintf(&output, "  %s(where: %sWhereInput, orderBy: [%sOrderByInput!], cursor: %sWhereUniqueInput, distinct: [%sScalarField!], skip: Int, take: Int = %d): [%s!]\n", fc.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, view.contract.Limits.DefaultPageSize, target.GraphQLName)
+					fmt.Fprintf(&output, "  %s(where: %sWhereInput, orderBy: [%sOrderByInput!], cursor: %sWhereUniqueInput, distinct: [%sScalarField!], skip: Int, take: Int = %d): [%s!]\n", fc.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.GraphQLName, target.Limits.DefaultPageSize, target.GraphQLName)
 					countFields = append(countFields, fmt.Sprintf("  %s(where: %sWhereInput): Int", fc.GraphQLName, target.GraphQLName))
 					fmt.Fprintf(&where, "  %s: %sListRelationFilter\n", fc.GraphQLName, target.GraphQLName)
 				} else {
@@ -432,7 +433,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		if typeErr != nil {
 			return nil, fmt.Errorf("model %s computed field %s: %w", name, field.Name, typeErr)
 		}
-		arguments, argumentErr := renderGraphQLArguments(field.Arguments)
+		arguments, argumentErr := renderGraphQLArguments(field.Arguments, 0)
 		if argumentErr != nil {
 			return nil, fmt.Errorf("model %s computed field %s: %w", name, field.Name, argumentErr)
 		}
@@ -520,7 +521,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 	return sections, nil
 }
 
-func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (string, string, string, error) {
+func renderRoots(views []modelView, compilation ir.CompilationIR) (string, string, string, error) {
 	var query, mutation, subscription bytes.Buffer
 	query.WriteString("type Query {\n")
 	mutation.WriteString("type Mutation {\n")
@@ -601,7 +602,7 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 			subscriptionCount++
 		}
 	}
-	operations := append([]ir.CustomOperationContractIR(nil), custom...)
+	operations := append([]ir.CustomOperationContractIR(nil), compilation.Contract.CustomOperations...)
 	sort.Slice(operations, func(i, j int) bool {
 		if operations[i].Operation != operations[j].Operation {
 			return operations[i].Operation < operations[j].Operation
@@ -616,7 +617,8 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 		if err != nil {
 			return "", "", "", fmt.Errorf("custom %s %s result: %w", operation.Operation, operation.Name, err)
 		}
-		arguments, err := renderGraphQLArguments(operation.Arguments)
+		takeDefault, _ := graphqlextension.SearchTakeDefault(compilation, operation)
+		arguments, err := renderGraphQLArguments(operation.Arguments, takeDefault)
 		if err != nil {
 			return "", "", "", fmt.Errorf("custom %s %s: %w", operation.Operation, operation.Name, err)
 		}
@@ -697,7 +699,7 @@ func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) 
 	return sections, nil
 }
 
-func renderGraphQLArguments(arguments []ir.GraphQLArgumentContractIR) (string, error) {
+func renderGraphQLArguments(arguments []ir.GraphQLArgumentContractIR, takeDefault uint32) (string, error) {
 	if len(arguments) == 0 {
 		return "", nil
 	}
@@ -708,6 +710,9 @@ func renderGraphQLArguments(arguments []ir.GraphQLArgumentContractIR) (string, e
 			return "", fmt.Errorf("argument %s: %w", argument.Name, err)
 		}
 		values[index] = argument.Name + ": " + typeName
+		if argument.Name == "take" && takeDefault != 0 {
+			values[index] += fmt.Sprintf(" = %d", takeDefault)
+		}
 	}
 	return "(" + strings.Join(values, ", ") + ")", nil
 }

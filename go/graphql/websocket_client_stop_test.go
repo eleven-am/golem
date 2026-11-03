@@ -386,3 +386,7 @@ func TestWebSocketContextCancelledRecvEndsOperationWithoutFrame(t *testing.T) {
 		t.Fatalf("frame after a context-cancelled Recv = %#v", frame)
 	}
 }
+
+func (clientStopExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func (*stopRaceExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

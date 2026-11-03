@@ -122,3 +122,5 @@ type TickEvent { eventID: UUID! type: GolemEventType! entity: Thing }
 type Query { viewer: Int! }
 type Subscription { ticks: TickEvent! }
 `
+
+func (activeSubscriptionExecutor) ListBounds() graphql.ListBounds { return graphql.NewListBounds(nil) }

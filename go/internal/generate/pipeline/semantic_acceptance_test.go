@@ -412,11 +412,11 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 
 	limited, err := application.GraphQL(app.GraphQLConfig[string]{
 		PrincipalFromContext: func(context.Context) (string, bool) { return "public", true },
-		Limits: golemgraphql.Limits{MaxPageSize: 1},
+		Limits: golemgraphql.Limits{MaxPageSize: 50},
 		ReportInternalError: func(context.Context, error) {},
 	})
 	if err != nil { t.Fatal(err) }
-	overRuntimeLimit := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 2) { title } }\"}"))
+	overRuntimeLimit := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 51) { title } }\"}"))
 	overRuntimeLimit.Header.Set("Content-Type", "application/json")
 	overRuntimeLimitResponse := httptest.NewRecorder()
 	limited.Handler().ServeHTTP(overRuntimeLimitResponse, overRuntimeLimit)

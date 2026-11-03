@@ -1,5 +1,7 @@
 package ir
 
+import "math"
+
 type ListBoundFault uint8
 
 const (
@@ -65,4 +67,25 @@ func (value GraphQLTypeIR) listBoundViolations(result bool, level int, found []L
 		found = append(found, ListBoundViolation{Fault: ListBoundStray, Level: level})
 	}
 	return found
+}
+
+func (value GraphQLTypeIR) CompositeListCapacity() (int, bool) {
+	if value.Kind != GraphQLTypeList {
+		return 0, false
+	}
+	capacity := 1
+	current := &value
+	for current != nil && current.Kind == GraphQLTypeList {
+		level := int(math.MaxInt)
+		if uint64(current.MaxItems) < uint64(math.MaxInt) {
+			level = int(current.MaxItems)
+		}
+		if level != 0 && capacity > math.MaxInt/level {
+			capacity = math.MaxInt
+		} else {
+			capacity *= level
+		}
+		current = current.Element
+	}
+	return capacity, current != nil && current.Kind == GraphQLTypeModel
 }

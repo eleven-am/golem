@@ -144,3 +144,46 @@ func customCallerOnly(operation ir.CustomOperationContractIR) ir.CustomOperation
 	operation.Capability = ir.CustomOperationCallerOnly
 	return operation
 }
+
+func TestSearchTakeDefaultIsThePageDefaultNarrowedByTheSearchMaximum(t *testing.T) {
+	cases := []struct {
+		name   string
+		limits ir.LimitContractIR
+		want   uint32
+	}{
+		{"page default below the maximum", ir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 500}, 25},
+		{"page default equal to the maximum", ir.LimitContractIR{DefaultPageSize: 40, MaxPageSize: 40}, 40},
+		{"model take maximum below the page default", ir.LimitContractIR{DefaultPageSize: 50, MaxPageSize: 500, MaxTake: 30}, 30},
+		{"engine ceiling below the page default", ir.LimitContractIR{DefaultPageSize: 3000, MaxPageSize: 5000}, 1000},
+	}
+	for _, test := range cases {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			compilation := generatedSearchCompilation(t, test.limits)
+			if len(compilation.Contract.CustomOperations) == 0 {
+				t.Fatal("no generated search roots")
+			}
+			for _, operation := range compilation.Contract.CustomOperations {
+				got, generated := SearchTakeDefault(compilation, operation)
+				if !generated || got != test.want {
+					t.Fatalf("%s take default = %d/%v, want %d", operation.Name, got, generated, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestSearchTakeDefaultRefusesAnythingThatIsNotAGeneratedRoot(t *testing.T) {
+	compilation := generatedSearchCompilation(t, ir.LimitContractIR{DefaultPageSize: 50, MaxPageSize: 500})
+	for _, operation := range compilation.Contract.CustomOperations {
+		tampered := operation
+		tampered.Result.MaxItems++
+		if value, generated := SearchTakeDefault(compilation, tampered); generated {
+			t.Fatalf("%s with a forged maximum has a search take default %d", operation.Name, value)
+		}
+	}
+	handWritten := ir.CustomOperationContractIR{Operation: ir.CustomOperationQuery, Name: "mine", Result: compilation.Contract.CustomOperations[0].Result}
+	if value, generated := SearchTakeDefault(compilation, handWritten); generated {
+		t.Fatalf("a hand-written root has a search take default %d", value)
+	}
+}

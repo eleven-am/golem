@@ -191,6 +191,24 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 	return compiler, nil
 }
 
+func (c *Compiler) groupMaximum(contract compilerir.ModelContractIR) int {
+	maximum := int(contract.Aggregation.GraphQLMaxGroups)
+	if maximum <= 0 || c.limits.MaxGroups < maximum {
+		return c.limits.MaxGroups
+	}
+	return maximum
+}
+
+func (c *Compiler) GroupRootMaxima() map[string]int {
+	maxima := map[string]int{}
+	for name, binding := range c.bindings {
+		if binding.operation == golem.AnalyticsGroupBy || binding.operation == golem.AnalyticsRelationGroupBy {
+			maxima[name] = c.groupMaximum(c.models[binding.model].contract)
+		}
+	}
+	return maxima
+}
+
 func buildModelBinding(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, models map[compilerir.ModelID]compilerir.ModelDeclIR, contracts map[compilerir.ModelID]compilerir.ModelContractIR, relations map[compilerir.RelationID]compilerir.RelationIR) (modelBinding, error) {
 	result := modelBinding{model: model, contract: contract, localDimensions: map[string]termBinding{}, relationDimensions: map[string]termBinding{}, measureFields: map[string]compilerir.FieldIR{}}
 	fields := map[compilerir.FieldID]compilerir.FieldIR{}
@@ -383,10 +401,7 @@ func (c *Compiler) compile(field *ast.Field, binding rootBinding, fragments ast.
 			}
 			request.Skip = &value
 		}
-		maximum := int(model.contract.Aggregation.GraphQLMaxGroups)
-		if maximum <= 0 || c.limits.MaxGroups < maximum {
-			maximum = c.limits.MaxGroups
-		}
+		maximum := c.groupMaximum(model.contract)
 		root.MaxGroups = maximum
 		if raw, present := arguments["take"]; present {
 			value, valueErr := exactInt(raw)

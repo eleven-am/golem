@@ -213,27 +213,29 @@ func TestGeneratedGraphQLPrincipalRefusalsIssueZeroSQLAcrossProviders(t *testing
 
 func TestSILENT_PAGE_TRUNCATIONGeneratedGraphQLDefaultPageNeverSilentlyTruncatesSQLite(t *testing.T) {
 	profile := p5ExtensionProviderProfile{name: "sqlite", provider: golem.SQLite}
-	server, database, trace, resolutions := newP5ExtensionTracedProviderFixtureWithLimits(t, profile, p5extensions.GraphQLLimits{MaxPageSize: 2})
-	seedP5ExtensionUsers(t, database, profile.provider)
+	application, _, _, _ := openP5ExtensionTracedApplication(t, profile)
+	_, err := application.GraphQL(p5extensions.GraphQLConfig[p5extensions.Principal]{
+		PrincipalFromContext: func(context.Context) (p5extensions.Principal, bool) { return p5extensions.Principal{}, false },
+		Limits:               p5extensions.GraphQLLimits{MaxPageSize: 2},
+		ReportInternalError:  func(context.Context, error) {},
+	})
+	if err == nil || !strings.Contains(err.Error(), "default page size 50 exceeds the MaxPageSize limit 2") {
+		t.Fatalf("a runtime maximum below the advertised default page was accepted: %v", err)
+	}
 
+	server, database, trace, _ := newP5ExtensionTracedProviderFixtureWithLimits(t, profile, p5extensions.GraphQLLimits{MaxPageSize: 50})
+	seedP5ExtensionUsers(t, database, profile.provider)
 	if !strings.Contains(server.SDL(), "take: Int = 50") {
 		t.Fatalf("generated public SDL does not expose the ContractIR page default:\n%s", server.SDL())
 	}
 	trace.reset()
-	omitted := executeP5ExtensionGraphQL(t, server, p5extensions.Principal{ID: "alpha", Valid: true}, `query { users { id } }`, nil)
-	if len(omitted.Errors) != 1 || omitted.Errors[0].Extensions["code"] != "BAD_USER_INPUT" || omitted.Errors[0].Message != "Argument take on User must be between -2 and 2, excluding 0" {
-		t.Fatalf("omitted SDL default above runtime maximum was not visibly refused: %#v", omitted)
+	omitted := executeP5ExtensionGraphQL(t, server, p5extensions.Principal{ID: "alpha", Valid: true}, `query { users(orderBy: [{id: asc}]) { id } }`, nil)
+	if len(omitted.Errors) != 0 {
+		t.Fatalf("omitted take at the runtime maximum failed: %#v", omitted)
 	}
-	if statements := trace.snapshot(); len(statements) != 0 {
-		t.Fatalf("refused SDL default issued SQL: %v", statements)
-	}
-	if resolutions.Load() != 0 {
-		t.Fatalf("refused SDL default opened caller execution %d times", resolutions.Load())
-	}
-
-	explicit := executeP5ExtensionGraphQL(t, server, p5extensions.Principal{ID: "alpha", Valid: true}, `query { users(orderBy: [{id: asc}], take: 2) { id } }`, nil)
-	if len(explicit.Errors) != 0 || len(p5ExtensionRows(t, explicit.Data["users"])) != 2 {
-		t.Fatalf("explicit page at runtime maximum failed: %#v", explicit)
+	oversized := executeP5ExtensionGraphQL(t, server, p5extensions.Principal{ID: "alpha", Valid: true}, `query { users(orderBy: [{id: asc}], take: 51) { id } }`, nil)
+	if len(oversized.Errors) != 1 || oversized.Errors[0].Extensions["code"] != "BAD_USER_INPUT" || oversized.Errors[0].Message != "Argument take on User must be between -50 and 50, excluding 0" {
+		t.Fatalf("take above the runtime maximum was not visibly refused: %#v", oversized)
 	}
 }
 
@@ -450,6 +452,24 @@ func newP5ExtensionTracedProviderFixture(t *testing.T, profile p5ExtensionProvid
 
 func newP5ExtensionTracedProviderFixtureWithLimits(t *testing.T, profile p5ExtensionProviderProfile, limits p5extensions.GraphQLLimits) (*p5extensions.GraphQLServer, *sqlx.DB, *p5ExtensionSQLTrace, *atomic.Int64) {
 	t.Helper()
+	application, database, trace, resolutions := openP5ExtensionTracedApplication(t, profile)
+	server, err := application.GraphQL(p5extensions.GraphQLConfig[p5extensions.Principal]{
+		PrincipalFromContext: func(ctx context.Context) (p5extensions.Principal, bool) {
+			principal, ok := ctx.Value(p5ExtensionPrincipalKey{}).(p5extensions.Principal)
+			return principal, ok
+		},
+		Limits:              limits,
+		ReportInternalError: func(_ context.Context, err error) { t.Logf("reported GraphQL error: %v", err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.reset()
+	return server, database, trace, resolutions
+}
+
+func openP5ExtensionTracedApplication(t *testing.T, profile p5ExtensionProviderProfile) (*p5extensions.App[p5extensions.Principal], *sqlx.DB, *p5ExtensionSQLTrace, *atomic.Int64) {
+	t.Helper()
 	ctx := context.Background()
 	trace := &p5ExtensionSQLTrace{}
 	var database *sqlx.DB
@@ -526,19 +546,7 @@ func newP5ExtensionTracedProviderFixtureWithLimits(t *testing.T, profile p5Exten
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := application.GraphQL(p5extensions.GraphQLConfig[p5extensions.Principal]{
-		PrincipalFromContext: func(ctx context.Context) (p5extensions.Principal, bool) {
-			principal, ok := ctx.Value(p5ExtensionPrincipalKey{}).(p5extensions.Principal)
-			return principal, ok
-		},
-		Limits:              limits,
-		ReportInternalError: func(_ context.Context, err error) { t.Logf("reported GraphQL error: %v", err) },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	trace.reset()
-	return server, database, trace, resolutions
+	return application, database, trace, resolutions
 }
 
 func assertP5ExtensionProviderIsolation(t *testing.T, provider golem.Provider, schema physical.PhysicalSchema) {

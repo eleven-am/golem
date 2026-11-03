@@ -124,3 +124,7 @@ func p7ReadSanitizedFrame(t testing.TB, connection *websocket.Conn) p7SanitizedF
 	}
 	return frame
 }
+
+func (p7SecretSubscriptionExecutor) ListBounds() publicgraphql.ListBounds {
+	return publicgraphql.NewListBounds(nil)
+}

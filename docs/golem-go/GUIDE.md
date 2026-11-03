@@ -1286,9 +1286,10 @@ committed, so the root is `COMMITTED_RESULT_UNAVAILABLE` with `committed: true`,
 `reason: LIMIT_EXCEEDED`, `limit: list_items` and `max`. `golem.LimitListItems`
 names the limit in Go.
 
-Generated semantic and full-text search roots declare their own maximum: the
-smallest of the search engines' ceiling, the model's `MaxPageSize` and its
-`MaxTake`.
+The maximum also sets the list's query cost. Generated semantic and full-text
+search roots declare their own maximum: the smallest of the search engines'
+ceiling, the model's `MaxPageSize` and its `MaxTake`. Their `take` argument
+defaults to the model's default page size, narrowed to that maximum.
 
 To run a custom mutation from Go, call the generated `Mutate`:
 
@@ -1891,6 +1892,30 @@ error also carries the operation's cost:
 {"message": "GraphQL query complexity 22 exceeds MaxComplexity (20)",
  "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxComplexity", "max": 20, "cost": 22}}
 ```
+
+A list field multiplies the cost of what it selects by the number of items it
+can return:
+
+- Its `take` argument, by magnitude, when the request gives one.
+- Otherwise its `take` default in the schema. Relation lists and `findMany`
+  roots advertise the listed model's default page size, and generated semantic
+  and full-text searches advertise that default narrowed by their maximum.
+- Otherwise its declared bound: the product of the `MaxItems` levels of a custom
+  or computed list, or `MaxGroups` for `groupBy` and `relationGroupBy` (the
+  smaller of the model's maximum and the runtime `MaxGroups`).
+
+`MaxPageSize` is not part of the cost. It is the ceiling for `take`, so a query
+that selects `me { ... }` over a list declared `MaxItems(1)` costs as one row.
+A `groupBy` without `take` costs `MaxGroups` rows, so give it a `take` when the
+query would otherwise exceed `MaxComplexity`.
+
+A server you build directly with `graphql.NewServer` needs the same facts. Its
+`Executor` must return them from `ListBounds()`, keyed `"Type.field"`, for every
+list of objects that has no `take` default. `NewServer` refuses an executor that
+omits one, that declares one for any other field, or that declares a bound below
+1. Generated executors provide the table. A generated executor also refuses to
+start when a model's default page size is above `MaxPageSize`, because the
+schema would advertise a `take` the runtime rejects.
 
 The cost is exact; it stops at the largest integer if the operation's fan-out
 overflows it. A request with no `query` is `BAD_REQUEST`

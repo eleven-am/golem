@@ -420,3 +420,5 @@ func TestSSESubscriptionsNeedASubscriptionExecutor(t *testing.T) {
 		t.Fatalf("GET status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func (*sseExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

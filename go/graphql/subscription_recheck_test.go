@@ -321,3 +321,5 @@ func TestShutdownWaitsForARunningSubscriptionRecheck(t *testing.T) {
 		t.Fatal("Shutdown returned while a subscription recheck was still running")
 	}
 }
+
+func (*recheckExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

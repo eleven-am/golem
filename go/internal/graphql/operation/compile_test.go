@@ -79,8 +79,17 @@ func TestCompilerLowersAliasedRootAndNestedArgumentsToP3(t *testing.T) {
 	}
 }
 
+func withDefaultPageSize(compilation compilerir.CompilationIR, size uint32) compilerir.CompilationIR {
+	models := append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range models {
+		models[index].Limits.DefaultPageSize = size
+	}
+	compilation.Contract.Models = models
+	return compilation
+}
+
 func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankOrder(t *testing.T) {
-	compilation := semanticSocial(t)
+	compilation := withDefaultPageSize(semanticSocial(t), 2)
 	document, err := graphqlschema.Build(compilation)
 	if err != nil {
 		t.Fatal(err)
@@ -1003,7 +1012,7 @@ func golemModelID(id compilerir.ModelID) (result golem.ModelID) {
 }
 
 func TestSemanticTakeOutsideItsMaximumNamesTheRootAndTheRange(t *testing.T) {
-	compilation := semanticSocial(t)
+	compilation := withDefaultPageSize(semanticSocial(t), 2)
 	document, err := graphqlschema.Build(compilation)
 	if err != nil {
 		t.Fatal(err)

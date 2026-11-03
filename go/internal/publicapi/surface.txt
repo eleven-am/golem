@@ -3510,7 +3510,8 @@ graphql.EventStream type interface {Close, Recv}
 graphql.EventStream.Close func() error
 graphql.EventStream.Recv func(context.Context) (GeneratedEvent, error)
 graphql.Executor.Execute func(context.Context, P, Operation) Response
-graphql.Executor[P any] type interface {Execute}
+graphql.Executor.ListBounds func() ListBounds
+graphql.Executor[P any] type interface {Execute, ListBounds}
 graphql.GeneratedCustomArgumentConversion type func(any) (any, error)
 graphql.GeneratedCustomMutationInputArgument func[M any](golem.ModelDescriptor[M], golem.RuntimeMutationInputKind) GeneratedCustomArgumentConversion
 graphql.GeneratedCustomPredicateArgument func[M any](golem.ModelDescriptor[M]) GeneratedCustomArgumentConversion
@@ -3544,6 +3545,7 @@ graphql.Limits.MaxResolverConcurrency field int
 graphql.Limits.MaxSelectedFields field int
 graphql.Limits.MaxTokens field int
 graphql.Limits.MaxVariableBytes field int
+graphql.ListBounds type struct
 graphql.Location comparable
 graphql.Location type struct
 graphql.Location unkeyed literal {Line, Column}
@@ -3552,6 +3554,7 @@ graphql.Location.Line field int tag "json:\"line\""
 graphql.NewCustomRegistry func(golem.SchemaBundle, ...CustomBinding) (*CustomRegistry, error)
 graphql.NewGeneratedEvent func(golem.EventMetadata, []any, *golem.RuntimeModelRow) (GeneratedEvent, error)
 graphql.NewGeneratedExecutor func[P any](GeneratedExecutorConfig[P]) (Executor[P], error)
+graphql.NewListBounds func(map[string]int) ListBounds
 graphql.NewServer func[P any](string, Config[P], Executor[P]) (*Server[P], error)
 graphql.NormalizeLimits func(Limits) (Limits, error)
 graphql.Operation type struct

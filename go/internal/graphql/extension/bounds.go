@@ -68,3 +68,27 @@ func ValidateListBounds(contract ir.ContractIR) []ir.Diagnostic {
 	}
 	return diagnostics
 }
+
+func SearchTakeDefault(compilation ir.CompilationIR, operation ir.CustomOperationContractIR) (uint32, bool) {
+	if !(IsSemanticSearchOperation(compilation, operation) || IsSemanticSimilarOperation(compilation, operation) || IsFullTextSearchOperation(compilation, operation)) {
+		return 0, false
+	}
+	for _, contract := range compilation.Contract.Models {
+		if contract.GraphQLName != searchResultModelName(operation.Result) {
+			continue
+		}
+		maximum := SearchMaximum(contract)
+		if contract.Limits.DefaultPageSize < maximum {
+			return contract.Limits.DefaultPageSize, true
+		}
+		return maximum, true
+	}
+	return 0, false
+}
+
+func searchResultModelName(result ir.GraphQLTypeIR) string {
+	if result.Kind == ir.GraphQLTypeList && result.Element != nil {
+		return result.Element.Name
+	}
+	return result.Name
+}

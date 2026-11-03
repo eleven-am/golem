@@ -202,7 +202,6 @@ func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p
 			principal, ok := ctx.Value(p10OperationPrincipalKey{}).(p10operations.Principal)
 			return principal, ok
 		},
-		Limits: p10operations.GraphQLLimits{MaxComplexity: 100_000, MaxPageSize: 50},
 		ReportInternalError: func(_ context.Context, err error) {
 			t.Logf("reported GraphQL error: %v", err)
 			reports.record(err)

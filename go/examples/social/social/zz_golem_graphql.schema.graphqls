@@ -933,8 +933,8 @@ type User {
   handle: String
   email: String
   createdAt: DateTime
-  posts(where: PostWhereInput, orderBy: [PostOrderByInput!], cursor: PostWhereUniqueInput, distinct: [PostScalarField!], skip: Int, take: Int = 25): [Post!]
-  comments(where: CommentWhereInput, orderBy: [CommentOrderByInput!], cursor: CommentWhereUniqueInput, distinct: [CommentScalarField!], skip: Int, take: Int = 25): [Comment!]
+  posts(where: PostWhereInput, orderBy: [PostOrderByInput!], cursor: PostWhereUniqueInput, distinct: [PostScalarField!], skip: Int, take: Int = 50): [Post!]
+  comments(where: CommentWhereInput, orderBy: [CommentOrderByInput!], cursor: CommentWhereUniqueInput, distinct: [CommentScalarField!], skip: Int, take: Int = 50): [Comment!]
   _count: UserCountOutput
 }
 

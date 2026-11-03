@@ -274,6 +274,7 @@ type Response struct {
 
 type Executor[P any] interface {
 	Execute(context.Context, P, Operation) Response
+	ListBounds() ListBounds
 }
 
 type Server[P any] struct {
@@ -282,6 +283,7 @@ type Server[P any] struct {
 	config              Config[P]
 	limits              Limits
 	executor            Executor[P]
+	listBounds          ListBounds
 	concurrency         chan struct{}
 	contractFingerprint golem.SchemaDigest
 	executable          gqlgengraphql.ExecutableSchema
@@ -319,11 +321,15 @@ func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Serv
 	if err != nil {
 		return nil, fmt.Errorf("invalid generated GraphQL schema: %w", err)
 	}
+	listBounds := executor.ListBounds()
+	if err := validateListBounds(schema, listBounds); err != nil {
+		return nil, err
+	}
 	if config.ExecutableSchema != nil && config.ExecutableSchema.Schema() == nil {
 		return nil, fmt.Errorf("GraphQL executable schema is incomplete")
 	}
 	lifecycle, cancel := context.WithCancel(context.Background())
-	return &Server[P]{schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema, eventLimits: eventLimits, lifecycle: lifecycle, cancel: cancel}, nil
+	return &Server[P]{schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, listBounds: listBounds, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema, eventLimits: eventLimits, lifecycle: lifecycle, cancel: cancel}, nil
 }
 
 func (server *Server[P]) SDL() string {
@@ -599,7 +605,7 @@ func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool)
 	if err != nil {
 		return fail(invalidVariables)
 	}
-	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, limits.MaxPageSize, map[string]bool{}, false)
+	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.listBounds, map[string]bool{}, false)
 	if err != nil {
 		return fail(invalidDocumentError())
 	}
@@ -824,7 +830,7 @@ func inputShape(value any, depth int) (nodes, maximumDepth, listItems, bytes int
 	return
 }
 
-func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, defaultPage int, stack map[string]bool, introspection bool) (int, error) {
+func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, bounds ListBounds, stack map[string]bool, introspection bool) (int, error) {
 	total := 0
 	for _, selection := range set {
 		switch value := selection.(type) {
@@ -833,18 +839,16 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				continue
 			}
 			nested := introspection || introspectionRoot(value)
-			child, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, stack, nested)
+			child, err := operationComplexity(value.SelectionSet, fragments, variables, bounds, stack, nested)
 			if err != nil {
 				return 0, err
 			}
 			multiplier := 1
 			if !nested && value.Definition != nil && value.Definition.Type != nil && value.Definition.Type.Elem != nil {
-				multiplier = defaultPage
-				if multiplier < 1 {
-					multiplier = 1
-				}
 				if take, ok := exactComplexityTake(value.ArgumentMap(variables)["take"]); ok {
 					multiplier = take
+				} else if bound, declared := bounds.of(value.ObjectDefinition.Name, value.Name); declared {
+					multiplier = bound
 				}
 			}
 			cost := 1
@@ -856,7 +860,7 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			if !graphqlIncluded(value.Directives, variables) {
 				continue
 			}
-			cost, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, stack, introspection)
+			cost, err := operationComplexity(value.SelectionSet, fragments, variables, bounds, stack, introspection)
 			if err != nil {
 				return 0, err
 			}
@@ -870,7 +874,7 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				return 0, fmt.Errorf("GraphQL fragment expansion is invalid")
 			}
 			stack[value.Name] = true
-			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, defaultPage, stack, introspection)
+			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, bounds, stack, introspection)
 			delete(stack, value.Name)
 			if err != nil {
 				return 0, err

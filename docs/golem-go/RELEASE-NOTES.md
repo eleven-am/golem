@@ -130,6 +130,25 @@ searches declare their maximum themselves: the smallest of 1000, the model's
 `MaxPageSize` and its `MaxTake`. `golem.GraphQLList` changes signature, so call
 sites that passed one argument no longer compile.
 
+**Query cost matches what lists return.** A list is costed at its `take`, else
+its default page, else its declared bound, so `me { ... }` over a list declared
+`MaxItems(1)` no longer costs as if it returned hundreds of rows, and
+`MaxPageSize` is no longer a cost multiplier. A `groupBy` or `relationGroupBy`
+without `take` is costed at `MaxGroups`, so some such queries now exceed
+`MaxComplexity` and need a `take`. A relation list now advertises the listed
+model's default page size in `take: Int = N`; it showed the parent's. Generated
+semantic and full-text searches advertise their `take` default, the model's
+default page size narrowed to the search maximum.
+- Breaking for code that builds a server by hand: `graphql.Executor` has a new
+  method, `ListBounds() graphql.ListBounds`, returning a table keyed
+  `"Type.field"` (`graphql.NewListBounds`) for every list of objects without a
+  `take` default. `graphql.NewServer` refuses an executor that omits a bound,
+  declares one for any other field, or declares one below 1. Generated executors
+  provide it, so generated applications need no change.
+- A generated executor now refuses to start, instead of failing each query, when
+  an exposed model's default page size is above the `MaxPageSize` limit: raise
+  `MaxPageSize` or lower the model's default.
+
 **Hooks see the same input values on every path.** `FrozenMutationField.Value()`
 returned an internal `policyir.Value` when a write came from a GraphQL mutation
 (or from a nested connect or disconnect), and a Go value when it came from the

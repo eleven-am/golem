@@ -5,6 +5,7 @@ package bind
 
 import (
 	"encoding/hex"
+	"fmt"
 	"sort"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -59,6 +60,13 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Binder, error) {
 	providers, err := providerSet(compilation.Model.Providers)
 	if err != nil {
 		return nil, err
+	}
+	if limits.MaxPageSize > 0 {
+		for _, contract := range compilation.Contract.Models {
+			if contract.Exposed && int64(contract.Limits.DefaultPageSize) > int64(limits.MaxPageSize) {
+				return nil, fmt.Errorf("GraphQL model %s default page size %d exceeds the MaxPageSize limit %d: raise MaxPageSize or lower the model's default page size", contract.GraphQLName, contract.Limits.DefaultPageSize, limits.MaxPageSize)
+			}
+		}
 	}
 	b := &Binder{
 		compilation: compilation,
@@ -224,9 +232,6 @@ func (b *Binder) query(input QueryInput) (readir.Request, error) {
 			request.Take = &value
 		} else if contract.Limits.DefaultPageSize != 0 {
 			value := int(contract.Limits.DefaultPageSize)
-			if b.limits.MaxPageSize > 0 && value > b.limits.MaxPageSize {
-				return readir.Request{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerTake, compileerr.Path("take"), compileerr.Bounds(-b.limits.MaxPageSize, b.limits.MaxPageSize))
-			}
 			request.Take = &value
 		}
 	}

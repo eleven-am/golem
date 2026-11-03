@@ -13,7 +13,11 @@ type semanticCustomRoot struct {
 }
 
 func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationContractIR, arguments map[string]any, explicit bool) (bool, error) {
-	if c == nil || !(graphqlextension.IsSemanticSearchOperation(c.compilation, operation) || graphqlextension.IsSemanticSimilarOperation(c.compilation, operation) || graphqlextension.IsFullTextSearchOperation(c.compilation, operation)) {
+	if c == nil {
+		return false, nil
+	}
+	defaultTake, isSearch := graphqlextension.SearchTakeDefault(c.compilation, operation)
+	if !isSearch {
 		return false, nil
 	}
 	contract, ok := c.modelContractByGraphQLName(customResultModelName(operation.Result))
@@ -21,13 +25,7 @@ func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationCo
 		return false, compileerr.Invariantf("semantic search result model is absent")
 	}
 	maximum := readir.NarrowCap(int(graphqlextension.SearchMaximum(contract)), c.limits.Bind.MaxPageSize)
-	value := int(contract.Limits.DefaultPageSize)
-	if value < 1 {
-		value = 50
-	}
-	if value > maximum {
-		value = maximum
-	}
+	value := int(defaultTake)
 	if supplied, present := arguments["take"]; explicit && present && supplied != nil {
 		integer, ok := supplied.(int32)
 		if !ok {

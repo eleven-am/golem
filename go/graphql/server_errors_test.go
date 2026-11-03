@@ -157,7 +157,7 @@ func TestOperationShapeAndComplexityReportMalformedDocumentsInsteadOfLimits(t *t
 	if shape := boundedOperationShape(definition.SelectionSet, document.Fragments, hardLimits); !shape.malformed || shape.limit != nil {
 		t.Fatalf("missing fragment shape = %#v", shape)
 	}
-	if _, err := operationComplexity(definition.SelectionSet, document.Fragments, nil, 1, map[string]bool{}, false); err == nil {
+	if _, err := operationComplexity(definition.SelectionSet, document.Fragments, nil, NewListBounds(nil), map[string]bool{}, false); err == nil {
 		t.Fatal("missing fragment complexity was accepted")
 	}
 	meta := rootMetaSelection{schemas: map[string]bool{}, types: map[string]bool{}}

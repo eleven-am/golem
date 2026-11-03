@@ -423,3 +423,7 @@ func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
 		t.Fatalf("a completed slow subscribe wrote %#v", pong)
 	}
 }
+
+func (protocolExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func (slowSubscribeExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

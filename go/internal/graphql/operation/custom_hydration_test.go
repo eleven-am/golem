@@ -183,7 +183,7 @@ func TestHydrationSingleResultsAreNullOrMissingAccordingToNullability(t *testing
 }
 
 func TestHydrationChunkNeverExceedsThePageLimits(t *testing.T) {
-	compilation := semanticSocial(t)
+	compilation := withDefaultPageSize(semanticSocial(t), 2)
 	post := contractNamed(t, compilation.Contract, "Post")
 	publicModel := golemModelID(post.ModelID)
 	field, _ := publicFieldID(modelByIDForTest(t, compilation.Model, post.ModelID).PrimaryKey.Fields[0])

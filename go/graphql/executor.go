@@ -53,6 +53,7 @@ type generatedExecutor[P any] struct {
 	computed         []ComputedBinding
 	maxComputedBatch int
 	custom           *CustomRegistry
+	listBounds       ListBounds
 }
 
 func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P], error) {
@@ -84,8 +85,10 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 		return nil, err
 	}
 	bindings := append([]ComputedBinding(nil), config.ComputedBindings...)
-	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom}, nil
+	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom, listBounds: NewListBounds(compiler.ListBounds())}, nil
 }
+
+func (executor *generatedExecutor[P]) ListBounds() ListBounds { return executor.listBounds }
 
 func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, operation Operation) Response {
 	if executor == nil || executor.compiler == nil || executor.begin == nil {
