@@ -502,20 +502,11 @@ func (publisher *Publisher) releaseLease(lease eventprovider.Lease) {
 }
 
 func classifyFactFailure(err error) string {
-	message := err.Error()
-	if contains(message, "historical") || contains(message, "schema") || contains(message, "generation") {
+	var unavailable *mutationfact.SchemaUnavailableError
+	if errors.As(err, &unavailable) {
 		return "schema-unavailable"
 	}
 	return "fact-invalid"
-}
-
-func contains(value, fragment string) bool {
-	for index := 0; index+len(fragment) <= len(value); index++ {
-		if value[index:index+len(fragment)] == fragment {
-			return true
-		}
-	}
-	return false
 }
 
 func retryDelay(causation string, attempt int64, base, maximum time.Duration) time.Duration {

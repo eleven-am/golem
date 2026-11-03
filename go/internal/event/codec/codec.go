@@ -209,7 +209,7 @@ func resolveEventSchema(fact mutationfact.Envelope, resolver mutationfact.Histor
 	}
 	registry, resolved, ok := resolver.ResolveFactSchema(reference)
 	if !ok || registry == nil {
-		return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: resolved event schema is unavailable")
+		return golem.EventSchemaDigest{}, mutationfact.SchemaUnavailable(reference)
 	}
 	if hasWireSchema && resolved != wireSchema {
 		return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: wire and resolved event schemas differ")

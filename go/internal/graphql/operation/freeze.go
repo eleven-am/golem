@@ -1,15 +1,14 @@
 package operation
 
 import (
-	"fmt"
-
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
 
 func (c *Compiler) freezeRequest(request readir.Request) (golem.FrozenReadRequest, error) {
 	if c == nil || c.binder == nil {
-		return golem.FrozenReadRequest{}, fmt.Errorf("operation compiler is absent")
+		return golem.FrozenReadRequest{}, compileerr.Invariantf("operation compiler is absent")
 	}
 	operation, err := frozenReadOperation(request.Operation())
 	if err != nil {
@@ -50,12 +49,12 @@ func (c *Compiler) freezeRequest(request readir.Request) (golem.FrozenReadReques
 	case readir.ProjectionInclude:
 		input.Projection = golem.ProjectionInclude
 	default:
-		return golem.FrozenReadRequest{}, fmt.Errorf("projection mode %d is invalid", request.ProjectionMode())
+		return golem.FrozenReadRequest{}, compileerr.Invariantf("projection mode %d is invalid", request.ProjectionMode())
 	}
-	for index, selection := range request.Selection() {
+	for _, selection := range request.Selection() {
 		converted, convertErr := c.freezeSelection(selection)
 		if convertErr != nil {
-			return golem.FrozenReadRequest{}, fmt.Errorf("selection %d: %w", index, convertErr)
+			return golem.FrozenReadRequest{}, compileerr.Ensure(convertErr)
 		}
 		input.Selection = append(input.Selection, converted)
 	}
@@ -69,7 +68,11 @@ func (c *Compiler) freezeRequest(request readir.Request) (golem.FrozenReadReques
 		}
 		input.Cursor = &golem.RuntimeReadCursorInput{Selector: *runtimeSelector(golem.ModelID(request.ModelID()), cursor.Selector()), Where: where}
 	}
-	return golem.RuntimeFreezeReadRequest(input)
+	frozen, err := golem.RuntimeFreezeReadRequest(input)
+	if err != nil {
+		return golem.FrozenReadRequest{}, compileerr.Ensure(err)
+	}
+	return frozen, nil
 }
 
 func (c *Compiler) freezeSelection(selection readir.Selection) (golem.RuntimeReadSelectionInput, error) {
@@ -90,7 +93,7 @@ func (c *Compiler) freezeSelection(selection readir.Selection) (golem.RuntimeRea
 		}
 		child, ok := selection.Request()
 		if !ok {
-			return golem.RuntimeReadSelectionInput{}, fmt.Errorf("relation child request is absent")
+			return golem.RuntimeReadSelectionInput{}, compileerr.Invariantf("relation child request is absent")
 		}
 		frozen, err := c.freezeRequest(child)
 		if err != nil {
@@ -98,7 +101,7 @@ func (c *Compiler) freezeSelection(selection readir.Selection) (golem.RuntimeRea
 		}
 		result.Request = &frozen
 	default:
-		return golem.RuntimeReadSelectionInput{}, fmt.Errorf("selection kind %d is invalid", selection.Kind())
+		return golem.RuntimeReadSelectionInput{}, compileerr.Invariantf("selection kind %d is invalid", selection.Kind())
 	}
 	return result, nil
 }
@@ -123,6 +126,6 @@ func frozenReadOperation(operation readir.Operation) (golem.ReadOperation, error
 	case readir.Count:
 		return golem.ReadCount, nil
 	default:
-		return 0, fmt.Errorf("read operation %d is invalid", operation)
+		return 0, compileerr.Invariantf("read operation %d is invalid", operation)
 	}
 }

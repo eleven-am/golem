@@ -59,12 +59,11 @@ func (cell RuntimeReadCell) FieldID() FieldID { return cell.field }
 // before a generated model type is known. It remains model-ID checked when a
 // generated accessor turns it into Row[M].
 type RuntimeModelRow struct {
-	model             ModelID
-	cells             map[FieldID]readCell
-	counts            map[relationCountKey]readCell
-	occurrences       map[runtimeOccurrenceKey]readCell
-	semanticIdentity  RuntimeSemanticIdentityToken
-	semanticTransport *RuntimeSemanticRow
+	model       ModelID
+	cells       map[FieldID]readCell
+	counts      map[relationCountKey]readCell
+	occurrences map[runtimeOccurrenceKey]readCell
+	identity    *rowIdentity
 	// cdcExact is set only by RuntimeCDCModelRow. Ordinary public/authorized
 	// rows deliberately cannot be reinterpreted as exact database images:
 	// ReadNull intentionally conflates stored NULL with authorization masking.
@@ -196,6 +195,7 @@ type Row[M any] struct {
 	cells       map[FieldID]readCell
 	counts      map[relationCountKey]readCell
 	occurrences map[runtimeOccurrenceKey]readCell
+	identity    *rowIdentity
 	_           func() M
 }
 
@@ -284,7 +284,7 @@ func RuntimeTypedReadRow[M any](descriptor ModelDescriptor[M], runtime RuntimeMo
 	if model == (ModelID{}) || runtime.model != model {
 		return Row[M]{}, fmt.Errorf("read row: runtime model does not match descriptor")
 	}
-	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences)}, nil
+	return typedRowFromRuntime[M](runtime), nil
 }
 
 // RuntimeToOneReadCell and RuntimeToManyReadCell attach already hydrated
@@ -341,15 +341,7 @@ func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccur
 }
 
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	result := RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), semanticIdentity: row.semanticIdentity, cdcExact: row.cdcExact}
-	if row.semanticTransport != nil {
-		transport := *row.semanticTransport
-		transport.row = cloneRuntimeModelRow(transport.row)
-		transport.identity = cloneFrozenPredicate(transport.identity)
-		transport.identityFields = append([]FieldID(nil), transport.identityFields...)
-		result.semanticTransport = &transport
-	}
-	return result
+	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), identity: row.identity, cdcExact: row.cdcExact}
 }
 
 func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
@@ -361,7 +353,7 @@ func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
 }
 
 func cloneRow[M any](row Row[M]) Row[M] {
-	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences)}
+	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), identity: row.identity}
 	for field, cell := range row.cells {
 		result.cells[field] = cloneReadCell(cell)
 	}
@@ -560,7 +552,7 @@ func One[M, R any](row Row[M], field ToOne[M, R]) ReadValue[Row[R]] {
 		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
 			return ReadValue[Row[R]]{}
 		}
-		typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+		typed := typedRowFromRuntime[R](value)
 		return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
 	}
 	// Retain compatibility with runtime cells constructed before relation rows
@@ -588,7 +580,7 @@ func Many[M, R any](row Row[M], field ToMany[M, R]) ReadValue[[]Row[R]] {
 			if item.model != field.targetModel || field.targetModel == (ModelID{}) {
 				return ReadValue[[]Row[R]]{}
 			}
-			typed[index] = Row[R]{model: item.model, cells: cloneReadCells(item.cells), counts: cloneReadCounts(item.counts), occurrences: cloneOccurrences(item.occurrences)}
+			typed[index] = typedRowFromRuntime[R](item)
 		}
 	} else {
 		legacy, legacyOK := cell.value.([]Row[R])
@@ -647,7 +639,7 @@ func RuntimeOccurrenceToOne[M, R any](row Row[M], field ToOne[M, R], occurrence 
 	if !ok || value.model != field.targetModel || field.targetModel == (ModelID{}) {
 		return ReadValue[Row[R]]{}
 	}
-	typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+	typed := typedRowFromRuntime[R](value)
 	return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
 }
 
@@ -668,7 +660,7 @@ func RuntimeOccurrenceToMany[M, R any](row Row[M], field ToMany[M, R], occurrenc
 		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
 			return ReadValue[[]Row[R]]{}
 		}
-		typed[index] = Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+		typed[index] = typedRowFromRuntime[R](value)
 	}
 	return ReadValue[[]Row[R]]{state: ReadPresent, value: cloneRows(typed), clone: cloneRows[R]}
 }
@@ -1086,6 +1078,8 @@ const (
 	CodeForbidden       ErrorCode = "FORBIDDEN"
 	CodeConflict        ErrorCode = "CONFLICT"
 	CodeLimitExceeded   ErrorCode = "LIMIT_EXCEEDED"
+
+	CodeCommittedResultUnavailable ErrorCode = "COMMITTED_RESULT_UNAVAILABLE"
 )
 
 func (code ErrorCode) Error() string { return string(code) }
@@ -1102,6 +1096,7 @@ const (
 	ReasonFieldNotReadable      Reason = "FIELD_NOT_READABLE"
 	ReasonAuthorizationUnproven Reason = "AUTHORIZATION_UNPROVEN"
 	ReasonPolicyInvalid         Reason = "POLICY_INVALID"
+	ReasonResultNotReadable     Reason = "RESULT_NOT_READABLE"
 )
 
 func (reason Reason) Error() string { return string(reason) }
@@ -1122,20 +1117,22 @@ const (
 	LimitFanout              Limit = "fanout"
 	LimitSelectedFields      Limit = "selected_fields"
 	LimitDepth               Limit = "depth"
+	LimitListItems           Limit = "list_items"
 )
 
 // Error is the transport-neutral public operation error. Cause is retained for
 // trusted logs through Unwrap but is never part of Error's public text.
 type Error struct {
-	Code      ErrorCode
-	Reason    Reason
-	Operation string
-	Model     ModelID
-	Field     FieldID
-	Limit     Limit
-	LimitMax  int
-	Message   string
-	cause     error
+	Code       ErrorCode
+	Reason     Reason
+	Operation  string
+	Model      ModelID
+	Field      FieldID
+	Limit      Limit
+	LimitMax   int
+	Message    string
+	Unreadable int
+	cause      error
 }
 
 // RuntimeReadError is the narrow trusted-runtime constructor for a stable
@@ -1159,6 +1156,10 @@ func RuntimeOperationErrorWithReason(code ErrorCode, reason Reason, operation st
 	failure := RuntimeOperationError(code, operation, model, field, message, cause).(*Error)
 	failure.Reason = reason
 	return failure
+}
+
+func RuntimeCommittedResultError(operation string, reason Reason, unreadable int, limit Limit, limitMax int, message string, cause error) error {
+	return &Error{Code: CodeCommittedResultUnavailable, Reason: reason, Operation: operation, Limit: limit, LimitMax: limitMax, Unreadable: unreadable, Message: message, cause: cause}
 }
 
 func RuntimeLimitError(operation string, model ModelID, limit Limit, maximum int, message string, cause error) error {
@@ -1252,19 +1253,18 @@ func (selection FrozenReadSelection) Request() (FrozenReadRequest, bool) {
 // FrozenReadRequest is a schema-agnostic immutable read request. The P3 binder
 // validates every identity against the active fingerprinted schema.
 type FrozenReadRequest struct {
-	operation        ReadOperation
-	model            ModelID
-	where            *FrozenPredicate
-	orders           []FrozenReadOrder
-	take             *int
-	skip             *int
-	distinct         []FieldID
-	selection        []FrozenReadSelection
-	projection       ReadProjectionMode
-	omit             []FieldID
-	selector         *FrozenUniqueSelector
-	cursor           *FrozenReadCursor
-	semanticIdentity []FieldID
+	operation  ReadOperation
+	model      ModelID
+	where      *FrozenPredicate
+	orders     []FrozenReadOrder
+	take       *int
+	skip       *int
+	distinct   []FieldID
+	selection  []FrozenReadSelection
+	projection ReadProjectionMode
+	omit       []FieldID
+	selector   *FrozenUniqueSelector
+	cursor     *FrozenReadCursor
 }
 
 type FrozenUniqueSelector struct {
@@ -1350,7 +1350,6 @@ func (request FrozenReadRequest) clone() FrozenReadRequest {
 	result.distinct = request.Distinct()
 	result.selection = request.Selection()
 	result.omit = request.Omitted()
-	result.semanticIdentity = append([]FieldID(nil), request.semanticIdentity...)
 	if request.take != nil {
 		value := *request.take
 		result.take = &value
@@ -1646,4 +1645,8 @@ func readOperationName(operation ReadOperation) string {
 	default:
 		return "read"
 	}
+}
+
+func typedRowFromRuntime[M any](runtime RuntimeModelRow) Row[M] {
+	return Row[M]{model: runtime.model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences), identity: runtime.identity}
 }

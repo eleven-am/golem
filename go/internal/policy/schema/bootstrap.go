@@ -29,27 +29,38 @@ func NewHistorical(bundle golem.SchemaBundle) (*Registry, error) {
 	return newRegistry(bundle, true)
 }
 
-func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) {
+func DecodeActive(bundle golem.SchemaBundle) (compilerir.CompilationIR, error) {
+	return decodeBundle(bundle, false)
+}
+
+func decodeBundle(bundle golem.SchemaBundle, historical bool) (compilerir.CompilationIR, error) {
 	if bundle.FormatVersion() != golem.SchemaBundleFormatVersion {
-		return nil, fail(CodeBundle, "formatVersion", "got %d, want %d", bundle.FormatVersion(), golem.SchemaBundleFormatVersion)
+		return compilerir.CompilationIR{}, fail(CodeBundle, "formatVersion", "got %d, want %d", bundle.FormatVersion(), golem.SchemaBundleFormatVersion)
 	}
 	if bundle.GenerationDigest() == (golem.SchemaDigest{}) {
-		return nil, fail(CodeBundle, "generationDigest", "digest must be non-zero")
+		return compilerir.CompilationIR{}, fail(CodeBundle, "generationDigest", "digest must be non-zero")
 	}
 	if bundle.GeneratorVersion() == "" || bundle.TemplateABIVersion() == "" {
-		return nil, fail(CodeBundle, "generator", "generator and template ABI versions must be non-empty")
+		return compilerir.CompilationIR{}, fail(CodeBundle, "generator", "generator and template ABI versions must be non-empty")
 	}
+	model, err := decodeModel(bundle.Model(), historical)
+	if err != nil {
+		return compilerir.CompilationIR{}, err
+	}
+	contract, err := decodeContract(bundle.Contract(), historical)
+	if err != nil {
+		return compilerir.CompilationIR{}, err
+	}
+	return compilerir.CompilationIR{Model: model, Contract: contract}, nil
+}
 
-	modelDocument := bundle.Model()
-	model, err := decodeModel(modelDocument, historical)
+func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) {
+	compilation, err := decodeBundle(bundle, historical)
 	if err != nil {
 		return nil, err
 	}
-	contractDocument := bundle.Contract()
-	contract, err := decodeContract(contractDocument, historical)
-	if err != nil {
-		return nil, err
-	}
+	model, contract := compilation.Model, compilation.Contract
+	modelDocument, contractDocument := bundle.Model(), bundle.Contract()
 	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
 		return nil, fail(CodeModel, "model.optimisticConcurrency", "%v", err)
 	}
@@ -97,8 +108,8 @@ func decodeModel(document golem.SchemaDocument, historical bool) (compilerir.Mod
 		}
 		return model, nil
 	}
-	if document.FormatVersion() != uint32(compilerir.ModelFormatVersion) || document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
-		return compilerir.ModelIR{}, fail(CodeDocument, "model", "unsupported format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
+	if err := requireCurrentFormat("model", document, uint32(compilerir.ModelFormatVersion)); err != nil {
+		return compilerir.ModelIR{}, err
 	}
 	var model compilerir.ModelIR
 	if err := decodeCanonicalJSON(document.Bytes(), &model); err != nil {
@@ -139,8 +150,11 @@ func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.
 		}
 		return contract, nil
 	}
-	if document.FormatVersion() != uint32(compilerir.ContractFormatVersion) || document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract", "unsupported format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
+	if historical && document.FormatVersion() < uint32(compilerir.ContractFormatVersion) {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.formatVersion", "historical contract format %d is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles", document.FormatVersion())
+	}
+	if err := requireCurrentFormat("contract", document, uint32(compilerir.ContractFormatVersion)); err != nil {
+		return compilerir.ContractIR{}, err
 	}
 	var contract compilerir.ContractIR
 	if err := decodeCanonicalJSON(document.Bytes(), &contract); err != nil {
@@ -161,6 +175,20 @@ func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.
 		return contract, fail(CodeFingerprint, "contract", "fingerprint mismatch")
 	}
 	return contract, nil
+}
+
+func requireCurrentFormat(kind string, document golem.SchemaDocument, current uint32) error {
+	path := kind + ".formatVersion"
+	switch version := document.FormatVersion(); {
+	case version < current:
+		return fail(CodeDocument, path, "generated %s format %d predates this golem (format %d): regenerate with golem generate", kind, version, current)
+	case version > current:
+		return fail(CodeDocument, path, "generated %s format %d is newer than this golem (format %d): upgrade golem", kind, version, current)
+	}
+	if document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
+		return fail(CodeDocument, kind+".canonicalVersion", "unsupported canonical version %d; want %d", document.CanonicalVersion(), compilerir.CanonicalFormatVersion)
+	}
+	return nil
 }
 
 type historicalContractV4 struct {

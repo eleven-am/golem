@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -82,6 +83,7 @@ type generatedResponseStream[P any] struct {
 	executor *generatedExecutor[P]
 	root     graphqloperation.EventRoot
 	source   EventStream
+	hydrator resultHydrator
 	once     sync.Once
 	closeErr error
 }
@@ -91,8 +93,11 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: subscription executor is unavailable")
 	}
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
-	if err != nil || compiled.Event == nil {
-		return nil, fmt.Errorf("GOLEM_SUBSCRIPTION_INVALID: GraphQL subscription could not be bound")
+	if err != nil {
+		return nil, err
+	}
+	if compiled.Event == nil {
+		return nil, compileerr.Invariantf("subscription compiled without an event root")
 	}
 	caller, err := executor.begin(ctx, principal)
 	if err != nil || caller == nil {
@@ -106,7 +111,7 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 	if err != nil {
 		return nil, err
 	}
-	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source}, nil
+	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source, hydrator: resultHydrator{compiler: executor.compiler, caller: caller}}, nil
 }
 
 func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, error) {
@@ -122,6 +127,7 @@ func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, e
 		return Response{}, err
 	}
 	defer computed.close()
+	computed.hydrator = &stream.hydrator
 	var entity *golem.RuntimeModelRow
 	if event.entityPresent {
 		entity = &event.entity

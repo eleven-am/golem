@@ -2,11 +2,11 @@ package mutation
 
 import (
 	"encoding/hex"
-	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
 
@@ -60,26 +60,26 @@ func NewMapBinder(compilation compilerir.CompilationIR, limits Limits) (*MapBind
 
 func (binder *MapBinder) Lower(root MapRootInput) (Request, error) {
 	if binder == nil || binder.query == nil {
-		return Request{}, fmt.Errorf("P5_MUTATION_MAP: binder is absent")
+		return Request{}, compileerr.Invariantf("mutation binder is absent")
 	}
 	model, err := golemModelID(root.Model)
 	if err != nil {
-		return Request{}, err
+		return Request{}, compileerr.Invariant(err)
 	}
 	lowered := RootInput{Operation: root.Operation, Model: model, Data: root.Data, Create: root.Create, Update: root.Update, Selection: append([]readir.Selection(nil), root.Selection...), ExistingVersion: root.ExistingVersion, ConcurrencyExpectation: root.ConcurrencyExpectation}
 	switch root.Operation {
 	case Create:
 		if root.Where != nil {
-			return Request{}, fmt.Errorf("P5_MUTATION_MAP: create does not accept where")
+			return Request{}, compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedCreateWhere, compileerr.Path("where"), compileerr.Model(binder.contracts[root.Model].GraphQLName))
 		}
 	case Update, Upsert, Delete:
-		target, targetErr := binder.Target(root.Model, root.Where)
+		target, targetErr := binder.Target(root.Model, root.Where, "where")
 		if targetErr != nil {
 			return Request{}, targetErr
 		}
 		lowered.Target = &target
 	case UpdateMany, DeleteMany:
-		condition, bindErr := binder.query.MutationWhere(root.Model, root.Where)
+		condition, bindErr := binder.query.WhereAt(root.Model, root.Where, "where")
 		if bindErr != nil {
 			return Request{}, bindErr
 		}
@@ -89,7 +89,7 @@ func (binder *MapBinder) Lower(root MapRootInput) (Request, error) {
 		}
 		lowered.Where = &frozen
 	default:
-		return Request{}, fmt.Errorf("P5_MUTATION_MAP: unsupported root operation %d", root.Operation)
+		return Request{}, compileerr.Invariantf("unsupported mutation root operation %d", root.Operation)
 	}
 	return Lower(lowered, binder.limits)
 }
@@ -97,15 +97,15 @@ func (binder *MapBinder) Lower(root MapRootInput) (Request, error) {
 // Target binds one selector value without assigning mutation authority. It is
 // shared by generated roots and custom Selector arguments; custom selectors
 // must not manufacture a delete request merely to reuse selector coercion.
-func (binder *MapBinder) Target(modelID compilerir.ModelID, raw any) (golem.FrozenMutationTarget, error) {
+func (binder *MapBinder) Target(modelID compilerir.ModelID, raw any, path string) (golem.FrozenMutationTarget, error) {
 	if binder == nil || binder.query == nil {
-		return golem.FrozenMutationTarget{}, fmt.Errorf("P5_MUTATION_MAP: binder is absent")
+		return golem.FrozenMutationTarget{}, compileerr.Invariantf("mutation binder is absent")
 	}
 	model, err := golemModelID(modelID)
 	if err != nil {
-		return golem.FrozenMutationTarget{}, err
+		return golem.FrozenMutationTarget{}, compileerr.Invariant(err)
 	}
-	selector, predicate, err := binder.query.MutationSelector(modelID, raw)
+	selector, predicate, err := binder.query.SelectorAt(modelID, raw, path)
 	if err != nil {
 		return golem.FrozenMutationTarget{}, err
 	}
@@ -120,7 +120,7 @@ func (binder *MapBinder) Target(modelID compilerir.ModelID, raw any) (golem.Froz
 	}
 	target, err := golem.RuntimeMutationTargetFromPredicate(model, selector.KeyID(), publicFields, frozen)
 	if err != nil {
-		return golem.FrozenMutationTarget{}, fmt.Errorf("P5_MUTATION_TARGET: %w", err)
+		return golem.FrozenMutationTarget{}, compileerr.Ensure(err)
 	}
 	return target, nil
 }
@@ -129,7 +129,7 @@ func fixedID(value string) ([16]byte, error) {
 	var result [16]byte
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != len(result) || hex.EncodeToString(decoded) != value {
-		return result, fmt.Errorf("P5_MUTATION_ID: %q is not a canonical 128-bit identity", value)
+		return result, compileerr.Invariantf("%q is not a canonical 128-bit identity", value)
 	}
 	copy(result[:], decoded)
 	return result, nil

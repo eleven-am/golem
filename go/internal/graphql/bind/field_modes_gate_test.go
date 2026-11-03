@@ -2,11 +2,13 @@ package bind
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -56,7 +58,8 @@ func TestWriteOnlyAndHiddenFieldsAreUnreadableThroughEverySurfaceThatAsksIrModes
 				Arguments:  map[string]any{"where": map[string]any{unreadable: map[string]any{"equals": "x"}}},
 				Selections: []readir.Selection{scalarSelection(t, contract.Fields[0].FieldID)},
 			})
-			if bindErr == nil || !strings.Contains(bindErr.Error(), "P5_BIND_FIELD") {
+			var typed *compileerr.Error
+			if !errors.As(bindErr, &typed) || typed.Kind() != compileerr.KindFieldUnavailable {
 				t.Errorf("binder accepted a where predicate on unreadable field %q: %v", unreadable, bindErr)
 			}
 		}
@@ -76,7 +79,7 @@ func TestWriteOnlyAndHiddenFieldsAreUnreadableThroughEverySurfaceThatAsksIrModes
 	t.Run("selection", func(t *testing.T) {
 		for _, unreadable := range []string{"secret", "email"} {
 			selections := rawSelections(t, unreadable)
-			if _, selectErr := selectset.Compile(selectset.Request{Compilation: compilation, Model: account.ID, Selections: selections}); selectErr == nil || !strings.Contains(selectErr.Error(), "P5_SELECT_FIELD") {
+			if _, selectErr := selectset.Compile(selectset.Request{Compilation: compilation, Model: account.ID, Selections: selections}); !isKind(selectErr, compileerr.KindFieldUnavailable) {
 				t.Errorf("selection compiler accepted unreadable field %q: %v", unreadable, selectErr)
 			}
 		}

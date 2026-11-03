@@ -3,7 +3,6 @@ package selectset
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
@@ -81,13 +80,13 @@ func TestGraphQLSelectionCompilerRejectsCyclesConflictsAndLimitOverflowBeforeSQL
 		maxDepth   int
 		maxFields  int
 		maxAliases int
-		code       string
+		message    string
 	}{
-		{name: "fragment-cycle", source: `query { ...A } fragment A on Post { id ...B } fragment B on Post { ...A }`, code: "P5_SELECT_FRAGMENT"},
-		{name: "response-conflict", source: `{ same: id same: title }`, code: "P5_SELECT_MERGE"},
-		{name: "depth", source: `{ comments { replies { id } } }`, maxDepth: 2, code: "P5_SELECT_LIMIT"},
-		{name: "fields", source: `{ id title }`, maxFields: 1, code: "P5_SELECT_LIMIT"},
-		{name: "aliases", source: `{ first: id second: title }`, maxAliases: 1, code: "P5_SELECT_LIMIT"},
+		{name: "fragment-cycle", source: `query { ...A } fragment A on Post { id ...B } fragment B on Post { ...A }`, message: "Fragment spreads in this operation form a cycle"},
+		{name: "response-conflict", source: `{ same: id same: title }`, message: "Fields with the same response name cannot be merged"},
+		{name: "depth", source: `{ comments { replies { id } } }`, maxDepth: 2, message: "Selection exceeds MaxDepth (2)"},
+		{name: "fields", source: `{ id title }`, maxFields: 1, message: "Selection exceeds MaxSelectedFields (1)"},
+		{name: "aliases", source: `{ first: id second: title }`, maxAliases: 1, message: "Selection exceeds MaxAliases (1)"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -101,8 +100,8 @@ func TestGraphQLSelectionCompilerRejectsCyclesConflictsAndLimitOverflowBeforeSQL
 				MaxFields:   test.maxFields,
 				MaxAliases:  test.maxAliases,
 			})
-			if err == nil || !strings.Contains(err.Error(), test.code) {
-				t.Fatalf("error = %v, want %s", err, test.code)
+			if err == nil || err.Error() != test.message {
+				t.Fatalf("error = %v, want %s", err, test.message)
 			}
 		})
 	}
@@ -239,27 +238,27 @@ func TestComputedArgumentsAndLimitsRefuseBeforeRequestBinding(t *testing.T) {
 	compilation := *compiled.Compilation
 	user := modelByName(t, compilation.Contract, "User")
 	tests := []struct {
-		name  string
-		query string
-		code  string
+		name    string
+		query   string
+		message string
 	}{
-		{name: "missing", query: `{ greeting }`, code: "requires argument"},
-		{name: "unknown", query: `{ greeting(prefix: "x", extra: 1) }`, code: "unknown argument"},
-		{name: "duplicate", query: `{ greeting(prefix: "x", prefix: "y") }`, code: "repeats argument"},
-		{name: "merge", query: `{ same: greeting(prefix: "x") ...F } fragment F on User { same: greeting(prefix: "y") }`, code: "P5_SELECT_MERGE"},
+		{name: "missing", query: `{ greeting }`, message: "Argument prefix on greeting is required"},
+		{name: "unknown", query: `{ greeting(prefix: "x", extra: 1) }`, message: "Argument extra on greeting is not available for this operation"},
+		{name: "duplicate", query: `{ greeting(prefix: "x", prefix: "y") }`, message: "Argument prefix on greeting is given more than once"},
+		{name: "merge", query: `{ same: greeting(prefix: "x") ...F } fragment F on User { same: greeting(prefix: "y") }`, message: "Fields with the same response name cannot be merged"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			document := parseQuery(t, test.query)
 			_, err := Compile(Request{Compilation: compilation, Model: user, Selections: document.Operations[0].SelectionSet, Fragments: document.Fragments})
-			if err == nil || !strings.Contains(err.Error(), test.code) {
-				t.Fatalf("error=%v, want %q", err, test.code)
+			if err == nil || err.Error() != test.message {
+				t.Fatalf("error=%v, want %q", err, test.message)
 			}
 		})
 	}
 	document := parseQuery(t, `{ greeting(prefix: "x") batchGreeting(prefix: "x") }`)
 	_, err := Compile(Request{Compilation: compilation, Model: user, Selections: document.Operations[0].SelectionSet, MaxFields: 1})
-	if err == nil || !strings.Contains(err.Error(), "P5_SELECT_LIMIT") {
+	if err == nil || err.Error() != "Selection exceeds MaxSelectedFields (1)" {
 		t.Fatalf("selection overflow error=%v", err)
 	}
 	// The canonical representation itself must remain valid exact JSON.

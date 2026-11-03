@@ -45,12 +45,15 @@ func (User) DefinePolicy(rules *golem.Rules[User], actor Actor) {
 	rules.CanUpdateFields(owned, Users.Name, Users.Counter)
 }
 
+type NoArgs struct{}
+
 type GreetingArgs struct {
 	Prefix string `golem:"graphql=prefix"`
 }
 
 func (User) DefineGraphQL(graphql *golem.GraphQLModel[User]) {
 	golem.ComputedField(graphql, "greeting", golem.GraphQLString().NonNull(), User{}.Greeting, golem.Requires(Users.Name))
+	golem.ComputedField(graphql, "counterSteps", golem.GraphQLList(golem.GraphQLInt().NonNull(), 3), User{}.CounterSteps, golem.Requires(Users.Counter))
 	golem.BatchedComputedFieldWithCacheKey(graphql, "batchGreeting", golem.GraphQLString().NonNull(), Users.ID, LoadGreetings, GreetingCacheKey, 2, golem.Requires(Users.Name))
 }
 
@@ -60,6 +63,15 @@ func (User) Greeting(_ context.Context, row golem.Row[User], arguments GreetingA
 		return arguments.Prefix + ":masked", nil
 	}
 	return arguments.Prefix + ":" + name, nil
+}
+
+func (User) CounterSteps(_ context.Context, row golem.Row[User], _ NoArgs) ([]int32, error) {
+	counter, _ := golem.Value(row, Users.Counter).Get()
+	steps := make([]int32, 0, counter)
+	for step := int32(1); step <= counter; step++ {
+		steps = append(steps, step)
+	}
+	return steps, nil
 }
 
 func LoadGreetings(ctx context.Context, keys []golem.UUID, arguments GreetingArgs) (map[golem.UUID]string, error) {
@@ -98,7 +110,7 @@ type TransactionalUserArgs struct {
 }
 
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
-	golem.Query(graphql, "searchUsers", SearchUsers)
+	golem.Query(graphql, "searchUsers", SearchUsers, golem.MaxItems(10))
 	golem.Mutation(graphql, "transactionalUser", TransactionalUser)
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // BindGeneratedComputed is the generated-code bridge from a statically checked
@@ -37,7 +38,7 @@ func BindGeneratedComputed[M, A, R any](extensionID string, descriptor golem.Mod
 		if err != nil {
 			return nil, err
 		}
-		return eraseGeneratedRows[M](value), nil
+		return eraseGeneratedRows(value), nil
 	})
 }
 
@@ -103,7 +104,7 @@ func BindGeneratedBatchedComputed[M any, K comparable, A, R any](extensionID str
 				if !present {
 					return nil, fmt.Errorf("computed batch loader omitted key %q", encoded[index])
 				}
-				result[encoded[index]] = ComputedBatchResult{Value: eraseGeneratedRows[M](value)}
+				result[encoded[index]] = ComputedBatchResult{Value: eraseGeneratedRows(value)}
 			}
 			return result, nil
 		})
@@ -150,19 +151,11 @@ func generatedArgumentName(field reflect.StructField) string {
 	return string(runes)
 }
 
-func eraseGeneratedRows[M, R any](value R) any {
-	switch typed := any(value).(type) {
-	case golem.Row[M]:
-		return golem.RuntimeModelRowFromTyped(typed)
-	case []golem.Row[M]:
-		rows := make([]any, len(typed))
-		for index, row := range typed {
-			rows[index] = golem.RuntimeModelRowFromTyped(row)
-		}
-		return rows
-	default:
-		return value
+func eraseGeneratedRows[R any](value R) any {
+	if erased, ok := golem.RuntimeEraseRows(value); ok {
+		return erased
 	}
+	return value
 }
 
 type GeneratedCustomArgumentConversion func(any) (any, error)
@@ -188,7 +181,7 @@ func BindGeneratedCustomMutationModelContract[M, C, A, R any](bundle golem.Schem
 }
 
 func bindGeneratedCustomContract[M, C, A, R any](bundle golem.SchemaBundle, operation CustomOperation, spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), modelResult bool, conversions []GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	compilation, err := compilationFromBundle(bundle)
+	compilation, err := policyschema.DecodeActive(bundle)
 	if err != nil {
 		return CustomBinding{}, err
 	}

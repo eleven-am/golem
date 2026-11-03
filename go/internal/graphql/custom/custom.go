@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"time"
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 )
 
@@ -153,11 +156,11 @@ func (registry *Registry) Contract(id compilerir.ExtensionID) (compilerir.Custom
 // must already be frozen P3/P4 values with the declared stable model identity.
 func (registry *Registry) Prepare(kind compilerir.CustomOperationKind, name string, supplied map[string]any) (Request, error) {
 	if registry == nil {
-		return Request{}, fmt.Errorf("P5_CUSTOM_REGISTRY: registry is absent")
+		return Request{}, compileerr.Invariantf("custom registry is absent")
 	}
 	operation, ok := registry.byRoot[rootKey{kind: kind, name: name}]
 	if !ok {
-		return Request{}, fmt.Errorf("P5_CUSTOM_ROOT: %s %q is not statically declared", kind, name)
+		return Request{}, compileerr.Invariantf("%s %q is not statically declared", kind, name)
 	}
 	declared := make(map[string]compilerir.GraphQLArgumentContractIR, len(operation.Arguments))
 	for _, argument := range operation.Arguments {
@@ -165,7 +168,7 @@ func (registry *Registry) Prepare(kind compilerir.CustomOperationKind, name stri
 	}
 	for name := range supplied {
 		if _, known := declared[name]; !known {
-			return Request{}, fmt.Errorf("P5_CUSTOM_ARGUMENT: %s has unknown argument %q", operation.Name, name)
+			return Request{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableArgument, compileerr.Path(name), compileerr.Model(operation.Name))
 		}
 	}
 	request := Request{operation: cloneOperation(operation), arguments: make([]Argument, len(operation.Arguments))}
@@ -173,12 +176,12 @@ func (registry *Registry) Prepare(kind compilerir.CustomOperationKind, name stri
 		value, present := supplied[argument.Name]
 		if !present {
 			if !argument.Type.Nullable {
-				return Request{}, fmt.Errorf("P5_CUSTOM_ARGUMENT: %s requires argument %q", operation.Name, argument.Name)
+				return Request{}, compileerr.New(compileerr.KindRequired, compileerr.DetailNone, compileerr.Path(argument.Name), compileerr.Model(operation.Name))
 			}
 			value = nil
 		}
 		if err := registry.validateValue(argument.Type, value, true); err != nil {
-			return Request{}, fmt.Errorf("P5_CUSTOM_ARGUMENT: %s.%s: %w", operation.Name, argument.Name, err)
+			return Request{}, compileerr.On(compileerr.At(err, argument.Name), operation.Name)
 		}
 		request.arguments[index] = Argument{name: argument.Name, type_: cloneType(argument.Type), value: cloneValue(value)}
 	}
@@ -192,6 +195,13 @@ func (registry *Registry) Finish(request Request, value any) (Result, error) {
 	contract, ok := registry.byID[request.operation.ExtensionID]
 	if !ok || contract.Operation != request.operation.Operation || contract.Name != request.operation.Name || contract.Resolver != request.operation.Resolver {
 		return Result{}, fmt.Errorf("P5_CUSTOM_REQUEST: request is not owned by this registry")
+	}
+	if err := graphqlcontract.CheckListBounds(contract.Result, reflect.ValueOf(value)); err != nil {
+		operation := "customQuery"
+		if contract.Operation == compilerir.CustomOperationMutation {
+			operation = "customMutation"
+		}
+		return Result{}, graphqlcontract.ListItemsError(operation, fmt.Sprintf("custom %s %s", contract.Operation, contract.Name), err)
 	}
 	if err := registry.validateValue(contract.Result, value, false); err != nil {
 		return Result{}, fmt.Errorf("P5_CUSTOM_RESULT: %s: %w", contract.Name, err)

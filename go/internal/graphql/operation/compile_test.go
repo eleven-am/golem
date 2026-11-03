@@ -3,6 +3,7 @@ package operation
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
@@ -77,8 +79,17 @@ func TestCompilerLowersAliasedRootAndNestedArgumentsToP3(t *testing.T) {
 	}
 }
 
+func withDefaultPageSize(compilation compilerir.CompilationIR, size uint32) compilerir.CompilationIR {
+	models := append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range models {
+		models[index].Limits.DefaultPageSize = size
+	}
+	compilation.Contract.Models = models
+	return compilation
+}
+
 func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankOrder(t *testing.T) {
-	compilation := semanticSocial(t)
+	compilation := withDefaultPageSize(semanticSocial(t), 2)
 	document, err := graphqlschema.Build(compilation)
 	if err != nil {
 		t.Fatal(err)
@@ -148,18 +159,24 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	postFieldID, _ := publicFieldID(postModel.PrimaryKey.Fields[0])
 	firstIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 1)
 	secondIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 2)
-	firstPublic := runtimeRowForTest(t, postModelID, postFieldID, firstIdentity)
-	secondPublic := runtimeRowForTest(t, postModelID, postFieldID, secondIdentity)
-	firstRanked := semanticRuntimeRowForTest(t, firstPublic, postFieldID, firstIdentity, "first")
-	secondRanked := semanticRuntimeRowForTest(t, secondPublic, postFieldID, secondIdentity, "second")
-	if _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstPublic}); err != nil || active {
-		t.Fatalf("scalar-only semantic search scheduled hydration: active=%t err=%v", active, err)
+	firstRanked := identifiedRowForTest(t, postModelID, postFieldID, firstIdentity)
+	secondRanked := identifiedRowForTest(t, postModelID, postFieldID, secondIdentity)
+
+	scalarOnly, needed, err := limitCompiler.CustomHydration(limited.Custom[0])
+	if err != nil || !needed || scalarOnly == nil {
+		t.Fatalf("scalar-only semantic search skipped caller hydration: needed=%t err=%v", needed, err)
 	}
-	hydration, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{secondRanked, firstRanked})
-	if err != nil || !active {
-		t.Fatalf("prepare semantic hydration active=%t err=%v", active, err)
+	hydration, needed, err := compiler.CustomHydration(compiled.Custom[0])
+	if err != nil || !needed {
+		t.Fatalf("prepare semantic hydration: needed=%t err=%v", needed, err)
 	}
-	request, err := compiler.SemanticCustomHydrationRequest(hydration, 0, hydration.Len())
+	if err := hydration.Collect([]any{secondRanked, firstRanked}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hydration.Collect([]any{secondRanked}); err == nil {
+		t.Fatal("semantic search accepted a duplicate identity")
+	}
+	request, err := compiler.HydrationRequest(hydration, 0, hydration.Len())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +187,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	if !present || where.View().Root().Operator() != golem.FrozenOperatorAnd {
 		t.Fatalf("semantic hydration request discarded its filter: present=%t", present)
 	}
-	sliced, err := compiler.SemanticCustomHydrationRequest(hydration, 1, 2)
+	sliced, err := compiler.HydrationRequest(hydration, 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,34 +201,27 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	if !selectedRelation {
 		t.Fatal("semantic hydration request discarded the selected relation")
 	}
-	hiddenPublic, err := golem.RuntimeModelReadRow(postModelID)
+	unkeyed, err := golem.RuntimeModelReadRow(postModelID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hiddenRanked := semanticRuntimeRowForTest(t, hiddenPublic, postFieldID, firstIdentity, "hidden")
-	hiddenHydration, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{hiddenRanked})
-	if err != nil || !active {
-		t.Fatalf("private-identity semantic hydration active=%t err=%v", active, err)
-	}
-	hiddenRequest, err := compiler.SemanticCustomHydrationRequest(hiddenHydration, 0, 1)
-	if err != nil || len(golem.RuntimeSemanticIdentityFields(hiddenRequest)) != 1 {
-		t.Fatalf("private-identity semantic request fields=%d err=%v", len(golem.RuntimeSemanticIdentityFields(hiddenRequest)), err)
-	}
-	hiddenHydrated := golem.RuntimeModelRowWithSemanticIdentity(hiddenPublic, "hidden")
-	hiddenResult, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], hiddenHydration.Order(), []golem.RuntimeModelRow{hiddenHydrated})
-	if err != nil || len(hiddenResult.([]any)) != 1 {
-		t.Fatalf("private-identity semantic result=%#v err=%v", hiddenResult, err)
+	if err := hydration.Collect([]any{unkeyed}); err == nil {
+		t.Fatal("a result row without identity was accepted")
 	}
 
 	relationSlot := slotByFieldForTest(t, compiled.Custom[0].Slots, relationField.FieldID)
 	targetModelID := golemModelID(targetModel.ID)
 	targetFieldID, _ := publicFieldID(targetModel.PrimaryKey.Fields[0])
 	child := runtimeRowForTest(t, targetModelID, targetFieldID, semanticIdentityValue(t, generatedFieldByIDForTest(t, targetModel, targetModel.PrimaryKey.Fields[0]), 9))
-	firstHydrated := golem.RuntimeModelRowWithSemanticIdentity(runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child), "first")
-	secondHydrated := golem.RuntimeModelRowWithSemanticIdentity(runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child), "second")
-	hydrated, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], hydration.Order(), []golem.RuntimeModelRow{firstHydrated, secondHydrated})
+	firstHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child)
+	secondHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child)
+	indexed, err := hydration.Index([]golem.RuntimeModelRow{firstHydrated, secondHydrated})
 	if err != nil {
 		t.Fatal(err)
+	}
+	hydrated, absent, err := hydration.Restore([]any{secondRanked, firstRanked}, indexed)
+	if err != nil || absent != 0 {
+		t.Fatalf("restore absent=%d err=%v", absent, err)
 	}
 	encoded, failures, err := compiler.EncodeCustomWithComputedPartial(context.Background(), compiled.Custom[0], hydrated, func(context.Context, compilerir.ModelID, []golem.RuntimeModelRow, selectset.Slot) ([]any, error) {
 		return nil, fmt.Errorf("unexpected computed resolver")
@@ -229,13 +239,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 }
 
 func TestSemanticCustomSearchDefaultsToModelMaxTake(t *testing.T) {
-	compilation := semanticSocial(t)
-	post := contractNamed(t, compilation.Contract, "Post")
-	for index := range compilation.Contract.Models {
-		if compilation.Contract.Models[index].ModelID == post.ModelID {
-			compilation.Contract.Models[index].Limits.MaxTake = 1
-		}
-	}
+	compilation := semanticSocialWithMaxTake(t, 1)
 	compiler, err := New(compilation, Limits{})
 	if err != nil {
 		t.Fatal(err)
@@ -245,6 +249,29 @@ func TestSemanticCustomSearchDefaultsToModelMaxTake(t *testing.T) {
 		bound, bindErr := compiler.bindSemanticSearchTake(operation, arguments, false)
 		if bindErr != nil || !bound || arguments["take"] != int32(1) {
 			t.Fatalf("omitted %s take bound=%t arguments=%#v error=%v", operation.Name, bound, arguments, bindErr)
+		}
+	}
+}
+
+func TestSemanticDeclaredMaximumIsItsTakeMaximum(t *testing.T) {
+	for _, maxTake := range []uint32{0, 30} {
+		compilation := semanticSocialWithMaxTake(t, maxTake)
+		compiler, err := New(compilation, Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, operation := range compilation.Contract.CustomOperations {
+			declared := int32(operation.Result.MaxItems)
+			if declared < 1 || (maxTake != 0 && declared != int32(maxTake)) {
+				t.Fatalf("%s declared maximum = %d with MaxTake %d", operation.Name, declared, maxTake)
+			}
+			atMaximum := map[string]any{"take": declared}
+			if bound, bindErr := compiler.bindSemanticSearchTake(operation, atMaximum, true); bindErr != nil || !bound || atMaximum["take"] != declared {
+				t.Fatalf("%s rejected a take equal to its declared maximum %d: bound=%t error=%v", operation.Name, declared, bound, bindErr)
+			}
+			if _, bindErr := compiler.bindSemanticSearchTake(operation, map[string]any{"take": declared + 1}, true); bindErr == nil {
+				t.Fatalf("%s accepted a take above its declared maximum %d", operation.Name, declared)
+			}
 		}
 	}
 }
@@ -782,8 +809,18 @@ func social(t *testing.T) compilerir.CompilationIR {
 
 func semanticSocial(t *testing.T) compilerir.CompilationIR {
 	t.Helper()
+	return semanticSocialWithMaxTake(t, 0)
+}
+
+func semanticSocialWithMaxTake(t *testing.T, maxTake uint32) compilerir.CompilationIR {
+	t.Helper()
 	compilation := social(t)
 	post := contractNamed(t, compilation.Contract, "Post")
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].ModelID == post.ModelID {
+			compilation.Contract.Models[index].Limits.MaxTake = maxTake
+		}
+	}
 	model := modelByIDForTest(t, compilation.Model, post.ModelID)
 	title := generatedFieldNamedForTest(t, model, "Title")
 	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{string(title.ID)}, Metric: "cosine"})
@@ -891,44 +928,18 @@ func semanticIdentityValue(t *testing.T, field compilerir.FieldIR, value byte) a
 	}
 }
 
-func semanticRuntimeRowForTest(t *testing.T, row golem.RuntimeModelRow, field golem.FieldID, identity any, key string) golem.RuntimeModelRow {
+func identifiedRowForTest(t *testing.T, model golem.ModelID, field golem.FieldID, value any) golem.RuntimeModelRow {
 	t.Helper()
-	kind := golem.FrozenValueKind(0)
-	switch identity.(type) {
-	case golem.UUID:
-		kind = golem.FrozenValueUUID
-	case string:
-		kind = golem.FrozenValueString
-	case int16:
-		kind = golem.FrozenValueInt16
-	case int32:
-		kind = golem.FrozenValueInt32
-	case int64:
-		kind = golem.FrozenValueInt64
-	default:
-		t.Fatalf("unsupported semantic identity value %T", identity)
-	}
-	predicate, err := golem.RuntimeFreezePredicate(row.ModelID(), golem.RuntimePredicateNode{
-		Kind: golem.FrozenConditionScalar, Operator: golem.FrozenOperatorEq, Mode: golem.FrozenComparisonSensitive, Field: field,
-		Operand: golem.RuntimePredicateOperand{Kind: golem.FrozenOperandOne, One: golem.RuntimePredicateValue{Kind: kind, Value: identity}},
-	})
+	cell := golem.RuntimePresentReadCell(field, value, nil)
+	row, err := golem.RuntimeModelReadRow(model, cell)
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := golem.GeneratedModelDescriptor[struct{}](row.ModelID(), golem.GeneratedDescriptorShape(nil, nil, nil, nil))
-	typed, err := golem.RuntimeTypedReadRow(descriptor, row)
+	identity, err := golem.RuntimeNewRowIdentity([]golem.FieldID{field}, []golem.RuntimeReadCell{cell})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := golem.RuntimeSemanticResultWithIdentity(typed, 0, predicate, []golem.FieldID{field}, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport, err := golem.RuntimeSemanticRowFromResult(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return transport
+	return golem.RuntimeModelRowWithIdentity(row, identity)
 }
 
 func runtimeRowForTest(t *testing.T, model golem.ModelID, field golem.FieldID, value any) golem.RuntimeModelRow {
@@ -964,11 +975,16 @@ func runtimeRelationRowForTest(t *testing.T, model golem.ModelID, identityField 
 	} else {
 		cell = golem.RuntimeToOneOccurrenceCell(field, occurrence, child)
 	}
-	row, err := golem.RuntimeModelReadRowWithOccurrences(model, []golem.RuntimeReadCell{golem.RuntimePresentReadCell(identityField, identity, nil)}, nil, []golem.RuntimeOccurrenceCell{cell})
+	identityCell := golem.RuntimePresentReadCell(identityField, identity, nil)
+	row, err := golem.RuntimeModelReadRowWithOccurrences(model, []golem.RuntimeReadCell{identityCell}, nil, []golem.RuntimeOccurrenceCell{cell})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return row
+	rowIdentity, err := golem.RuntimeNewRowIdentity([]golem.FieldID{identityField}, []golem.RuntimeReadCell{identityCell})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return golem.RuntimeModelRowWithIdentity(row, rowIdentity)
 }
 
 func graphqlIdentityValue(value any) any {
@@ -993,4 +1009,41 @@ func golemModelID(id compilerir.ModelID) (result golem.ModelID) {
 	decoded, _ := hex.DecodeString(string(id))
 	copy(result[:], decoded)
 	return result
+}
+
+func TestSemanticTakeOutsideItsMaximumNamesTheRootAndTheRange(t *testing.T) {
+	compilation := withDefaultPageSize(semanticSocial(t), 2)
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := compilation.Contract.CustomOperations[0]
+	postContract := contractNamed(t, compilation.Contract, "Post")
+	postModel := modelByIDForTest(t, compilation.Model, postContract.ModelID)
+	postID := fieldContractByIDForTest(t, postContract, postModel.PrimaryKey.Fields[0])
+	compiler, err := New(compilation, Limits{Bind: graphqlbind.Limits{MaxPageSize: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, take := range []string{"3", "0", "-1"} {
+		query, queryErrors := gqlparser.LoadQuery(schema, `query { search: `+operation.Name+`(query: "rank me", take: `+take+`) { `+postID.GraphQLName+` } }`)
+		if len(queryErrors) != 0 {
+			t.Fatal(queryErrors)
+		}
+		_, err := compiler.Compile(query, query.Operations[0], nil)
+		var typed *compileerr.Error
+		if !errors.As(err, &typed) || typed.Kind() != compileerr.KindIntegerRange || typed.Detail() != compileerr.IntegerPositive {
+			t.Fatalf("take %s error=%v", take, err)
+		}
+		if want := "Argument take on " + operation.Name + " must be between 1 and 2"; typed.Message() != want {
+			t.Fatalf("take %s message=%q want %q", take, typed.Message(), want)
+		}
+		if root, ok := compileerr.RootOf(err); !ok || root != "search" {
+			t.Fatalf("take %s root=%q/%t want the response name", take, root, ok)
+		}
+	}
 }

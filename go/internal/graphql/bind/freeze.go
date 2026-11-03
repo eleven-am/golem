@@ -1,9 +1,8 @@
 package bind
 
 import (
-	"fmt"
-
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
@@ -15,9 +14,13 @@ import (
 // and stable-identity result without reinterpreting public names.
 func (b *Binder) FreezePredicate(condition policyir.Condition) (golem.FrozenPredicate, error) {
 	if b == nil {
-		return golem.FrozenPredicate{}, fmt.Errorf("P5_BIND_FREEZE: binder is absent")
+		return golem.FrozenPredicate{}, compileerr.Invariantf("binder is absent")
 	}
-	return policybind.FreezeCondition(golem.ModelID(condition.ModelID()), condition, b.freezeEnumLabels())
+	frozen, err := policybind.FreezeCondition(golem.ModelID(condition.ModelID()), condition, b.freezeEnumLabels())
+	if err != nil {
+		return golem.FrozenPredicate{}, compileerr.Ensure(err)
+	}
+	return frozen, nil
 }
 
 func (b *Binder) freezeEnumLabels() policybind.EnumLabels {

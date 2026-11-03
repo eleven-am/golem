@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	PendingBackfillFormatVersion uint16 = 1
+	PendingBackfillFormatVersion uint16 = 2
 	PendingBackfillFilename             = ".golem-pending-backfill.json"
 )
 
@@ -116,8 +116,11 @@ func parsePendingBackfill(encoded []byte) (PendingBackfill, error) {
 }
 
 func validatePendingBackfill(value PendingBackfill) error {
-	if value.FormatVersion != PendingBackfillFormatVersion {
-		return fmt.Errorf("pending backfill format version %d is unsupported", value.FormatVersion)
+	if value.FormatVersion < PendingBackfillFormatVersion {
+		return fmt.Errorf("pending backfill format %d predates this golem (format %d): regenerate with golem generate, delete %s, and run golem migration new again", value.FormatVersion, PendingBackfillFormatVersion, PendingBackfillFilename)
+	}
+	if value.FormatVersion > PendingBackfillFormatVersion {
+		return fmt.Errorf("pending backfill format %d is newer than this golem (format %d): upgrade golem", value.FormatVersion, PendingBackfillFormatVersion)
 	}
 	root, err := canonicalRoot(value.Root)
 	if err != nil || root != value.Root || value.PublicationPath != path.Join(root, PublicationFilename) {

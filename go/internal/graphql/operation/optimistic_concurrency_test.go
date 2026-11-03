@@ -124,7 +124,7 @@ func TestVersionedCustomSelectorBindsWithoutManufacturingDeleteAuthority(t *test
 	post := contractNamed(t, compilation.Contract, "Post")
 	value, err := compiler.bindCustomValue(compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeSelector, Name: "Post"}, map[string]any{
 		selectorNameForField(t, post, "id"): "00000000-0000-0000-0000-000000000011",
-	})
+	}, "where")
 	if err != nil {
 		t.Fatal(err)
 	}

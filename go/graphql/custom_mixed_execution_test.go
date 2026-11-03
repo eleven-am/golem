@@ -86,7 +86,7 @@ func TestGraphQLMixedOrdinaryAndCustomRootsShareExactOperationCaller(t *testing.
 	if len(response.Errors) != 0 {
 		t.Fatalf("mixed response errors=%#v data=%#v", response.Errors, response.Data)
 	}
-	if caller.reads.Load() != 1 || customCalls != 1 {
-		t.Fatalf("ordinary reads=%d custom calls=%d", caller.reads.Load(), customCalls)
+	if caller.reads.Load() != 2 || customCalls != 1 {
+		t.Fatalf("ordinary reads plus one custom hydration read=%d custom calls=%d", caller.reads.Load(), customCalls)
 	}
 }

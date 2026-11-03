@@ -317,6 +317,47 @@ func TestP6GeneratedMetricsFixtureRegeneratesByteIdentically(t *testing.T) {
 	}
 }
 
+func TestHookValuesGeneratedFixtureRegeneratesByteIdentically(t *testing.T) {
+	moduleRoot := p5ExtensionModuleRoot(t)
+	directory := filepath.Join(moduleRoot, "runtime", "testdata", "hookvalues")
+	request := hookValuesGenerationRequest(directory)
+	first, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Prospective.GenerationDigest != second.Prospective.GenerationDigest {
+		t.Fatalf("hook values repeat digest differs: %s != %s", first.Prospective.GenerationDigest, second.Prospective.GenerationDigest)
+	}
+	firstArtifacts, secondArtifacts := p5ExtensionArtifactMap(first), p5ExtensionArtifactMap(second)
+	for path, content := range firstArtifacts {
+		if !bytes.Equal(content, secondArtifacts[path]) {
+			t.Fatalf("hook values repeat artifact differs: %s", path)
+		}
+		if !strings.HasPrefix(path, "runtime/testdata/hookvalues/") {
+			continue
+		}
+		committed, err := os.ReadFile(filepath.Join(moduleRoot, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(content, committed) {
+			t.Fatalf("committed hook values fixture is stale: %s: %s", path, p5ExtensionFirstDifference(committed, content))
+		}
+	}
+}
+
+func hookValuesGenerationRequest(directory string) pipeline.Request {
+	return pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/hookvalues", PackageName: "hookvalues", Directory: directory},
+		Lowerers:   []physical.Lowerer{postgresprovider.New(), sqliteprovider.New()},
+	}
+}
+
 func p6MetricsGenerationRequest(directory string) pipeline.Request {
 	return pipeline.Request{
 		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},

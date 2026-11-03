@@ -486,10 +486,12 @@ subscriber's stream with `GOLEM_SUBSCRIPTION_RESYNC` instead of guessing;
 reload and subscribe again. A parent changed by a later transaction, before
 the event was delivered, is judged on its state at delivery, as created and
 updated events are; when the event publisher falls behind, that window grows
-with the backlog. A delete delivered from a CDC source has no recorded
-transaction to consult, so a policy whose verdict depends on a related parent
-ends the stream with `GOLEM_SUBSCRIPTION_RESYNC`, while a policy decided by
-the row's own fields still decides it exactly. A delete whose cascade would
+with the backlog. A CDC source's batches are recorded in the outbox before they
+are published, so a delete delivered from a CDC source is decided the same way,
+against the other changes of its source transaction. If retention has already
+removed that batch's facts, a policy whose verdict depends on a related parent
+ends the stream with `GOLEM_SUBSCRIPTION_RESYNC`, while a policy decided by the
+row's own fields still decides it exactly. A delete whose cascade would
 touch more rows than `MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
 
 On PostgreSQL, concurrent writes that touch the same rows do not deadlock. One
@@ -956,6 +958,16 @@ code.
   `Open` requires when any after-commit hook exists. Its result has no
   executor.
 
+A `Before` hook that reads a write's input (`golem.RuntimeFreezeCreateInput`,
+`RuntimeFreezeUpdateInput`, then `FrozenMutationField.Value()`) sees the same Go
+value whether the write came from a GraphQL mutation, the generated Go API or a
+nested write: the field's Go type (`string`, `int16`, `int32`, `int64`,
+`float32`, `float64`, `bool`, `golem.Decimal`, `golem.UUID`, `golem.Date`,
+`golem.Time`, `time.Time`, `[]byte`), an enum as its wire `string`, and a scalar
+list as a plain `[]T` of the element's type (a list of enums is `[]string`). A
+field written to null reports `MutationFieldNull` and no value. The value is a
+copy, so changing it does not change the write.
+
 Names such as `BeforeUpsert` and `BeforeAggregate` are refused. A panic in a
 hook becomes an error, `generated hook panicked`, and its value is not kept.
 `golem.ActorFrom[Actor](ctx)` returns the actor of the caller the hook runs
@@ -1082,6 +1094,12 @@ operation. They describe exactly the SDL that `server.SDL()` returns:
 - An operation you did not generate is absent from both.
 - A field that policy can mask is present in both, because masking happens per
   row at read time, not in the schema.
+- A type no operation can reach is absent from both. The generated schema keeps
+  the types reachable from `Query`, `Mutation` and `Subscription` through
+  fields, arguments and input fields. Turning an operation off, such as
+  `create` on a model or analytics, removes the inputs only that operation
+  used. For example, a model without `create` has no `PostCreateInput` unless
+  another input nests it.
 
 An operation that selects only `__schema`, `__type` or `__typename` roots
 still resolves the principal through your `ResolvePrincipal`. A principal it
@@ -1145,7 +1163,7 @@ A schema package may declare its own query and mutation roots:
 
 ```go
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
-	golem.Query(graphql, "searchInvites", SearchInvites)
+	golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))
 	golem.Mutation(graphql, "inviteMember", InviteMember)
 }
 
@@ -1171,6 +1189,119 @@ A resolver receives only the caller, never `System`, a transaction or a
 database. It may open `caller.Transaction` itself. A custom mutation can be
 granted writes the caller cannot perform directly; see
 [Operations that own a write](#operations-that-own-a-write).
+
+#### What a custom operation returns
+
+A custom query, a custom mutation or a computed field may return model rows
+(`golem.Row[Invite]`, `[]golem.Row[Invite]`, lists of lists). golem never
+encodes the rows your resolver built. It reads every returned row again through
+the caller, in one read per root (per computed field, for computed fields),
+with the selection the client asked for. The client therefore sees exactly what
+the generated roots would show it:
+
+- Relations, `_count` and computed fields work under a custom root as they do
+  under `invites` or `teams`.
+- Read policy and field masks are the caller's. A row you read with `System`
+  inside the resolver, or one the caller cannot read, is not disclosed, and a
+  field masked for the caller is `null`, whichever fields the client selected.
+- Order, duplicates and nested list shape are kept.
+- A row built by hand (`golem.RuntimeReadRow`) has no identity to read again
+  and is an internal fault: `INTERNAL_SERVER_ERROR`, reported through
+  `ReportInternalError`.
+
+For queries and computed fields, a row that was deleted before the read or that
+the caller cannot read is left out of its list. A single result that is gone is
+`null` when the field is nullable and `NOT_FOUND` when it is not.
+
+A custom mutation has already committed when its resolver returns, so golem
+never hides that. If anything fails after the resolver returned, because the
+returned row cannot be read by the caller, vanished, or could not be read or
+encoded, the root fails with `COMMITTED_RESULT_UNAVAILABLE`:
+
+```json
+{
+  "message": "custom mutation submitInvite committed, but its result is unavailable",
+  "path": ["submitInvite"],
+  "extensions": {
+    "code": "COMMITTED_RESULT_UNAVAILABLE",
+    "reason": "RESULT_NOT_READABLE",
+    "committed": true,
+    "unreadable": 1
+  }
+}
+```
+
+`committed: true` is always present. `reason` is `RESULT_NOT_READABLE`, with the
+number of rows in `unreadable`, when the caller cannot read the result, and
+`LIMIT_EXCEEDED` when a list passed its limit. It is absent for any other
+failure. A limit failure and an unclassified failure are also reported through
+`ReportInternalError`; a failure that is already a public `golem.Error`, such as
+`FORBIDDEN` from the hydration read, is returned without being reported. A list is never
+shortened: if one row is unreadable the whole root is `null` with this error. A
+nullable root is `null` and later mutation roots in the same document still
+run; a non-null root makes `data` `null` and later roots do not run. A resolver
+that returns `null` from a nullable root is not an error. An error returned by
+the resolver itself is presented as before, because nothing committed.
+
+A resolver that creates a row its caller is not allowed to read, for example
+through a `golem.Within` grant, still gets a `golem.Row` back with no readable
+cells. It carries the new row's primary key privately, so golem can report it as
+`RESULT_NOT_READABLE` instead of treating it as a fault. A create without a
+projection returns a row with no key and cannot be returned as a model result.
+
+#### How many items a list may hold
+
+Every list a custom operation or a computed field returns declares its
+maximum size. A custom root states it after its resolver, one value for each
+list level, outermost first:
+
+```go
+golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))
+golem.Query(graphql, "groupedInvites", GroupedInvites, golem.MaxItems(10, 2)) // [][]golem.Row[Invite]
+```
+
+A computed field states it where it writes the list type, once for each
+`golem.GraphQLList`:
+
+```go
+golem.ComputedField(graphql, "openInvites", golem.GraphQLList(golem.GraphQLObject[Invite]().NonNull(), 20).NonNull(), Team{}.OpenInvites)
+```
+
+Each value is a constant of at least 1. `golem generate` fails when a list level
+has no maximum (`P5_GRAPHQL_LIST_MAX_REQUIRED`), when `MaxItems` gives a
+different number of values than the result has list levels
+(`P5_GRAPHQL_LIST_MAX_ARITY`), when a value is 0 (`P5_GRAPHQL_LIST_MAX_ZERO`),
+when it is not a constant (`P5_GRAPHQL_LIST_MAX_CONSTANT`), or when the result is
+not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). A custom operation fails when an option
+is anything other than a direct `golem.MaxItems` call (`P5_CUSTOM_OPTION`) or
+when it declares `MaxItems` more than once (`P5_CUSTOM_OPTION_DUPLICATE`). `[]byte` is a `Bytes` scalar, not a
+list.
+
+The maximum is the most the resolver may return. It is not a page size and is
+independent of `MaxPageSize`, which stays the ceiling for a `take` argument. A
+resolver that returns more fails, and the list is never shortened:
+
+```json
+{
+  "message": "custom query searchInvites returned more than 20 items",
+  "path": ["searchInvites"],
+  "extensions": { "code": "LIMIT_EXCEEDED", "reason": "LIMIT_EXCEEDED", "limit": "list_items", "max": 20 }
+}
+```
+
+The error is also passed to `ReportInternalError`, because the resolver, not the
+caller, broke the contract. The check runs on the resolver's own return value,
+before golem reads the rows again. For a computed field it runs for each parent
+row, and `computed field Team.openInvites returned more than 20 items` is the
+error at that field's path. For a custom mutation the writes are already
+committed, so the root is `COMMITTED_RESULT_UNAVAILABLE` with `committed: true`,
+`reason: LIMIT_EXCEEDED`, `limit: list_items` and `max`. `golem.LimitListItems`
+names the limit in Go.
+
+The maximum also sets the list's query cost. Generated semantic and full-text
+search roots declare their own maximum: the smallest of the search engines'
+ceiling, the model's `MaxPageSize` and its `MaxTake`. Their `take` argument
+defaults to the model's default page size, narrowed to that maximum.
 
 To run a custom mutation from Go, call the generated `Mutate`:
 
@@ -1573,6 +1704,24 @@ derives constraint names from both) and making a column optional.
   PostgreSQL is the schema's sole provider can one required field per
   migration be added with a reviewed backfill.
 
+### Events written before a regeneration
+
+Each queued event records the schema that wrote it. After a regeneration that
+changes a model's event schema, or moves the generated contract to a newer
+format, the new build cannot decode the undelivered events written under the old
+schema. The publisher blocks each one with
+`last_failure_code = 'schema-unavailable'`, visible through
+`EventOperator().Inspect`, and its decode error is
+`GOLEM_EVENT_SCHEMA_UNAVAILABLE`. Retire it with `EventOperator().Retire`, or
+deliver it first: run the publisher on the old build until
+`SELECT COUNT(DISTINCT o."causation_id") FROM "_golem_outbox" o LEFT JOIN
+"_golem_outbox_delivery" d ON d."causation_id" = o."causation_id" WHERE
+d."causation_id" IS NULL OR d."status" IN ('pending', 'leased', 'blocked')`
+returns 0. On PostgreSQL, qualify both tables with the system namespace. A
+bundle generated by an older golem is refused in `HistoricalEventBundles` when
+its contract format is no longer supported; the release notes of the release
+that drops a format give the exact drain steps.
+
 ### Drift
 
 Application startup and `golem doctor` compare the live database with the
@@ -1643,6 +1792,7 @@ as `FORBIDDEN: mutation is not authorized`, is still possible.
 | `take` | `ReadLimits.MaxTake`, or a model's own maximum | none |
 | `fanout` | `ReadLimits.MaxRelationFanout` | none |
 | `transaction_ordinal` | the number of events one transaction can number | 2³² − 1 |
+| `list_items` | the `golem.MaxItems` or `golem.GraphQLList` maximum a custom operation or computed field declares for its list result | declared |
 
 The mutation defaults are also ceilings: you may lower them, never raise them.
 A limit that only the fields or relation hops your policy needs would exceed is
@@ -1705,7 +1855,142 @@ with `extensions.code`, plus `extensions.reason` when there is a reason and
 `Field` and `Model` are not sent. Any error that is not a golem or events
 error is reported to `ReportInternalError` and sent as
 `INTERNAL_SERVER_ERROR`. The GraphQL layer's own codes, such as
-`GRAPHQL_VALIDATION_FAILED` and `QUERY_LIMIT_EXCEEDED`, are unchanged.
+`GRAPHQL_VALIDATION_FAILED`, `QUERY_LIMIT_EXCEEDED` and `INPUT_LIMIT_EXCEEDED`,
+are described below.
+
+### Errors for a request the server refuses
+
+A request that fails before it reaches an operation gets the same errors over
+HTTP, server-sent events and `graphql-transport-ws`. Over WebSocket they arrive
+as the payload of the `error` message. An error never repeats text from the
+request: its message is fixed by golem, so a field, argument, variable or
+literal you sent cannot come back in it.
+
+**Validation.** Each problem the GraphQL validator finds is one error with code
+`GRAPHQL_VALIDATION_FAILED`, a fixed message for its rule, `extensions.rule`
+with the rule's name, and `locations`, the line and column in your document
+(`graphql.Error.Locations`, a list of `graphql.Location{Line, Column}`, at most
+four per error). At most eight errors are returned; when there are more, a last
+error reads `and 4 more validation errors`.
+
+```json
+{"message": "GraphQL field does not exist on the selected type",
+ "locations": [{"line": 1, "column": 3}],
+ "extensions": {"code": "GRAPHQL_VALIDATION_FAILED", "rule": "FieldsOnCorrectType"}}
+```
+
+These errors are the same whether `Introspection` is on or off. The flag only
+decides whether an operation that selects `__schema` or `__type` is allowed; if
+not, it is refused with `GRAPHQL_VALIDATION_FAILED` and the message
+`GraphQL introspection is disabled`.
+
+**Limits.** A limit error names the limit that tripped and its value, in the
+message and in `extensions.limit` and `extensions.max`, the same keys a runtime
+limit uses:
+
+```json
+{"message": "GraphQL query exceeds MaxDepth (12)",
+ "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxDepth", "max": 12}}
+```
+
+`INPUT_LIMIT_EXCEEDED` covers `MaxVariableBytes`, `MaxInputNodes`,
+`MaxInputDepth` and `MaxListItems`. `QUERY_LIMIT_EXCEEDED` covers
+`MaxRequestBytes`, `MaxTokens`, `MaxASTNodes`, `MaxFragments`, `MaxDepth`,
+`MaxSelectedFields`, `MaxAliases`, `MaxComplexity`, and the introspection
+repetition limits `MaxSchemaRoots` (1) and `MaxTypeRoots` (8). A complexity
+error also carries the operation's cost:
+
+```json
+{"message": "GraphQL query complexity 22 exceeds MaxComplexity (20)",
+ "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxComplexity", "max": 20, "cost": 22}}
+```
+
+A list field multiplies the cost of what it selects by the number of items it
+can return:
+
+- Its `take` argument, by magnitude, when the request gives one.
+- Otherwise its `take` default in the schema. Relation lists and `findMany`
+  roots advertise the listed model's default page size, and generated semantic
+  and full-text searches advertise that default narrowed by their maximum.
+- Otherwise its declared bound: the product of the `MaxItems` levels of a custom
+  or computed list, or `MaxGroups` for `groupBy` and `relationGroupBy` (the
+  smaller of the model's maximum and the runtime `MaxGroups`).
+
+`MaxPageSize` is not part of the cost. It is the ceiling for `take`, so a query
+that selects `me { ... }` over a list declared `MaxItems(1)` costs as one row.
+A `groupBy` without `take` costs `MaxGroups` rows, so give it a `take` when the
+query would otherwise exceed `MaxComplexity`.
+
+A server you build directly with `graphql.NewServer` needs the same facts. Its
+`Executor` must return them from `ListBounds()`, keyed `"Type.field"`, for every
+list of objects that has no `take` default. `NewServer` refuses an executor that
+omits one, that declares one for any other field, or that declares a bound below
+1. Generated executors provide the table. A generated executor also refuses to
+start when a model's default page size is above `MaxPageSize`, because the
+schema would advertise a `take` the runtime rejects.
+
+The cost is exact; it stops at the largest integer if the operation's fan-out
+overflows it. A request with no `query` is `BAD_REQUEST`
+(`GraphQL request requires a query`), not a limit error.
+
+### Errors for a value the operation cannot use
+
+A document can be valid and still carry a value that cannot be bound: a `take`
+past the model's maximum, a UUID that is not canonical, an empty `where`. Such a
+read is refused before any SQL runs, with code `BAD_USER_INPUT`:
+
+```json
+{"message": "Argument take on User must be between -500 and 500, excluding 0",
+ "path": ["users"],
+ "extensions": {"code": "BAD_USER_INPUT", "reason": "INVALID_VALUE", "argument": "take", "min": -500, "max": 500}}
+```
+
+`path` is the response name of the root field that was refused. `argument` is
+the dotted input path, `where.id.equals` or `orderBy[0].id`. `reason` is
+`INVALID_VALUE` for a value that is out of range or malformed, and
+`LIMIT_EXCEEDED` for a bound on the input or selection (`limit` names it:
+`MaxInputNodes`, `MaxInputDepth`, `MaxListItems`, `MaxDepth`,
+`MaxSelectedFields`, `MaxAliases`), with `max` for its value. `min` and `max`
+carry a numeric range.
+
+| Message form | Cause |
+|---|---|
+| `Argument x on M cannot be null` | an argument or input member is `null`, or an omitted `$variable` was given to it |
+| `Argument x on M must not be empty` | an empty `where`, `AND`, `OR`, `NOT`, `orderBy` or `distinct` |
+| `Input x on M must set exactly one member` | a unique selector or an `orderBy` entry names none or several |
+| `Input x on M is required` | a compound selector lacks a component |
+| `Argument take on M must be between -N and N, excluding 0`, `... must not be 0`, `Argument skip on M must be at least 0` | paging outside the allowed range |
+| `Argument take on M is negative and requires orderBy` | a negative `take` without an `orderBy` |
+| `Input x on M is not a valid T`, `... is not a canonical T`, `... is outside the T range`, `... must be of type T`, `... exceeds the maximum length of N`, `... must not contain NUL characters` | a scalar value that is malformed, not in its canonical text, out of range, of the wrong type, too long, or holds NUL |
+| `Input x on M is not supported for this field or provider` | an operator the field or the provider does not support |
+| `Argument x on M names a field more than once` | a repeated `orderBy` or `distinct` field |
+| `Input x on M is not available for this operation` | an unknown or unreadable field |
+| `Field f on M requires a selection set`, `... must not have a selection set` | a selection that does not match the field's type |
+| `Directive @skip requires a Boolean if` | a `@skip` or `@include` without a Boolean `if` |
+| `Input x on M is only allowed on numeric fields`, `... must be true`, `Argument where on M is not accepted by create` | a write operation the field, the relation or the root does not allow |
+| `Input x on M is not allowed while creating`, `... is not allowed on a to-one relation`, `... requires an expectation because the target model is versioned` | a nested write the relation or the target model does not allow |
+| `Argument expectedVersion on M must be at least 1`, `Argument expectation on M must set exactly one member` | an optimistic-concurrency claim that is missing a version or names none or several |
+| `Batch writes are not available on M` | `updateMany` or `deleteMany` on an optimistic-concurrency model |
+| `An aggregate on M must select at least one measure` | an `aggregate` that selects only `__typename` |
+| `Input having.….mode on M is not supported for this field or provider` | `mode` set on `equals`, `not`, `lt`, `lte`, `gt` or `gte`; it applies only to `contains`, `startsWith` and `endsWith` |
+| `Key x on M must be listed in by` | a selected key, an `orderBy` key or a `having` key that `by` does not group |
+| `Relation grouping on M requires a relation dimension in by` | `relationGroupBy` whose `by` names only local fields |
+| `Input exceeds L (N)`, `Selection exceeds L (N)` | the input or selection bound named by `extensions.limit` |
+
+`M` is a model, operation or computed field name from your schema. The message
+never contains text from your request. If the operation is valid and golem still
+cannot compile it, because its own contract is inconsistent, the response is
+`INTERNAL_SERVER_ERROR` with `internal server error`, and the cause goes to
+`ReportInternalError`. A subscription that cannot be bound returns the same typed
+error from `Subscribe`; `graphql.PresentError` turns it into this response.
+
+The same forms cover writes and analytics. A mutation names the input it
+refused (`Input data.name on User must set exactly one member`,
+`Input data.posts.create[1].id on Post is not a valid UUID`); a list
+position is shown as `[n]`. An optimistic-concurrency write adds
+`Argument expectedVersion on M must be at least 1`. `aggregate`, `groupBy` and
+`relationGroupBy` add the forms below. A request refused here has run no SQL, so
+a refused mutation has no effect.
 
 ## Errors you will meet early
 

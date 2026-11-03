@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -190,6 +191,24 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 	return compiler, nil
 }
 
+func (c *Compiler) groupMaximum(contract compilerir.ModelContractIR) int {
+	maximum := int(contract.Aggregation.GraphQLMaxGroups)
+	if maximum <= 0 || c.limits.MaxGroups < maximum {
+		return c.limits.MaxGroups
+	}
+	return maximum
+}
+
+func (c *Compiler) GroupRootMaxima() map[string]int {
+	maxima := map[string]int{}
+	for name, binding := range c.bindings {
+		if binding.operation == golem.AnalyticsGroupBy || binding.operation == golem.AnalyticsRelationGroupBy {
+			maxima[name] = c.groupMaximum(c.models[binding.model].contract)
+		}
+	}
+	return maxima
+}
+
 func buildModelBinding(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, models map[compilerir.ModelID]compilerir.ModelDeclIR, contracts map[compilerir.ModelID]compilerir.ModelContractIR, relations map[compilerir.RelationID]compilerir.RelationIR) (modelBinding, error) {
 	result := modelBinding{model: model, contract: contract, localDimensions: map[string]termBinding{}, relationDimensions: map[string]termBinding{}, measureFields: map[string]compilerir.FieldIR{}}
 	fields := map[compilerir.FieldID]compilerir.FieldIR{}
@@ -298,67 +317,75 @@ func (c *Compiler) Compile(field *ast.Field, fragments ast.FragmentDefinitionLis
 	if !ok {
 		return Root{}, false, nil
 	}
+	root, err := c.compile(field, binding, fragments, variables)
+	if err != nil {
+		return Root{}, true, compileerr.On(err, c.models[binding.model].contract.GraphQLName)
+	}
+	return root, true, nil
+}
+
+func (c *Compiler) compile(field *ast.Field, binding rootBinding, fragments ast.FragmentDefinitionList, variables map[string]any) (Root, error) {
 	model := c.models[binding.model]
 	arguments, err := argumentValues(field, variables)
 	if err != nil {
-		return Root{}, true, err
+		return Root{}, err
 	}
 	selection, selectedMeasures, selectedKeys, err := c.compileSelection(model, binding.operation, field.SelectionSet, fragments, variables)
 	if err != nil {
-		return Root{}, true, err
+		return Root{}, err
 	}
 	request := golem.RuntimeAnalyticsRequestInput{Operation: binding.operation}
 	request.Model, err = publicModelID(binding.model)
 	if err != nil {
-		return Root{}, true, err
+		return Root{}, err
 	}
 	root := Root{Model: binding.model, Operation: binding.operation, Slots: selection, TypeName: outputTypeName(model.contract.GraphQLName, binding.operation)}
 	if binding.operation == golem.AnalyticsAggregate {
 		if err := allowedArguments(arguments, "where"); err != nil {
-			return Root{}, true, err
+			return Root{}, err
 		}
 		if len(selectedMeasures) == 0 {
-			return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: aggregate requires a selected measure")
+			return Root{}, compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedAggregateNeedsMeasure)
 		}
 		request.Measures = selectedMeasures
 	} else {
 		if err := allowedArguments(arguments, "by", "where", "having", "orderBy", "skip", "take"); err != nil {
-			return Root{}, true, err
+			return Root{}, err
 		}
 		by, present := arguments["by"]
 		if !present {
-			return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_BY: by is required")
+			return Root{}, compileerr.New(compileerr.KindRequired, compileerr.DetailNone, compileerr.Path("by"))
 		}
 		dimensions, byNames, bindErr := bindDimensions(model, binding.operation, by)
 		if bindErr != nil {
-			return Root{}, true, bindErr
+			return Root{}, compileerr.At(bindErr, "by")
 		}
-		for name := range selectedKeys {
+		for _, name := range sortedBools(selectedKeys) {
 			if !byNames[name] {
-				return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_KEY: selected key %s is absent from by", name)
+				return Root{}, keyNotInBy(name)
 			}
 		}
 		request.Dimensions, request.Measures = dimensions, selectedMeasures
 		if raw, present := arguments["having"]; present {
 			if raw == nil {
-				return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: explicit null is invalid")
+				return Root{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path("having"))
 			}
-			having, havingErr := c.bindHaving(model, binding.operation, raw, 1)
+			having, havingErr := c.bindHaving(model, binding.operation, byNames, raw, 1)
 			if havingErr != nil {
-				return Root{}, true, havingErr
+				return Root{}, compileerr.At(havingErr, "having")
 			}
 			request.Having = &having
 		}
 		if raw, present := arguments["orderBy"]; present {
 			orders, orderErr := c.bindOrder(model, binding.operation, raw)
 			if orderErr != nil {
-				return Root{}, true, orderErr
+				return Root{}, compileerr.At(orderErr, "orderBy")
 			}
 			for _, order := range orders {
 				if order.Term.Operator == 0 {
 					name := termName(model, binding.operation, order.Term)
 					if !byNames[name] {
-						return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: key %s is absent from by", name)
+						return Root{}, keyNotInBy(name)
 					}
 				}
 			}
@@ -366,20 +393,26 @@ func (c *Compiler) Compile(field *ast.Field, fragments ast.FragmentDefinitionLis
 		}
 		if raw, present := arguments["skip"]; present {
 			value, valueErr := exactInt(raw)
-			if valueErr != nil || value < 0 {
-				return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SKIP: skip must be non-negative")
+			if valueErr != nil {
+				return Root{}, compileerr.At(valueErr, "skip")
+			}
+			if value < 0 {
+				return Root{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerSkip, compileerr.Path("skip"))
 			}
 			request.Skip = &value
 		}
-		maximum := int(model.contract.Aggregation.GraphQLMaxGroups)
-		if maximum <= 0 || c.limits.MaxGroups < maximum {
-			maximum = c.limits.MaxGroups
-		}
+		maximum := c.groupMaximum(model.contract)
 		root.MaxGroups = maximum
 		if raw, present := arguments["take"]; present {
 			value, valueErr := exactInt(raw)
-			if valueErr != nil || value == 0 || abs(value) > maximum {
-				return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_TAKE: take must be non-zero and within %d", maximum)
+			if valueErr != nil {
+				return Root{}, compileerr.At(valueErr, "take")
+			}
+			if value == 0 {
+				return Root{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerTakeNonZero, compileerr.Path("take"))
+			}
+			if abs(value) > maximum {
+				return Root{}, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerTake, compileerr.Path("take"), compileerr.Bounds(-maximum, maximum))
 			}
 			request.Take, root.ExplicitTake = &value, true
 		} else {
@@ -389,24 +422,24 @@ func (c *Compiler) Compile(field *ast.Field, fragments ast.FragmentDefinitionLis
 	}
 	if raw, present := arguments["where"]; present {
 		if raw == nil {
-			return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_WHERE: explicit null is invalid")
+			return Root{}, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path("where"))
 		}
-		condition, whereErr := c.binder.MutationWhere(binding.model, raw)
+		condition, whereErr := c.binder.WhereAt(binding.model, raw, "where")
 		if whereErr != nil {
-			return Root{}, true, whereErr
+			return Root{}, whereErr
 		}
 		where, freezeErr := c.binder.FreezePredicate(condition)
 		if freezeErr != nil {
-			return Root{}, true, freezeErr
+			return Root{}, freezeErr
 		}
 		request.Where = &where
 	}
 	frozen, err := golem.RuntimeFreezeAnalyticsRequest(request)
 	if err != nil {
-		return Root{}, true, fmt.Errorf("P6_GRAPHQL_ANALYTICS_FREEZE: %w", err)
+		return Root{}, compileerr.Ensure(err)
 	}
 	root.Request = frozen
-	return root, true, nil
+	return root, nil
 }
 
 func (c *Compiler) compileSelection(model modelBinding, operation golem.AnalyticsOperation, set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any) ([]Slot, []golem.FrozenAnalyticsTerm, map[string]bool, error) {
@@ -415,7 +448,7 @@ func (c *Compiler) compileSelection(model modelBinding, operation golem.Analytic
 		return nil, nil, nil, err
 	}
 	if len(fields) == 0 {
-		return nil, nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: output selection is empty")
+		return nil, nil, nil, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	var slots []Slot
 	measureSet := map[string]golem.FrozenAnalyticsTerm{}
@@ -425,19 +458,19 @@ func (c *Compiler) compileSelection(model modelBinding, operation golem.Analytic
 		switch field.Name {
 		case "__typename":
 			if len(field.SelectionSet) != 0 {
-				return nil, nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: __typename cannot select children")
+				return nil, nil, nil, forbidsSelection(field.Name)
 			}
 			slot.Kind, slot.TypeName = SlotTypename, outputTypeName(model.contract.GraphQLName, operation)
 		case "count":
 			if len(field.SelectionSet) != 0 {
-				return nil, nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: count cannot select children")
+				return nil, nil, nil, forbidsSelection(field.Name)
 			}
 			slot.Kind = SlotCount
 			term := golem.FrozenAnalyticsTerm{Model: mustPublicModelID(model.model.ID), Operator: golem.AggregateCountAll}
 			measureSet[golem.RuntimeAnalyticsTermKey(term)] = term
 		case "key":
 			if operation == golem.AnalyticsAggregate {
-				return nil, nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: aggregate has no key")
+				return nil, nil, nil, unavailableField(field.Name)
 			}
 			slot.Kind = SlotKey
 			if operation == golem.AnalyticsRelationGroupBy {
@@ -451,7 +484,7 @@ func (c *Compiler) compileSelection(model modelBinding, operation golem.Analytic
 			slot.TypeName = model.contract.GraphQLName + map[string]string{"countFields": "Count", "sum": "Sum", "avg": "Avg", "min": "Min", "max": "Max"}[field.Name] + "Aggregate"
 			slot.Fields, err = c.compileMeasureFields(model, field.Name, field.SelectionSet, fragments, variables, measureSet)
 		default:
-			return nil, nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_SELECTION: unknown output field %s", field.Name)
+			return nil, nil, nil, unavailableField(field.Name)
 		}
 		if err != nil {
 			return nil, nil, nil, err
@@ -472,11 +505,11 @@ func (c *Compiler) compileSelection(model modelBinding, operation golem.Analytic
 
 func (c *Compiler) compileKeyFields(model modelBinding, operation golem.AnalyticsOperation, set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, selected map[string]bool) ([]FieldSlot, error) {
 	fields, err := expand(set, fragments, variables, map[string]bool{})
-	if err != nil || len(fields) == 0 {
-		if err == nil {
-			err = fmt.Errorf("key selection is empty")
-		}
+	if err != nil {
 		return nil, err
+	}
+	if len(fields) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	result := make([]FieldSlot, len(fields))
 	for index, field := range fields {
@@ -490,7 +523,7 @@ func (c *Compiler) compileKeyFields(model modelBinding, operation golem.Analytic
 			term, ok = model.relationDimensions[field.Name]
 		}
 		if !ok || len(field.SelectionSet) != 0 {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_KEY: field %s is not configured", field.Name)
+			return nil, unavailableField(field.Name)
 		}
 		result[index].Term, result[index].Logical = term.term, term.logical
 		selected[field.Name] = true
@@ -500,11 +533,11 @@ func (c *Compiler) compileKeyFields(model modelBinding, operation golem.Analytic
 
 func (c *Compiler) compileMeasureFields(model modelBinding, category string, set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, selected map[string]golem.FrozenAnalyticsTerm) ([]FieldSlot, error) {
 	fields, err := expand(set, fragments, variables, map[string]bool{})
-	if err != nil || len(fields) == 0 {
-		if err == nil {
-			err = fmt.Errorf("measure selection is empty")
-		}
+	if err != nil {
 		return nil, err
+	}
+	if len(fields) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	result := make([]FieldSlot, len(fields))
 	for index, field := range fields {
@@ -515,11 +548,11 @@ func (c *Compiler) compileMeasureFields(model modelBinding, category string, set
 		}
 		stored, ok := model.measureFields[field.Name]
 		if !ok || stored.Scalar == nil || len(field.SelectionSet) != 0 {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_MEASURE: field %s is not configured", field.Name)
+			return nil, unavailableField(field.Name)
 		}
 		operator, valid := categoryOperator(category, stored.Scalar.Type.Kind)
 		if !valid {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_MEASURE: %s.%s is unsupported", category, field.Name)
+			return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(compileerr.Join(category, field.Name)))
 		}
 		term := golem.FrozenAnalyticsTerm{Model: mustPublicModelID(model.model.ID), Field: mustPublicFieldID(stored.ID), Operator: operator}
 		result[index].Term, result[index].Logical = term, stored.Scalar.Type
@@ -530,16 +563,22 @@ func (c *Compiler) compileMeasureFields(model modelBinding, category string, set
 
 func bindDimensions(model modelBinding, operation golem.AnalyticsOperation, raw any) ([]golem.FrozenAnalyticsTerm, map[string]bool, error) {
 	items, ok := raw.([]any)
-	if !ok || len(items) == 0 {
-		return nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_BY: by must be a non-empty list")
+	if !ok {
+		return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+	}
+	if len(items) == 0 {
+		return nil, nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
 	}
 	result := make([]golem.FrozenAnalyticsTerm, len(items))
 	names := map[string]bool{}
 	relations := 0
 	for index, item := range items {
 		name, ok := item.(string)
-		if !ok || names[name] {
-			return nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_BY: dimension is invalid or duplicated")
+		if !ok {
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Path(compileerr.Index("", index)), compileerr.Type("String"))
+		}
+		if names[name] {
+			return nil, nil, compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateField)
 		}
 		names[name] = true
 		binding, exists := model.localDimensions[name]
@@ -550,23 +589,26 @@ func bindDimensions(model modelBinding, operation golem.AnalyticsOperation, raw 
 			}
 		}
 		if !exists {
-			return nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_BY: dimension %s is not configured", name)
+			return nil, nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(compileerr.Index("", index)))
 		}
 		result[index] = binding.term
 	}
 	if operation == golem.AnalyticsRelationGroupBy && relations == 0 {
-		return nil, nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_BY: relation grouping requires a relation dimension")
+		return nil, nil, compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedRelationGroupNeedsDimension)
 	}
 	return result, names, nil
 }
 
-func (c *Compiler) bindHaving(model modelBinding, operation golem.AnalyticsOperation, raw any, depth int) (golem.FrozenGroupPredicate, error) {
+func (c *Compiler) bindHaving(model modelBinding, operation golem.AnalyticsOperation, grouped map[string]bool, raw any, depth int) (golem.FrozenGroupPredicate, error) {
 	if depth > c.limits.Bind.MaxInputDepth {
-		return golem.FrozenGroupPredicate{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: depth limit exceeded")
+		return golem.FrozenGroupPredicate{}, limitError("MaxInputDepth", c.limits.Bind.MaxInputDepth)
 	}
 	object, ok := raw.(map[string]any)
-	if !ok || len(object) == 0 {
-		return golem.FrozenGroupPredicate{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: input must be non-empty")
+	if !ok {
+		return golem.FrozenGroupPredicate{}, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+	}
+	if len(object) == 0 {
+		return golem.FrozenGroupPredicate{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
 	}
 	var predicates []golem.FrozenGroupPredicate
 	for _, name := range sortedKeys(object) {
@@ -574,14 +616,20 @@ func (c *Compiler) bindHaving(model modelBinding, operation golem.AnalyticsOpera
 		switch name {
 		case "AND", "OR":
 			items, ok := value.([]any)
-			if !ok || len(items) == 0 || len(items) > c.limits.ListItems {
-				return golem.FrozenGroupPredicate{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: %s must be a bounded non-empty list", name)
+			if !ok {
+				return golem.FrozenGroupPredicate{}, compileerr.At(compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape), name)
+			}
+			if len(items) == 0 {
+				return golem.FrozenGroupPredicate{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(name))
+			}
+			if len(items) > c.limits.ListItems {
+				return golem.FrozenGroupPredicate{}, limitError("MaxListItems", c.limits.ListItems)
 			}
 			children := make([]golem.FrozenGroupPredicate, len(items))
 			for index, item := range items {
-				child, err := c.bindHaving(model, operation, item, depth+1)
+				child, err := c.bindHaving(model, operation, grouped, item, depth+1)
 				if err != nil {
-					return golem.FrozenGroupPredicate{}, err
+					return golem.FrozenGroupPredicate{}, compileerr.At(err, compileerr.Index(name, index))
 				}
 				children[index] = child
 			}
@@ -591,41 +639,44 @@ func (c *Compiler) bindHaving(model modelBinding, operation golem.AnalyticsOpera
 			}
 			predicates = append(predicates, golem.FrozenGroupPredicate{Kind: kind, Children: children})
 		case "NOT":
-			child, err := c.bindHaving(model, operation, value, depth+1)
+			child, err := c.bindHaving(model, operation, grouped, value, depth+1)
 			if err != nil {
-				return golem.FrozenGroupPredicate{}, err
+				return golem.FrozenGroupPredicate{}, compileerr.At(err, name)
 			}
 			predicates = append(predicates, golem.FrozenGroupPredicate{Kind: golem.RuntimeGroupNot, Children: []golem.FrozenGroupPredicate{child}})
 		case "key":
-			bound, err := c.bindHavingFields(model, operation, "key", value)
+			bound, err := c.bindHavingFields(model, operation, grouped, "key", value)
 			if err != nil {
-				return golem.FrozenGroupPredicate{}, err
+				return golem.FrozenGroupPredicate{}, compileerr.At(err, name)
 			}
 			predicates = append(predicates, bound...)
 		case "count":
 			term := golem.FrozenAnalyticsTerm{Model: mustPublicModelID(model.model.ID), Operator: golem.AggregateCountAll}
 			bound, err := c.bindHavingLeaf(term, compilerir.LogicalTypeIR{Kind: compilerir.TypeInt64}, true, value)
 			if err != nil {
-				return golem.FrozenGroupPredicate{}, err
+				return golem.FrozenGroupPredicate{}, compileerr.At(err, name)
 			}
 			predicates = append(predicates, bound...)
 		case "countFields", "sum", "avg", "min", "max":
-			bound, err := c.bindHavingFields(model, operation, name, value)
+			bound, err := c.bindHavingFields(model, operation, grouped, name, value)
 			if err != nil {
-				return golem.FrozenGroupPredicate{}, err
+				return golem.FrozenGroupPredicate{}, compileerr.At(err, name)
 			}
 			predicates = append(predicates, bound...)
 		default:
-			return golem.FrozenGroupPredicate{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: unknown member %s", name)
+			return golem.FrozenGroupPredicate{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(name))
 		}
 	}
 	return combinePredicates(predicates)
 }
 
-func (c *Compiler) bindHavingFields(model modelBinding, operation golem.AnalyticsOperation, category string, raw any) ([]golem.FrozenGroupPredicate, error) {
+func (c *Compiler) bindHavingFields(model modelBinding, operation golem.AnalyticsOperation, grouped map[string]bool, category string, raw any) ([]golem.FrozenGroupPredicate, error) {
 	object, ok := raw.(map[string]any)
-	if !ok || len(object) == 0 {
-		return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: %s must be non-empty", category)
+	if !ok {
+		return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+	}
+	if len(object) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
 	}
 	var result []golem.FrozenGroupPredicate
 	for _, name := range sortedKeys(object) {
@@ -648,11 +699,14 @@ func (c *Compiler) bindHavingFields(model modelBinding, operation golem.Analytic
 			}
 		}
 		if !valid {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: %s.%s is unsupported", category, name)
+			return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(name))
+		}
+		if category == "key" && !grouped[name] {
+			return nil, keyNotInBy(name)
 		}
 		predicates, err := c.bindHavingLeaf(binding.term, binding.logical, countLike, object[name])
 		if err != nil {
-			return nil, err
+			return nil, compileerr.At(err, name)
 		}
 		result = append(result, predicates...)
 	}
@@ -661,8 +715,11 @@ func (c *Compiler) bindHavingFields(model modelBinding, operation golem.Analytic
 
 func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compilerir.LogicalTypeIR, countLike bool, raw any) ([]golem.FrozenGroupPredicate, error) {
 	object, ok := raw.(map[string]any)
-	if !ok || len(object) == 0 {
-		return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: comparison must be non-empty")
+	if !ok {
+		return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+	}
+	if len(object) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
 	}
 	mode := golem.FrozenComparisonSensitive
 	if rawMode, present := object["mode"]; present {
@@ -672,7 +729,7 @@ func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compil
 		case "insensitive":
 			mode = golem.FrozenComparisonASCIIInsensitive
 		default:
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: invalid text comparison mode")
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueNotOneOf, compileerr.Path("mode"))
 		}
 	}
 	var result []golem.FrozenGroupPredicate
@@ -683,11 +740,11 @@ func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compil
 		}
 		if name == "contains" || name == "startsWith" || name == "endsWith" {
 			if logical.Kind != compilerir.TypeString || countLike {
-				return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: text comparison requires a string measure")
+				return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(name))
 			}
 			text, ok := object[name].(string)
 			if !ok {
-				return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: text comparison value must be String")
+				return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Path(name), compileerr.Type("String"))
 			}
 			result = append(result, golem.FrozenGroupPredicate{Kind: golem.RuntimeGroupCompare, Term: term, Operator: name, Value: text, Mode: mode})
 			continue
@@ -695,7 +752,7 @@ func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compil
 		if name == "isNull" {
 			flag, ok := object[name].(bool)
 			if !ok {
-				return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: isNull must be Boolean")
+				return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Path(name), compileerr.Type("Boolean"))
 			}
 			operator = "isNull"
 			if !flag {
@@ -705,11 +762,17 @@ func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compil
 			continue
 		}
 		if operator == "" {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: unknown comparison %s", name)
+			return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(name))
+		}
+		if _, hasMode := object["mode"]; hasMode {
+			return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path("mode"))
+		}
+		if object[name] == nil {
+			return nil, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone, compileerr.Path(name))
 		}
 		value, err := c.coerceTermValue(term, logical, countLike, object[name])
 		if err != nil {
-			return nil, err
+			return nil, compileerr.At(err, name)
 		}
 		result = append(result, golem.FrozenGroupPredicate{Kind: golem.RuntimeGroupCompare, Term: term, Operator: operator, Value: value})
 	}
@@ -718,14 +781,21 @@ func (c *Compiler) bindHavingLeaf(term golem.FrozenAnalyticsTerm, logical compil
 
 func (c *Compiler) bindOrder(model modelBinding, operation golem.AnalyticsOperation, raw any) ([]golem.FrozenAnalyticsOrder, error) {
 	items, ok := raw.([]any)
-	if !ok || len(items) == 0 || len(items) > c.limits.ListItems {
-		return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: orderBy must be a bounded non-empty list")
+	if !ok {
+		return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+	}
+	if len(items) == 0 {
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
+	}
+	if len(items) > c.limits.ListItems {
+		return nil, limitError("MaxListItems", c.limits.ListItems)
 	}
 	result := make([]golem.FrozenAnalyticsOrder, len(items))
+	seen := map[string]bool{}
 	for index, item := range items {
 		object, ok := item.(map[string]any)
 		if !ok || len(object) != 1 {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: each item must select one term")
+			return nil, compileerr.New(compileerr.KindExactlyOne, compileerr.DetailNone, compileerr.Path(compileerr.Index("", index)))
 		}
 		category := sortedKeys(object)[0]
 		if category == "count" {
@@ -733,12 +803,16 @@ func (c *Compiler) bindOrder(model modelBinding, operation golem.AnalyticsOperat
 			if err != nil {
 				return nil, err
 			}
-			result[index] = golem.FrozenAnalyticsOrder{Term: golem.FrozenAnalyticsTerm{Model: mustPublicModelID(model.model.ID), Operator: golem.AggregateCountAll}, Descending: descending}
+			term := golem.FrozenAnalyticsTerm{Model: mustPublicModelID(model.model.ID), Operator: golem.AggregateCountAll}
+			if duplicateOrder(seen, term) {
+				return nil, compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateField)
+			}
+			result[index] = golem.FrozenAnalyticsOrder{Term: term, Descending: descending}
 			continue
 		}
 		nested, ok := object[category].(map[string]any)
 		if !ok || len(nested) != 1 {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: %s must select one field", category)
+			return nil, compileerr.New(compileerr.KindExactlyOne, compileerr.DetailNone, compileerr.Path(compileerr.Join(compileerr.Index("", index), category)))
 		}
 		name := sortedKeys(nested)[0]
 		descending, err := sortDirection(nested[name])
@@ -766,7 +840,10 @@ func (c *Compiler) bindOrder(model modelBinding, operation golem.AnalyticsOperat
 			}
 		}
 		if !valid {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: %s.%s is unsupported", category, name)
+			return nil, compileerr.New(compileerr.KindOperatorUnsupported, compileerr.OperatorNotSupported, compileerr.Path(compileerr.Join(compileerr.Index("", index), compileerr.Join(category, name))))
+		}
+		if duplicateOrder(seen, term) {
+			return nil, compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateField)
 		}
 		result[index] = golem.FrozenAnalyticsOrder{Term: term, Descending: descending}
 	}
@@ -777,19 +854,27 @@ func (c *Compiler) coerceTermValue(term golem.FrozenAnalyticsTerm, logical compi
 	if countLike || term.Operator == golem.AggregateCountAll {
 		exact, err := golem.ParseExactInteger(exactText(raw))
 		if err != nil {
-			return nil, err
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueMalformed, compileerr.Type("BigInt"))
 		}
 		value, ok := exact.Int64()
 		if !ok {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_VALUE: count is outside int64")
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueOutOfRange, compileerr.Type("BigInt"))
 		}
 		return value, nil
 	}
 	if term.Operator == golem.AggregateSum && (logical.Kind == compilerir.TypeInt16 || logical.Kind == compilerir.TypeInt32 || logical.Kind == compilerir.TypeInt64) {
-		return golem.ParseExactInteger(exactText(raw))
+		exact, err := golem.ParseExactInteger(exactText(raw))
+		if err != nil {
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueMalformed, compileerr.Type("BigInt"))
+		}
+		return exact, nil
 	}
 	if (term.Operator == golem.AggregateSum || term.Operator == golem.AggregateAverage) && logical.Kind == compilerir.TypeDecimal {
-		return golem.ParseExactDecimal(exactText(raw))
+		exact, err := golem.ParseExactDecimal(exactText(raw))
+		if err != nil {
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueMalformed, compileerr.Type("Decimal"))
+		}
+		return exact, nil
 	}
 	if term.Operator == golem.AggregateAverage {
 		return graphqlscalar.Float(raw, 64)
@@ -797,7 +882,7 @@ func (c *Compiler) coerceTermValue(term golem.FrozenAnalyticsTerm, logical compi
 	if logical.Kind == compilerir.TypeEnum && logical.EnumID != nil {
 		wire, ok := c.enumWire[*logical.EnumID][fmt.Sprint(raw)]
 		if !ok {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_VALUE: enum value is unknown")
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueNotOneOf)
 		}
 		return wire, nil
 	}
@@ -807,7 +892,7 @@ func (c *Compiler) coerceTermValue(term golem.FrozenAnalyticsTerm, logical compi
 	}
 	value, err := selectset.CoerceExtensionValue(c.compilation, typ, raw, c.limits.ListItems)
 	if err != nil {
-		return nil, err
+		return nil, compileerr.Ensure(err)
 	}
 	return value, nil
 }
@@ -979,7 +1064,7 @@ func expand(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variable
 				response := responseName(value)
 				if previous, duplicate := byResponse[response]; duplicate {
 					if result[previous].Name != value.Name {
-						return fmt.Errorf("P6_GRAPHQL_ANALYTICS_MERGE: response %s is incompatible", response)
+						return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentIncompatible)
 					}
 					result[previous].SelectionSet = append(result[previous].SelectionSet, value.SelectionSet...)
 					continue
@@ -1007,8 +1092,11 @@ func expand(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variable
 					continue
 				}
 				fragment := fragments.ForName(value.Name)
-				if fragment == nil || stack[value.Name] {
-					return fmt.Errorf("P6_GRAPHQL_ANALYTICS_FRAGMENT: fragment %s is absent or cyclic", value.Name)
+				if fragment == nil {
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentMissing)
+				}
+				if stack[value.Name] {
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentCycle)
 				}
 				stack[value.Name] = true
 				err = visit(fragment.SelectionSet)
@@ -1017,7 +1105,7 @@ func expand(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variable
 					return err
 				}
 			default:
-				return fmt.Errorf("P6_GRAPHQL_ANALYTICS_AST: unsupported selection %T", selection)
+				return compileerr.Invariantf("unsupported analytics selection %T", selection)
 			}
 		}
 		return nil
@@ -1033,15 +1121,15 @@ func included(directives ast.DirectiveList, variables map[string]any) (bool, err
 		}
 		argument := directive.Arguments.ForName("if")
 		if argument == nil || argument.Value == nil {
-			return false, fmt.Errorf("P6_GRAPHQL_ANALYTICS_DIRECTIVE: @%s requires if", directive.Name)
+			return false, directiveError(directive.Name)
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return false, err
+			return false, directiveError(directive.Name)
 		}
 		flag, ok := value.(bool)
 		if !ok {
-			return false, fmt.Errorf("P6_GRAPHQL_ANALYTICS_DIRECTIVE: if is not Boolean")
+			return false, directiveError(directive.Name)
 		}
 		if directive.Name == "skip" && flag || directive.Name == "include" && !flag {
 			result = false
@@ -1055,7 +1143,7 @@ func argumentValues(field *ast.Field, variables map[string]any) (map[string]any,
 	for _, argument := range field.Arguments {
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return nil, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ARGUMENT: %s: %w", argument.Name, err)
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		result[argument.Name] = value
 	}
@@ -1067,9 +1155,9 @@ func allowedArguments(values map[string]any, names ...string) error {
 	for _, name := range names {
 		allowed[name] = true
 	}
-	for name := range values {
+	for _, name := range sortedKeys(values) {
 		if !allowed[name] {
-			return fmt.Errorf("P6_GRAPHQL_ANALYTICS_ARGUMENT: %s is not accepted", name)
+			return compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableArgument, compileerr.Path(name))
 		}
 	}
 	return nil
@@ -1126,7 +1214,7 @@ func graphQLType(logical compilerir.LogicalTypeIR) (compilerir.GraphQLTypeIR, er
 		// enum terms use the dedicated wire mapping before this name matters.
 	}
 	if name == "" {
-		return compilerir.GraphQLTypeIR{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_TYPE: unsupported %s", logical.Kind)
+		return compilerir.GraphQLTypeIR{}, compileerr.Invariantf("unsupported analytics value type %s", logical.Kind)
 	}
 	return compilerir.GraphQLTypeIR{Kind: kind, Name: name}, nil
 }
@@ -1145,7 +1233,7 @@ func publicModelID(value compilerir.ModelID) (golem.ModelID, error) {
 	var result golem.ModelID
 	decoded, err := hex.DecodeString(string(value))
 	if err != nil || len(decoded) != len(result) {
-		return result, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ID: invalid model identity")
+		return result, compileerr.Invariantf("invalid analytics model identity")
 	}
 	copy(result[:], decoded)
 	return result, nil
@@ -1154,7 +1242,7 @@ func publicFieldID(value compilerir.FieldID) (golem.FieldID, error) {
 	var result golem.FieldID
 	decoded, err := hex.DecodeString(string(value))
 	if err != nil || len(decoded) != len(result) {
-		return result, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ID: invalid field identity")
+		return result, compileerr.Invariantf("invalid analytics field identity")
 	}
 	copy(result[:], decoded)
 	return result, nil
@@ -1163,7 +1251,7 @@ func publicRelationID(value compilerir.RelationID) (golem.RelationID, error) {
 	var result golem.RelationID
 	decoded, err := hex.DecodeString(string(value))
 	if err != nil || len(decoded) != len(result) {
-		return result, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ID: invalid relation identity")
+		return result, compileerr.Invariantf("invalid analytics relation identity")
 	}
 	copy(result[:], decoded)
 	return result, nil
@@ -1201,14 +1289,17 @@ func exactInt(raw any) (int, error) {
 	case int64:
 		converted := int(value)
 		if int64(converted) != value {
-			return 0, fmt.Errorf("Int is outside the platform range")
+			return 0, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerPlatform)
 		}
 		return converted, nil
 	case json.Number:
 		parsed, err := strconv.ParseInt(string(value), 10, 32)
-		return int(parsed), err
+		if err != nil {
+			return 0, compileerr.New(compileerr.KindIntegerRange, compileerr.IntegerPlatform)
+		}
+		return int(parsed), nil
 	default:
-		return 0, fmt.Errorf("expected Int, got %T", raw)
+		return 0, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongKind, compileerr.Type("Int"))
 	}
 }
 func abs(value int) int {
@@ -1237,7 +1328,7 @@ func sortedKeys(values map[string]any) []string {
 }
 func combinePredicates(values []golem.FrozenGroupPredicate) (golem.FrozenGroupPredicate, error) {
 	if len(values) == 0 {
-		return golem.FrozenGroupPredicate{}, fmt.Errorf("P6_GRAPHQL_ANALYTICS_HAVING: no comparison")
+		return golem.FrozenGroupPredicate{}, compileerr.Invariantf("analytics having has no comparison")
 	}
 	if len(values) == 1 {
 		return values[0], nil
@@ -1247,7 +1338,7 @@ func combinePredicates(values []golem.FrozenGroupPredicate) (golem.FrozenGroupPr
 func sortDirection(raw any) (bool, error) {
 	value, ok := raw.(string)
 	if !ok || value != "asc" && value != "desc" {
-		return false, fmt.Errorf("P6_GRAPHQL_ANALYTICS_ORDER: direction is invalid")
+		return false, compileerr.Invariantf("analytics order direction is invalid")
 	}
 	return value == "desc", nil
 }
@@ -1266,4 +1357,42 @@ func termName(model modelBinding, operation golem.AnalyticsOperation, term golem
 		}
 	}
 	return ""
+}
+
+func keyNotInBy(name string) error {
+	return compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedKeyNotInBy, compileerr.Path(name))
+}
+
+func unavailableField(name string) error {
+	return compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableField, compileerr.Path(name))
+}
+
+func forbidsSelection(name string) error {
+	return compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeForbidsSelection, compileerr.Path(name))
+}
+
+func directiveError(name string) error {
+	return compileerr.New(compileerr.KindDirectiveInvalid, compileerr.DirectiveNeedsBoolean, compileerr.Path(name))
+}
+
+func limitError(name string, maximum int) error {
+	return compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit(name, maximum))
+}
+
+func duplicateOrder(seen map[string]bool, term golem.FrozenAnalyticsTerm) bool {
+	key := golem.RuntimeAnalyticsTermKey(term)
+	if seen[key] {
+		return true
+	}
+	seen[key] = true
+	return false
+}
+
+func sortedBools(values map[string]bool) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
 }

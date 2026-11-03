@@ -2,8 +2,6 @@ package graphql
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -12,7 +10,7 @@ import (
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/eleven-am/golem/go/internal/observeexec"
-	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -55,13 +53,14 @@ type generatedExecutor[P any] struct {
 	computed         []ComputedBinding
 	maxComputedBatch int
 	custom           *CustomRegistry
+	listBounds       ListBounds
 }
 
 func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P], error) {
 	if config.BeginCaller == nil || config.ReportInternalError == nil {
 		return nil, fmt.Errorf("GraphQL generated executor requires caller factory and trusted error reporter")
 	}
-	compilation, err := compilationFromBundle(config.Bundle)
+	compilation, err := policyschema.DecodeActive(config.Bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -86,8 +85,14 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 		return nil, err
 	}
 	bindings := append([]ComputedBinding(nil), config.ComputedBindings...)
-	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom}, nil
+	bounds, err := compiler.ListBounds()
+	if err != nil {
+		return nil, fmt.Errorf("GraphQL list bounds: %w", err)
+	}
+	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom, listBounds: NewListBounds(bounds)}, nil
 }
+
+func (executor *generatedExecutor[P]) ListBounds() ListBounds { return executor.listBounds }
 
 func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, operation Operation) Response {
 	if executor == nil || executor.compiler == nil || executor.begin == nil {
@@ -95,7 +100,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	}
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
 	if err != nil {
-		return Response{Errors: []Error{publicError("BAD_USER_INPUT", "GraphQL operation could not be bound")}}
+		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
 	if len(compiled.Order) == 0 && compiled.Event == nil && executor.authenticate != nil {
 		if err := executor.authenticate(ctx, principal); err != nil {
@@ -112,6 +117,8 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
 	defer computed.close()
+	hydrator := resultHydrator{compiler: executor.compiler, caller: caller}
+	computed.hydrator = &hydrator
 	var customCaller *CallerCustomExecution
 	if len(compiled.Custom) != 0 {
 		capability, ok := caller.(CustomCallerCapability)
@@ -136,7 +143,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		if !ok && len(compiled.Mutations) != 0 {
 			return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 		}
-		return executor.executeMutationOrder(ctx, compiled, mutationCaller, customCaller, computed)
+		return executor.executeMutationOrder(ctx, compiled, hydrator, mutationCaller, customCaller, computed)
 	}
 	data := make(map[string]any, len(compiled.Reads))
 	response := Response{Data: data}
@@ -167,41 +174,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 				response.Errors = append(response.Errors, PresentError(ctx, executeErr, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil
 			} else {
-				value := result.Value()
-				hydration, semantic, hydrateErr := executor.compiler.PrepareSemanticCustomHydration(root, value)
-				if hydrateErr == nil && semantic {
-					value = []any{}
-					if hydration.Len() != 0 {
-						rows := make([]golem.RuntimeModelRow, 0, hydration.Len())
-						chunk := hydration.Len()
-						for start := 0; start < hydration.Len() && hydrateErr == nil; {
-							end := start + chunk
-							if end > hydration.Len() {
-								end = hydration.Len()
-							}
-							var request golem.FrozenReadRequest
-							request, hydrateErr = executor.compiler.SemanticCustomHydrationRequest(hydration, start, end)
-							if hydrateErr != nil {
-								break
-							}
-							var batch []golem.RuntimeModelRow
-							batch, hydrateErr = caller.ExecuteFrozenRead(customContext, request)
-							if hydrateErr != nil {
-								reduced, retry := reduceSemanticHydrationChunk(start, end, hydrateErr)
-								if retry {
-									chunk, hydrateErr = reduced-start, nil
-									continue
-								}
-								break
-							}
-							rows = append(rows, batch...)
-							start = end
-						}
-						if hydrateErr == nil {
-							value, hydrateErr = executor.compiler.FinishSemanticCustomHydration(root, hydration.Order(), rows)
-						}
-					}
-				}
+				value, _, hydrateErr := hydrator.root(customContext, root, result.Value())
 				if hydrateErr != nil {
 					finishGraphQLChild(observation, hydrateErr)
 					response.Errors = append(response.Errors, PresentError(ctx, hydrateErr, []any{root.ResponseName}, executor.report))
@@ -247,14 +220,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	return response
 }
 
-func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {
-	if end-start <= 1 || !readsql.StatementCapacityExceeded(err) {
-		return end, false
-	}
-	return start + (end-start)/2, true
-}
-
-func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
+func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, hydrator resultHydrator, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
 	response := Response{Data: map[string]any{}}
 	data := response.Data.(map[string]any)
 	for _, reference := range compiled.Order {
@@ -268,39 +234,50 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 				return response
 			}
 			encoded, failures, encodeErr := executor.compiler.EncodeMutationWithComputedPartial(ctx, root, result, computed.resolve)
+			if encodeErr == nil {
+				encodeErr = propagatedComputedFailure(failures)
+			}
 			if encodeErr != nil {
-				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
+				response.Errors = append(response.Errors, presentCommittedResult(ctx, "mutation "+root.ResponseName, encodeErr, []any{root.ResponseName}, executor.report))
 				response.Data = nil
 				return response
 			}
 			data[root.ResponseName] = encoded
 			response.Errors = appendComputedFailures(ctx, response.Errors, failures, executor.report)
-			if computedFailurePropagatesToRoot(failures) {
-				response.Data = nil
-				return response
-			}
 		case graphqloperation.RootCustomMutation:
 			root := compiled.Custom[reference.Index]
 			customContext, observation := observeexec.BeginChild(ctx, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.PhaseFinish)
+			path := []any{root.ResponseName}
 			result, err := custom.Execute(customContext, CustomMutation, root.Name, root.Arguments)
-			if err != nil {
-				finishGraphQLChild(observation, err)
-				response.Errors = append(response.Errors, PresentError(ctx, err, []any{root.ResponseName}, executor.report))
-				data[root.ResponseName] = nil
-				if !root.Result.Nullable {
-					response.Data = nil
-					return response
+			var encoded any
+			var failures []graphqloperation.ComputedFieldFailure
+			var resultFailure *CustomResultError
+			var presented Error
+			if err != nil && !errors.As(err, &resultFailure) {
+				presented = PresentError(ctx, err, path, executor.report)
+			} else {
+				computed.invalidateAfterWrite()
+				if err == nil {
+					var value any
+					var absent int
+					value, absent, err = hydrator.root(customContext, root, result.Value())
+					if err == nil && absent != 0 {
+						err = &unreadableResult{count: absent}
+					}
+					if err == nil {
+						encoded, failures, err = executor.compiler.EncodeCustomWithComputedPartial(customContext, root, value, computed.resolve)
+						if err == nil {
+							err = propagatedComputedFailure(failures)
+						}
+					}
 				}
-				continue
+				if err != nil {
+					presented = presentCommittedResult(ctx, "custom mutation "+root.Name, err, path, executor.report)
+				}
 			}
-			// A successful custom mutation may have committed writes even when its
-			// result later fails GraphQL encoding. Invalidate before encoding so
-			// subsequent serial mutation roots cannot observe stale loader state.
-			computed.invalidateAfterWrite()
-			encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, result.Value(), computed.resolve)
-			finishGraphQLChild(observation, encodeErr)
-			if encodeErr != nil {
-				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
+			finishGraphQLChild(observation, err)
+			if err != nil {
+				response.Errors = append(response.Errors, presented)
 				data[root.ResponseName] = nil
 				if !root.Result.Nullable {
 					response.Data = nil
@@ -310,22 +287,18 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 			}
 			data[root.ResponseName] = encoded
 			response.Errors = appendComputedFailures(ctx, response.Errors, failures, executor.report)
-			if computedFailurePropagatesToRoot(failures) {
-				response.Data = nil
-				return response
-			}
 		}
 	}
 	return response
 }
 
-func computedFailurePropagatesToRoot(failures []graphqloperation.ComputedFieldFailure) bool {
+func propagatedComputedFailure(failures []graphqloperation.ComputedFieldFailure) error {
 	for _, failure := range failures {
 		if failure.PropagatesToRoot {
-			return true
+			return failure.Err
 		}
 	}
-	return false
+	return nil
 }
 
 func appendComputedFailures(ctx context.Context, target []Error, failures []graphqloperation.ComputedFieldFailure, report func(context.Context, error)) []Error {
@@ -346,48 +319,6 @@ func (caller invalidatingMutationCaller) ExecuteFrozenMutation(ctx context.Conte
 		caller.invalidate()
 	}
 	return result, err
-}
-
-func compilationFromBundle(bundle golem.SchemaBundle) (compilerir.CompilationIR, error) {
-	if bundle.FormatVersion() != golem.SchemaBundleFormatVersion || bundle.GenerationDigest() == (golem.SchemaDigest{}) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL schema bundle is absent or unsupported")
-	}
-	modelDocument, contractDocument := bundle.Model(), bundle.Contract()
-	if modelDocument.FormatVersion() != uint32(compilerir.ModelFormatVersion) || contractDocument.FormatVersion() != uint32(compilerir.ContractFormatVersion) || modelDocument.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) || contractDocument.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL schema bundle document version is unsupported")
-	}
-	var compilation compilerir.CompilationIR
-	if err := json.Unmarshal(modelDocument.Bytes(), &compilation.Model); err != nil {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model document is invalid: %w", err)
-	}
-	if err := json.Unmarshal(contractDocument.Bytes(), &compilation.Contract); err != nil {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract document is invalid: %w", err)
-	}
-	modelCanonical, err := compilerir.CanonicalModel(compilation.Model)
-	if err != nil || string(modelCanonical) != string(modelDocument.Bytes()) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model document is not canonical")
-	}
-	contractCanonical, err := compilerir.CanonicalContract(compilation.Contract)
-	if err != nil || string(contractCanonical) != string(contractDocument.Bytes()) {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract document is not canonical")
-	}
-	modelFingerprint, err := compilerir.ModelFingerprint(compilation.Model)
-	if err != nil || schemaDigest(modelFingerprint) != modelDocument.Fingerprint() {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL model fingerprint does not match its document")
-	}
-	contractFingerprint, err := compilerir.ContractFingerprint(compilation.Contract)
-	if err != nil || schemaDigest(contractFingerprint) != contractDocument.Fingerprint() {
-		return compilerir.CompilationIR{}, fmt.Errorf("GraphQL contract fingerprint does not match its document")
-	}
-	return compilation, nil
-}
-
-func schemaDigest(fingerprint compilerir.Fingerprint) (result golem.SchemaDigest) {
-	decoded, err := hex.DecodeString(string(fingerprint))
-	if err == nil && len(decoded) == len(result) {
-		copy(result[:], decoded)
-	}
-	return result
 }
 
 func errOr(err error, message string) error {

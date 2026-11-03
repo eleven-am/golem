@@ -2,6 +2,7 @@ package bind
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
@@ -83,15 +84,19 @@ func TestGraphQLDefaultPageAndExplicitReversePageRespectStricterLimitsWithoutHid
 	post, contract := modelNamed(t, compilation, "Post")
 	selection := scalarSelection(t, contract.Selectors[0].Fields[0])
 
-	// The SDL advertises ContractIR's default. A stricter runtime maximum must
-	// refuse that visible default, never replace it with an undisclosed value.
+	compilation = withDefaultPageSize(compilation, 3)
 	stricter, err := New(compilation, Limits{MaxPageSize: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}}); err == nil {
-		t.Fatal("SDL default above the runtime maximum was silently truncated")
+	defaulted, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if take, ok := defaulted.Take(); !ok || take != 3 {
+		t.Fatalf("SDL default take=%d/%v want=3", take, ok)
+	}
+	_, contract = modelNamed(t, compilation, "Post")
 
 	binder, err := New(compilation, Limits{MaxPageSize: int(contract.Limits.DefaultPageSize)})
 	if err != nil {
@@ -110,12 +115,43 @@ func TestGraphQLDefaultPageAndExplicitReversePageRespectStricterLimitsWithoutHid
 	if _, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -4}}); err == nil {
 		t.Fatal("explicit reverse take above the runtime limit was accepted")
 	}
-	reverse, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -3}})
+	reverse, err := stricter.Query(QueryInput{Operation: readir.FindMany, Model: post.ID, Selections: []readir.Selection{selection}, Arguments: map[string]any{"take": -3, "orderBy": []any{map[string]any{"createdAt": "desc"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if take, ok := reverse.Take(); !ok || take != -3 {
 		t.Fatalf("reverse take=%d/%v", take, ok)
+	}
+}
+
+func withDefaultPageSize(compilation compilerir.CompilationIR, size uint32) compilerir.CompilationIR {
+	models := append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range models {
+		models[index].Limits.DefaultPageSize = size
+	}
+	compilation.Contract.Models = models
+	return compilation
+}
+
+func TestNewRefusesAnAdvertisedDefaultPageAboveTheRuntimeMaximum(t *testing.T) {
+	compilation := withDefaultPageSize(socialCompilation(t), 5)
+	if _, err := New(compilation, Limits{MaxPageSize: 5}); err != nil {
+		t.Fatalf("a default page equal to the runtime maximum was refused: %v", err)
+	}
+	if _, err := New(compilation, Limits{}); err != nil {
+		t.Fatalf("an unset runtime maximum was refused: %v", err)
+	}
+	_, err := New(compilation, Limits{MaxPageSize: 4})
+	if err == nil || !strings.Contains(err.Error(), "default page size 5 exceeds the MaxPageSize limit 4") {
+		t.Fatalf("a default page above the runtime maximum was accepted: %v", err)
+	}
+	hidden := append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range hidden {
+		hidden[index].Exposed = false
+	}
+	compilation.Contract.Models = hidden
+	if _, err := New(compilation, Limits{MaxPageSize: 4}); err != nil {
+		t.Fatalf("a hidden model's page default refused the runtime maximum: %v", err)
 	}
 }
 

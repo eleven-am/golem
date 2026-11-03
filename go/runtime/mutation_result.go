@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
@@ -608,7 +609,17 @@ func materializeScalarMutationProjection[P, A, M any](ctx context.Context, app *
 		// persisted row is outside caller read reach. Return no disclosed cells
 		// without converting a committed/authorized write into an unrestricted
 		// read. System plans always reach the exact identity.
-		return golem.RuntimeReadRow(descriptor)
+		cells := make(map[policyir.FieldID]readdecode.Cell, len(source.cells))
+		for _, cell := range source.cells {
+			cells[cell.FieldID()] = cell
+		}
+		return unreadableMutationRow(app, descriptor, func(field policyir.FieldID) (policyir.Value, bool) {
+			cell, present := cells[field]
+			if !present {
+				return policyir.Value{}, false
+			}
+			return cell.PolicyValue()
+		})
 	}
 	if len(rows) != 1 {
 		return golem.Row[M]{}, scalarMutationError(0, scalarMutationInvariant, source.role, 0, "identity-constrained mutation projection returned multiple rows", nil)
@@ -728,4 +739,35 @@ func publicTargetIdentityError(operation mutationir.Operation, model golem.Model
 		message = "connectOrCreate create input does not set the target selector"
 	}
 	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), message, err)
+}
+
+func unreadableMutationRow[P, A, M any](app *App[P, A], descriptor golem.ModelDescriptor[M], value func(policyir.FieldID) (policyir.Value, bool)) (golem.Row[M], error) {
+	model := descriptor.Metadata().ModelID()
+	metadata, ok := app.registry.Model(model)
+	if !ok || len(metadata.PrimaryKey()) == 0 {
+		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_IDENTITY: model=%x has no primary identity", model)
+	}
+	key := metadata.PrimaryKey()
+	fields := make([]golem.FieldID, len(key))
+	cells := make([]golem.RuntimeReadCell, len(key))
+	for index, field := range key {
+		policyValue, present := value(policyir.FieldID(field))
+		if !present {
+			return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_IDENTITY: model=%x field=%x: committed primary identity is absent", model, field)
+		}
+		public, err := runtimePublicPolicyValue(app, policyValue)
+		if err != nil {
+			return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_IDENTITY: model=%x field=%x: %w", model, field, err)
+		}
+		fields[index], cells[index] = field, golem.RuntimePresentReadCell(field, public, nil)
+	}
+	identity, err := golem.RuntimeNewRowIdentity(fields, cells)
+	if err != nil {
+		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_IDENTITY: model=%x: %w", model, err)
+	}
+	empty, err := golem.RuntimeModelReadRow(model)
+	if err != nil {
+		return golem.Row[M]{}, err
+	}
+	return golem.RuntimeTypedReadRow(descriptor, golem.RuntimeModelRowWithIdentity(empty, identity))
 }

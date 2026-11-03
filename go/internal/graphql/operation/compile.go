@@ -12,6 +12,7 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlanalytics "github.com/eleven-am/golem/go/internal/graphql/analytics"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
 	graphqlmutation "github.com/eleven-am/golem/go/internal/graphql/mutation"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
@@ -104,6 +105,8 @@ type CustomRoot struct {
 	Result       compilerir.GraphQLTypeIR
 	Slots        []selectset.Slot
 	semantic     *semanticCustomRoot
+	model        compilerir.ModelID
+	selection    []readir.Selection
 }
 
 type MutationRoot struct {
@@ -251,7 +254,7 @@ func (c *Compiler) addRoot(name string, binding rootBinding) error {
 
 func (c *Compiler) Compile(document *ast.QueryDocument, definition *ast.OperationDefinition, variables map[string]any) (Result, error) {
 	if document == nil || definition == nil {
-		return Result{}, fmt.Errorf("P5_OPERATION_INPUT: document and selected operation are required")
+		return Result{}, compileerr.Invariantf("document and selected operation are required")
 	}
 	switch definition.Operation {
 	case ast.Query:
@@ -261,7 +264,7 @@ func (c *Compiler) Compile(document *ast.QueryDocument, definition *ast.Operatio
 	case ast.Subscription:
 		return c.compileSubscription(document, definition, variables)
 	default:
-		return Result{}, fmt.Errorf("P5_OPERATION_KIND: %s is not a supported operation", definition.Operation)
+		return Result{}, compileerr.Invariantf("%s is not a supported operation", definition.Operation)
 	}
 }
 
@@ -271,23 +274,23 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 		return Result{}, err
 	}
 	if len(fields) != 1 {
-		return Result{}, fmt.Errorf("P7_OPERATION_ROOT: subscription must select exactly one root field")
+		return Result{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeSingleRoot)
 	}
 	root := fields[0]
 	modelID, ok := c.subscriptions[root.field.Name]
 	if !ok {
-		return Result{}, fmt.Errorf("P7_OPERATION_ROOT: subscription root %q is not generated", root.field.Name)
+		return Result{}, compileerr.Root(compileerr.Invariantf("subscription root %q is not generated", root.field.Name), root.responseName)
 	}
 	contract, model, err := c.subscriptionModel(modelID)
 	if err != nil {
-		return Result{}, err
+		return Result{}, compileerr.Root(err, root.responseName)
 	}
 	outer, err := expandRoots(root.selections, document.Fragments, variables, map[string]bool{})
 	if err != nil {
-		return Result{}, err
+		return Result{}, compileerr.Root(err, root.responseName)
 	}
 	if len(outer) == 0 {
-		return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: %s selects no event fields", root.responseName)
+		return Result{}, compileerr.Root(compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection), root.responseName)
 	}
 	compiled := &EventRoot{ResponseName: root.responseName, Model: modelID, IdentityFields: append([]compilerir.FieldID(nil), model.PrimaryKey.Fields...)}
 	var entitySelections ast.SelectionSet
@@ -297,35 +300,35 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 		switch field.field.Name {
 		case "eventID", "causationID", "transactionOrdinal", "recordedAt", "type":
 			if len(field.field.Arguments) != 0 || len(field.selections) != 0 {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: event field %s has an invalid shape", field.field.Name)
+				return Result{}, compileerr.Root(eventFieldShape(field.field.Name, contract.GraphQLName), root.responseName)
 			}
 			slot.Kind = EventSlotMetadata
 		case "__typename":
 			if len(field.field.Arguments) != 0 || len(field.selections) != 0 {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: __typename has an invalid shape")
+				return Result{}, compileerr.Root(eventFieldShape(field.field.Name, contract.GraphQLName), root.responseName)
 			}
 			slot.Kind = EventSlotTypename
 		case "id":
 			slot.Kind = EventSlotIdentity
 			slot.Identity, err = compileEventIdentitySlots(contract, model, field.selections, document.Fragments, variables)
 			if err != nil {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: %s.id: %w", root.responseName, err)
+				return Result{}, compileerr.Root(err, root.responseName)
 			}
 		case "entity":
 			if len(field.selections) == 0 {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: %s.entity requires a selection set", root.responseName)
+				return Result{}, compileerr.Root(compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeNeedsSelection, compileerr.Path("entity"), compileerr.Model(contract.GraphQLName)), root.responseName)
 			}
 			slot.Kind = EventSlotEntity
 			compiled.EntitySelected = true
 			prefix := fmt.Sprintf("_golem_event_%d_", len(compiled.Slots))
 			namespaced, namespaceErr := namespaceEventEntitySelections(field.selections, document.Fragments, variables, prefix)
 			if namespaceErr != nil {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: %s.entity: %w", root.responseName, namespaceErr)
+				return Result{}, compileerr.Root(namespaceErr, root.responseName)
 			}
 			entityPrefixes[prefix] = len(compiled.Slots)
 			entitySelections = append(entitySelections, namespaced...)
 		default:
-			return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: event field %q is not generated", field.field.Name)
+			return Result{}, compileerr.Root(compileerr.Invariantf("event field %q is not generated", field.field.Name), root.responseName)
 		}
 		compiled.Slots = append(compiled.Slots, slot)
 	}
@@ -342,7 +345,7 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 			},
 		})
 		if selectErr != nil {
-			return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: %s.entity: %w", root.responseName, selectErr)
+			return Result{}, compileerr.Root(selectErr, root.responseName)
 		}
 		selections = selected.Selections
 		compiled.EntitySlots = selectset.StableSlots(selected.Slots)
@@ -357,33 +360,33 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 				}
 			}
 			if !matched {
-				return Result{}, fmt.Errorf("P7_OPERATION_SELECTION: entity selection namespace is invalid")
+				return Result{}, compileerr.Root(compileerr.Invariantf("entity selection namespace is invalid"), root.responseName)
 			}
 		}
 	} else {
 		for _, fieldID := range model.PrimaryKey.Fields {
 			public, idErr := publicFieldID(fieldID)
 			if idErr != nil {
-				return Result{}, idErr
+				return Result{}, compileerr.Root(idErr, root.responseName)
 			}
 			selection, selectErr := readir.NewScalarSelection(policyir.FieldID(public))
 			if selectErr != nil {
-				return Result{}, selectErr
+				return Result{}, compileerr.Root(selectErr, root.responseName)
 			}
 			selections = append(selections, selection)
 		}
 	}
 	arguments, err := values(root.field, variables)
 	if err != nil {
-		return Result{}, err
+		return Result{}, compileerr.Root(err, root.responseName)
 	}
 	compiled.Read, err = c.binder.Query(graphqlbind.QueryInput{Operation: readir.FindMany, Model: modelID, Arguments: arguments, Selections: selections})
 	if err != nil {
-		return Result{}, fmt.Errorf("P7_OPERATION_BIND: %s: %w", root.responseName, err)
+		return Result{}, compileerr.Root(err, root.responseName)
 	}
 	compiled.FrozenRead, err = c.freezeRequest(compiled.Read)
 	if err != nil {
-		return Result{}, fmt.Errorf("P7_OPERATION_FREEZE: %s: %w", root.responseName, err)
+		return Result{}, compileerr.Root(err, root.responseName)
 	}
 	return Result{Event: compiled}, nil
 }
@@ -420,23 +423,23 @@ func (c *Compiler) subscriptionModel(modelID compilerir.ModelID) (compilerir.Mod
 		}
 	}
 	if contract == nil || model == nil || model.PrimaryKey == nil || contract.Event == nil {
-		return compilerir.ModelContractIR{}, compilerir.ModelDeclIR{}, fmt.Errorf("P7_OPERATION_MODEL: subscription model %s is incomplete", modelID)
+		return compilerir.ModelContractIR{}, compilerir.ModelDeclIR{}, compileerr.Invariantf("subscription model %s is incomplete", modelID)
 	}
 	return *contract, *model, nil
 }
 
 func compileEventIdentitySlots(contract compilerir.ModelContractIR, model compilerir.ModelDeclIR, selections ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any) ([]EventIdentitySlot, error) {
 	if model.PrimaryKey == nil {
-		return nil, fmt.Errorf("event model has no primary key")
+		return nil, compileerr.Invariantf("event model has no primary key")
 	}
 	if len(model.PrimaryKey.Fields) == 1 {
 		if len(selections) != 0 {
-			return nil, fmt.Errorf("scalar identity has a selection set")
+			return nil, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeForbidsSelection, compileerr.Path("id"), compileerr.Model(contract.GraphQLName))
 		}
 		return nil, nil
 	}
 	if len(selections) == 0 {
-		return nil, fmt.Errorf("compound identity requires a selection set")
+		return nil, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeNeedsSelection, compileerr.Path("id"), compileerr.Model(contract.GraphQLName))
 	}
 	fields, err := expandRoots(selections, fragments, variables, map[string]bool{})
 	if err != nil {
@@ -454,7 +457,7 @@ func compileEventIdentitySlots(contract compilerir.ModelContractIR, model compil
 	result := make([]EventIdentitySlot, 0, len(fields))
 	for _, field := range fields {
 		if len(field.field.Arguments) != 0 || len(field.selections) != 0 {
-			return nil, fmt.Errorf("identity field %s has an invalid shape", field.field.Name)
+			return nil, eventFieldShape(field.field.Name, contract.GraphQLName)
 		}
 		if field.field.Name == "__typename" {
 			result = append(result, EventIdentitySlot{ResponseName: field.responseName, Typename: true})
@@ -462,7 +465,7 @@ func compileEventIdentitySlots(contract compilerir.ModelContractIR, model compil
 		}
 		fieldID, ok := byName[field.field.Name]
 		if !ok {
-			return nil, fmt.Errorf("identity field %q is not generated", field.field.Name)
+			return nil, compileerr.Invariantf("identity field %q is not generated", field.field.Name)
 		}
 		result = append(result, EventIdentitySlot{ResponseName: field.responseName, FieldID: fieldID})
 	}
@@ -475,7 +478,7 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 		return Result{}, err
 	}
 	if len(fields) == 0 {
-		return Result{}, fmt.Errorf("P5_OPERATION_ROOT: query selects no root fields")
+		return Result{}, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	result := Result{Reads: make([]ReadRoot, 0, len(fields))}
 	for _, root := range fields {
@@ -486,7 +489,7 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 		if !ok {
 			analyticsRoot, analyticsOK, analyticsErr := c.analytics.Compile(root.field, document.Fragments, variables)
 			if analyticsErr != nil {
-				return Result{}, fmt.Errorf("P6_OPERATION_ANALYTICS: %s: %w", root.responseName, analyticsErr)
+				return Result{}, compileerr.Root(analyticsErr, root.responseName)
 			}
 			if analyticsOK {
 				analyticsRoot.ResponseName = root.responseName
@@ -496,7 +499,7 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 			}
 			custom, customErr := c.compileCustom(root, compilerir.CustomOperationQuery, document.Fragments, variables)
 			if customErr != nil {
-				return Result{}, customErr
+				return Result{}, compileerr.Root(customErr, root.responseName)
 			}
 			result.Custom = append(result.Custom, custom)
 			result.Order = append(result.Order, RootRef{Kind: RootCustomQuery, Index: len(result.Custom) - 1})
@@ -520,19 +523,19 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 			},
 		})
 		if selectErr != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_SELECTION: %s: %w", root.responseName, selectErr)
+			return Result{}, compileerr.Root(selectErr, root.responseName)
 		}
 		arguments, argumentErr := values(root.field, variables)
 		if argumentErr != nil {
-			return Result{}, argumentErr
+			return Result{}, compileerr.Root(argumentErr, root.responseName)
 		}
 		request, bindErr := c.binder.Query(graphqlbind.QueryInput{Operation: binding.operation, Model: binding.model, Arguments: arguments, Selections: selected.Selections})
 		if bindErr != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_BIND: %s: %w", root.responseName, bindErr)
+			return Result{}, compileerr.Root(bindErr, root.responseName)
 		}
 		frozen, freezeErr := c.freezeRequest(request)
 		if freezeErr != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_FREEZE: %s: %w", root.responseName, freezeErr)
+			return Result{}, compileerr.Root(freezeErr, root.responseName)
 		}
 		result.Reads = append(result.Reads, ReadRoot{ResponseName: root.responseName, Model: binding.model, Operation: binding.operation, Request: request, Frozen: frozen, Slots: selectset.StableSlots(selected.Slots)})
 		result.Order = append(result.Order, RootRef{Kind: RootRead, Index: len(result.Reads) - 1})
@@ -557,7 +560,7 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 		return Result{}, err
 	}
 	if len(fields) == 0 {
-		return Result{}, fmt.Errorf("P5_OPERATION_ROOT: mutation selects no root fields")
+		return Result{}, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	result := Result{Mutations: make([]MutationRoot, 0, len(fields))}
 	for _, root := range fields {
@@ -568,7 +571,7 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 		if !ok {
 			custom, customErr := c.compileCustom(root, compilerir.CustomOperationMutation, document.Fragments, variables)
 			if customErr != nil {
-				return Result{}, customErr
+				return Result{}, compileerr.Root(customErr, root.responseName)
 			}
 			result.Custom = append(result.Custom, custom)
 			result.Order = append(result.Order, RootRef{Kind: RootCustomMutation, Index: len(result.Custom) - 1})
@@ -576,7 +579,7 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 		}
 		arguments, argumentErr := values(root.field, variables)
 		if argumentErr != nil {
-			return Result{}, argumentErr
+			return Result{}, compileerr.Root(argumentErr, root.responseName)
 		}
 		compiled := MutationRoot{ResponseName: root.responseName, Model: binding.model, Operation: binding.operation}
 		var selections []readir.Selection
@@ -612,15 +615,15 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 			}
 		}
 		if err != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_SELECTION: %s: %w", root.responseName, err)
+			return Result{}, compileerr.Root(err, root.responseName)
 		}
 		compiled.Request, err = c.mutation.LowerValues(binding.operation, binding.model, arguments, selections)
 		if err != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_BIND: %s: %w", root.responseName, err)
+			return Result{}, compileerr.Root(err, root.responseName)
 		}
 		compiled.Frozen, err = compiled.Request.FreezeExecution(projection)
 		if err != nil {
-			return Result{}, fmt.Errorf("P5_OPERATION_FREEZE: %s: %w", root.responseName, err)
+			return Result{}, compileerr.Root(err, root.responseName)
 		}
 		result.Mutations = append(result.Mutations, compiled)
 		result.Order = append(result.Order, RootRef{Kind: RootMutation, Index: len(result.Mutations) - 1})
@@ -635,34 +638,34 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 	}
 	contract, ok := c.customContract(kind, root.field.Name)
 	if !ok {
-		return CustomRoot{}, fmt.Errorf("P5_OPERATION_ROOT: %s root %q is not generated", kind, root.field.Name)
+		return CustomRoot{}, compileerr.Invariantf("%s root %q is not generated", kind, root.field.Name)
 	}
 	arguments, err = c.bindCustomArguments(contract, arguments)
 	if err != nil {
-		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+		return CustomRoot{}, err
 	}
 	semantic, err := c.bindSemanticSearchTake(contract, arguments, root.field.Arguments.ForName("take") != nil)
 	if err != nil {
-		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+		return CustomRoot{}, err
 	}
 	prepared, err := c.custom.Prepare(kind, root.field.Name, arguments)
 	if err != nil {
-		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+		return CustomRoot{}, err
 	}
 	result := prepared.ResultType()
-	isObject := result.Kind == compilerir.GraphQLTypeModel || result.Kind == compilerir.GraphQLTypeList && result.Element != nil && result.Element.Kind == compilerir.GraphQLTypeModel
-	if isObject && len(root.selections) == 0 || !isObject && len(root.selections) != 0 {
-		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s has an invalid result selection", root.responseName)
+	modelName := customResultModelName(result)
+	isObject := modelName != ""
+	if isObject && len(root.selections) == 0 {
+		return CustomRoot{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeNeedsSelection, compileerr.Path(root.field.Name))
+	}
+	if !isObject && len(root.selections) != 0 {
+		return CustomRoot{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeForbidsSelection, compileerr.Path(root.field.Name))
 	}
 	compiled := CustomRoot{ResponseName: root.responseName, Name: root.field.Name, Kind: kind, Arguments: arguments, Result: result}
 	if isObject {
-		modelName := result.Name
-		if result.Kind == compilerir.GraphQLTypeList {
-			modelName = result.Element.Name
-		}
 		modelID, ok := c.modelIDByGraphQLName(modelName)
 		if !ok {
-			return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: result model %s is absent", modelName)
+			return CustomRoot{}, compileerr.Invariantf("custom result model %s is absent", modelName)
 		}
 		selected, selectErr := selectset.Compile(selectset.Request{
 			Compilation: c.compilation, Model: modelID, Selections: root.selections, Fragments: fragments, Variables: variables,
@@ -675,13 +678,14 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 			},
 		})
 		if selectErr != nil {
-			return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, selectErr)
+			return CustomRoot{}, selectErr
 		}
 		compiled.Slots = selectset.StableSlots(selected.Slots)
+		compiled.model, compiled.selection = modelID, selected.Selections
 		if semantic {
-			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, selected.Selections, arguments)
+			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, arguments)
 			if err != nil {
-				return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+				return CustomRoot{}, err
 			}
 		}
 	}
@@ -704,9 +708,9 @@ func (c *Compiler) bindCustomArguments(contract compilerir.CustomOperationContra
 		if !present {
 			continue
 		}
-		value, err := c.bindCustomValue(argument.Type, raw)
+		value, err := c.bindCustomValue(argument.Type, raw, argument.Name)
 		if err != nil {
-			return nil, fmt.Errorf("argument %s: %w", argument.Name, err)
+			return nil, compileerr.On(err, contract.Name)
 		}
 		result[argument.Name] = value
 	}
@@ -725,7 +729,7 @@ func (c *Compiler) bindCustomArguments(contract compilerir.CustomOperationContra
 	return result, nil
 }
 
-func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any) (any, error) {
+func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any, path string) (any, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -733,31 +737,43 @@ func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any) (any, 
 	switch typ.Kind {
 	case compilerir.GraphQLTypePredicate:
 		if !modelKind {
-			return nil, fmt.Errorf("predicate model %s is absent", typ.Name)
+			return nil, compileerr.Invariantf("predicate model %s is absent", typ.Name)
 		}
-		condition, err := c.binder.MutationWhere(modelID, raw)
+		condition, err := c.binder.WhereAt(modelID, raw, path)
 		if err != nil {
 			return nil, err
 		}
 		return c.binder.FreezePredicate(condition)
 	case compilerir.GraphQLTypeSelector:
 		if !modelKind {
-			return nil, fmt.Errorf("selector model %s is absent", typ.Name)
+			return nil, compileerr.Invariantf("selector model %s is absent", typ.Name)
 		}
-		return c.mutation.Target(modelID, raw)
+		target, err := c.mutation.Target(modelID, raw, path)
+		if err != nil {
+			return nil, err
+		}
+		return target, nil
 	case compilerir.GraphQLTypeCreateInput, compilerir.GraphQLTypeUpdateInput, compilerir.GraphQLTypeUpdateManyInput:
 		if !modelKind {
-			return nil, fmt.Errorf("mutation input model %s is absent", typ.Name)
+			return nil, compileerr.Invariantf("mutation input model %s is absent", typ.Name)
 		}
 		kind := map[compilerir.GraphQLTypeKind]graphqlmutation.InputKind{compilerir.GraphQLTypeCreateInput: graphqlmutation.CreateInput, compilerir.GraphQLTypeUpdateInput: graphqlmutation.UpdateInput, compilerir.GraphQLTypeUpdateManyInput: graphqlmutation.UpdateManyInput}[typ.Kind]
 		value, err := c.mutation.CustomInput(kind, modelID, raw)
 		if err != nil {
-			return nil, err
+			return nil, compileerr.At(err, path)
 		}
 		publicKind := map[compilerir.GraphQLTypeKind]golem.RuntimeMutationInputKind{compilerir.GraphQLTypeCreateInput: golem.RuntimeMutationCreateInput, compilerir.GraphQLTypeUpdateInput: golem.RuntimeMutationUpdateInput, compilerir.GraphQLTypeUpdateManyInput: golem.RuntimeMutationUpdateManyInput}[typ.Kind]
-		return golem.RuntimeCustomMutationInputValue(publicKind, value)
+		input, err := golem.RuntimeCustomMutationInputValue(publicKind, value)
+		if err != nil {
+			return nil, compileerr.Ensure(err)
+		}
+		return input, nil
 	default:
-		return selectset.CoerceExtensionValue(c.compilation, typ, raw, c.limits.ListItems)
+		value, err := selectset.CoerceExtensionValue(c.compilation, typ, raw, c.limits.ListItems)
+		if err != nil {
+			return nil, compileerr.At(err, path)
+		}
+		return value, nil
 	}
 }
 
@@ -776,15 +792,15 @@ func compileBatchSlots(set ast.SelectionSet, fragments ast.FragmentDefinitionLis
 		return nil, err
 	}
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("batch payload selection is empty")
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.EmptySelection)
 	}
 	result := make([]BatchSlot, len(fields))
 	for index, field := range fields {
 		if field.field.Name != "count" && field.field.Name != "__typename" {
-			return nil, fmt.Errorf("batch payload field %q is not generated", field.field.Name)
+			return nil, compileerr.Invariantf("batch payload field %q is not generated", field.field.Name)
 		}
 		if len(field.field.Arguments) != 0 || len(field.selections) != 0 {
-			return nil, fmt.Errorf("batch payload field %q has an invalid shape", field.field.Name)
+			return nil, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeForbidsSelection, compileerr.Path(field.field.Name))
 		}
 		result[index] = BatchSlot{ResponseName: field.responseName, Typename: field.field.Name == "__typename"}
 	}
@@ -818,7 +834,7 @@ func expandRoots(set ast.SelectionSet, fragments ast.FragmentDefinitionList, var
 				}
 				if previous, duplicate := byResponse[response]; duplicate {
 					if ordered[previous].field.Name != value.Name || !sameArguments(ordered[previous].field.Arguments, value.Arguments, variables) {
-						return fmt.Errorf("P5_OPERATION_MERGE: response name %q has incompatible roots", response)
+						return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentIncompatible)
 					}
 					ordered[previous].selections = append(ordered[previous].selections, value.SelectionSet...)
 					continue
@@ -845,10 +861,10 @@ func expandRoots(set ast.SelectionSet, fragments ast.FragmentDefinitionList, var
 				}
 				fragment := fragments.ForName(value.Name)
 				if fragment == nil {
-					return fmt.Errorf("P5_OPERATION_FRAGMENT: fragment %q is absent", value.Name)
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentMissing)
 				}
 				if stack[value.Name] {
-					return fmt.Errorf("P5_OPERATION_FRAGMENT: fragment cycle through %q", value.Name)
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentCycle)
 				}
 				stack[value.Name] = true
 				err = visit(fragment.SelectionSet)
@@ -857,7 +873,7 @@ func expandRoots(set ast.SelectionSet, fragments ast.FragmentDefinitionList, var
 					return err
 				}
 			default:
-				return fmt.Errorf("P5_OPERATION_AST: unknown root selection %T", selection)
+				return compileerr.Invariantf("unknown root selection %T", selection)
 			}
 		}
 		return nil
@@ -876,15 +892,15 @@ func included(directives ast.DirectiveList, variables map[string]any) (bool, err
 		}
 		argument := directive.Arguments.ForName("if")
 		if argument == nil || argument.Value == nil {
-			return false, fmt.Errorf("P5_OPERATION_DIRECTIVE: @%s requires if", directive.Name)
+			return false, directiveError(directive.Name)
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return false, fmt.Errorf("P5_OPERATION_DIRECTIVE: @%s: %w", directive.Name, err)
+			return false, directiveError(directive.Name)
 		}
 		boolean, ok := value.(bool)
 		if !ok {
-			return false, fmt.Errorf("P5_OPERATION_DIRECTIVE: @%s if is not Boolean", directive.Name)
+			return false, directiveError(directive.Name)
 		}
 		if directive.Name == "skip" && boolean || directive.Name == "include" && !boolean {
 			result = false
@@ -898,11 +914,19 @@ func values(field *ast.Field, variables map[string]any) (map[string]any, error) 
 	for _, argument := range field.Arguments {
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return nil, fmt.Errorf("P5_OPERATION_ARGUMENT: %s.%s: %w", field.Name, argument.Name, err)
+			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		result[argument.Name] = value
 	}
 	return result, nil
+}
+
+func directiveError(name string) error {
+	return compileerr.New(compileerr.KindDirectiveInvalid, compileerr.DirectiveNeedsBoolean, compileerr.Path(name))
+}
+
+func eventFieldShape(field, model string) error {
+	return compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeEventField, compileerr.Path(field), compileerr.Model(model))
 }
 
 func sameArguments(left, right ast.ArgumentList, variables map[string]any) bool {

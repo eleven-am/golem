@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -12,16 +13,17 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 )
 
 func TestSemanticHydrationChunkReductionUsesReadCapacityErrors(t *testing.T) {
 	overflow := readsql.ValidateStatementComplexity(policyir.ModelID{1}, strings.Repeat("x", 2), 1, readsql.MaxStatementAliases)
 	wrapped := golem.RuntimeReadError(golem.CodeBadUserInput, "findMany", golem.ModelID{}, golem.FieldID{}, "read plan could not be rendered", overflow)
-	if end, retry := reduceSemanticHydrationChunk(2, 10, wrapped); !retry || end != 6 {
+	if end, retry := reduceHydrationChunk(2, 10, wrapped); !retry || end != 6 {
 		t.Fatalf("capacity error reduced to %d retry=%t", end, retry)
 	}
-	if end, retry := reduceSemanticHydrationChunk(2, 10, errors.New("read failed")); retry || end != 10 {
+	if end, retry := reduceHydrationChunk(2, 10, errors.New("read failed")); retry || end != 10 {
 		t.Fatalf("unrelated error reduced to %d retry=%t", end, retry)
 	}
 }
@@ -129,14 +131,18 @@ func generatedTestCompilation(t *testing.T) (compilerir.CompilationIR, golem.Sch
 	if len(result.Diagnostics) != 0 || result.Compilation == nil {
 		t.Fatalf("diagnostics=%#v", result.Diagnostics)
 	}
-	compilation := *result.Compilation
+	return *result.Compilation, generatedTestBundle(t, *result.Compilation)
+}
+
+func generatedTestBundle(t *testing.T, compilation compilerir.CompilationIR) golem.SchemaBundle {
+	t.Helper()
 	modelBytes, _ := compilerir.CanonicalModel(compilation.Model)
 	contractBytes, _ := compilerir.CanonicalContract(compilation.Contract)
 	modelFingerprint, _ := compilerir.ModelFingerprint(compilation.Model)
 	contractFingerprint, _ := compilerir.ContractFingerprint(compilation.Contract)
 	modelDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ModelFormatVersion), uint32(compilerir.CanonicalFormatVersion), generatedTestDigest(t, modelFingerprint), modelBytes)
 	contractDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), generatedTestDigest(t, contractFingerprint), contractBytes)
-	return compilation, golem.GeneratedSchemaBundle(golem.SchemaDigest{1}, "test", "test", modelDocument, contractDocument)
+	return golem.GeneratedSchemaBundle(golem.SchemaDigest{1}, "test", "test", modelDocument, contractDocument)
 }
 
 func generatedTestDigest(t *testing.T, value compilerir.Fingerprint) (result golem.SchemaDigest) {
@@ -210,4 +216,24 @@ func generatedTestFixedID(t *testing.T, value string, destination []byte) {
 		t.Fatalf("identity=%q err=%v", value, err)
 	}
 	copy(destination, decoded)
+}
+
+func TestGeneratedExecutorRejectsUnknownContractField(t *testing.T) {
+	_, bundle := generatedTestCompilation(t)
+	contract := bundle.Contract()
+	payload := bytes.Replace(contract.Bytes(), []byte(`{"formatVersion":`), []byte(`{"unknownField":1,"formatVersion":`), 1)
+	if bytes.Equal(payload, contract.Bytes()) {
+		t.Fatal("contract payload does not start with formatVersion")
+	}
+	tampered := golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(),
+		golem.GeneratedSchemaDocument(contract.FormatVersion(), contract.CanonicalVersion(), contract.Fingerprint(), payload), bundle.Providers()...)
+	_, err := NewGeneratedExecutor(GeneratedExecutorConfig[int]{
+		Bundle:              tampered,
+		BeginCaller:         func(context.Context, int) (CallerExecution, error) { return nil, nil },
+		ReportInternalError: func(context.Context, error) {},
+	})
+	var failure *policyschema.Error
+	if !errors.As(err, &failure) || failure.Code != policyschema.CodeDocument || failure.Path != "contract.payload" || failure.Detail != `json: unknown field "unknownField"` {
+		t.Fatalf("executor accepted or mis-described an unknown contract field: %v", err)
+	}
 }

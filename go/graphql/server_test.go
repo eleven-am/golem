@@ -282,8 +282,8 @@ type Node { value: Int! nested: Node }`
 
 	t.Run("MaxComplexity", func(t *testing.T) {
 		request := Request{Query: `{ items(take: 2) { value } }`}
-		assertDirectLimitBoundary(t, scalarSDL, Limits{MaxComplexity: 3, MaxPageSize: 2}, request, true)
-		assertDirectLimitBoundary(t, scalarSDL, Limits{MaxComplexity: 2, MaxPageSize: 2}, request, false, "QUERY_LIMIT_EXCEEDED")
+		assertDirectLimitBoundary(t, scalarSDL, Limits{MaxComplexity: 3}, request, true)
+		assertDirectLimitBoundary(t, scalarSDL, Limits{MaxComplexity: 2}, request, false, "QUERY_LIMIT_EXCEEDED")
 	})
 
 	t.Run("exactly-one-selected-operation", func(t *testing.T) {
@@ -441,7 +441,7 @@ func TestServerComplexityUsesListFanoutDefaultsVariablesAndDirectives(t *testing
 	executor := &testExecutor{}
 	server, err := NewServer(sdl, Config[int]{
 		PrincipalFromContext: func(context.Context) (int, bool) { return 1, true },
-		Limits:               Limits{MaxComplexity: 8, MaxPageSize: 4},
+		Limits:               Limits{MaxComplexity: 8},
 		ReportInternalError:  func(context.Context, error) {},
 	}, executor)
 	if err != nil {
@@ -456,3 +456,9 @@ func TestServerComplexityUsesListFanoutDefaultsVariablesAndDirectives(t *testing
 		t.Fatalf("allowed=%#v called=%v", allowed, executor.called)
 	}
 }
+
+func (testExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func (*boundaryExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func (panicExecutor) ListBounds() ListBounds { return NewListBounds(nil) }

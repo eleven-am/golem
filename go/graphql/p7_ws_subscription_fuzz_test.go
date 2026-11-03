@@ -71,7 +71,7 @@ func FuzzP7GraphQLWSMessageAndSubscriptionInput(f *testing.F) {
 			}
 		}
 
-		request, requestErr := decodeWSRequest(requestPayload, 2<<10)
+		request, requestErr := decodeWSRequest(requestPayload, server.limits)
 		if requestErr == nil {
 			querySnapshot := request.Query
 			variablesSnapshot, err := json.Marshal(request.Variables)

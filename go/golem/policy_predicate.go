@@ -497,6 +497,11 @@ func scalarValueAny(value any) frozenValue {
 		return frozenValue{kind: FrozenValueFloat64, floatBits: math.Float64bits(value)}
 	case reflect.String:
 		return frozenValue{kind: FrozenValueString, text: reflected.String()}
+	case reflect.Slice:
+		if raw, ok := value.([]byte); ok {
+			return frozenValue{kind: FrozenValueBytes, bytes: append([]byte{}, raw...)}
+		}
+		return frozenValue{invalid: fmt.Sprintf("unsupported operand type %T", value)}
 	default:
 		return frozenValue{invalid: fmt.Sprintf("unsupported operand type %T", value)}
 	}

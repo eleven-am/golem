@@ -47,9 +47,9 @@ func (User) DefineGraphQL(g *golem.GraphQLModel[User]) {
  golem.ComputedField(g, "nullableFailure", golem.GraphQLString(), User{}.NullableFailure, golem.Requires(Users.Name))
  golem.ComputedField(g, "nonNullFailure", golem.GraphQLString().NonNull(), User{}.NonNullFailure, golem.Requires(Users.Name))
  golem.ComputedField(g, "invalidUTF8", golem.GraphQLString(), User{}.InvalidUTF8, golem.Requires(Users.Name))
-	 golem.ComputedField(g, "invalidList", golem.GraphQLList(golem.GraphQLString()), User{}.InvalidList, golem.Requires(Users.Name))
-	 golem.ComputedField(g, "invalidStrictList", golem.GraphQLList(golem.GraphQLString().NonNull()).NonNull(), User{}.InvalidStrictList, golem.Requires(Users.Name))
-	 golem.ComputedField(g, "invalidNullableStrictList", golem.GraphQLList(golem.GraphQLString().NonNull()), User{}.InvalidNullableStrictList, golem.Requires(Users.Name))
+	 golem.ComputedField(g, "invalidList", golem.GraphQLList(golem.GraphQLString(), 3), User{}.InvalidList, golem.Requires(Users.Name))
+	 golem.ComputedField(g, "invalidStrictList", golem.GraphQLList(golem.GraphQLString().NonNull(), 3).NonNull(), User{}.InvalidStrictList, golem.Requires(Users.Name))
+	 golem.ComputedField(g, "invalidNullableStrictList", golem.GraphQLList(golem.GraphQLString().NonNull(), 3), User{}.InvalidNullableStrictList, golem.Requires(Users.Name))
 	 golem.ComputedField(g, "computedStatus", golem.GraphQLEnum[Status]().NonNull(), User{}.ComputedStatus, golem.Requires(Users.Status))
 }
 func (User) NullableFailure(context.Context, golem.Row[User], EmptyArgs) (string,error) { return "", errors.New("private nullable failure") }
@@ -62,16 +62,16 @@ func (User) ComputedStatus(context.Context, golem.Row[User], EmptyArgs) (Status,
 func DefineSchema(s *golem.Schema) { golem.SchemaName(s,"active_p5"); golem.Actor[Principal](s); golem.Model[User](s); golem.Providers(s,golem.SQLite) }
 func DefineGraphQL(g *golem.GraphQLSchema) {
  golem.Query(g,"failCustom",FailCustom)
- golem.Query(g,"stringValues",StringValues)
- golem.Query(g,"intValues",IntValues)
- golem.Query(g,"bigValues",BigValues)
- golem.Query(g,"decimalValues",DecimalValues)
- golem.Query(g,"nestedValues",NestedValues)
- golem.Query(g,"statusValues",StatusValues)
+ golem.Query(g,"stringValues",StringValues, golem.MaxItems(2))
+ golem.Query(g,"intValues",IntValues, golem.MaxItems(2))
+ golem.Query(g,"bigValues",BigValues, golem.MaxItems(1))
+ golem.Query(g,"decimalValues",DecimalValues, golem.MaxItems(1))
+ golem.Query(g,"nestedValues",NestedValues, golem.MaxItems(2, 2))
+ golem.Query(g,"statusValues",StatusValues, golem.MaxItems(2))
  golem.Query(g,"echoStatus",EchoStatus)
  golem.Query(g,"invalidStatus",InvalidStatus)
- golem.Query(g,"nullableValues",NullableValues)
- golem.Query(g,"nestedNullableValues",NestedNullableValues)
+ golem.Query(g,"nullableValues",NullableValues, golem.MaxItems(2))
+ golem.Query(g,"nestedNullableValues",NestedNullableValues, golem.MaxItems(1, 2))
  golem.Query(g,"maybeString",MaybeString)
 	 golem.Query(g,"invalidDateTime",InvalidDateTime)
 	 golem.Query(g,"jsonValue",JSONValue)
@@ -148,7 +148,7 @@ func TestActive(t *testing.T) {
 	 invalidStrictList:=request(t,server,`+"`query { users { name broken: invalidStrictList } }`"+`); if len(invalidStrictList.Errors)!=1 || len(invalidStrictList.Errors[0].Path)!=4 || invalidStrictList.Errors[0].Path[2]!="broken" || invalidStrictList.Errors[0].Path[3]!=float64(1) || invalidStrictList.Data!=nil {t.Fatalf("invalid strict list=%%#v",invalidStrictList)}
 	 invalidNullableStrictList:=request(t,server,`+"`query { users { name broken: invalidNullableStrictList } }`"+`); if len(invalidNullableStrictList.Errors)!=1 || len(invalidNullableStrictList.Errors[0].Path)!=4 || invalidNullableStrictList.Errors[0].Path[2]!="broken" || invalidNullableStrictList.Errors[0].Path[3]!=float64(1) {t.Fatalf("invalid nullable strict list=%%#v",invalidNullableStrictList)}; nullableStrictRow:=invalidNullableStrictList.Data["users"].([]any)[0].(map[string]any); if nullableStrictRow["name"]!="alice" || nullableStrictRow["broken"]!=nil {t.Fatalf("invalid nullable strict list data=%%#v",invalidNullableStrictList.Data)}
 	 nullableMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"2\", name: \"bob\", status: ACTIVE }) { id broken: nullableFailure } second: updateUser(where: { ID: \"2\" }, data: { name: { set: \"after\" } }) { name } }`"+`); if len(nullableMutation.Errors)!=1 || len(nullableMutation.Errors[0].Path)!=2 || nullableMutation.Errors[0].Path[0]!="first" || nullableMutation.Errors[0].Path[1]!="broken" || nullableMutation.Data["second"].(map[string]any)["name"]!="after" {t.Fatalf("nullable mutation=%%#v",nullableMutation)}
-	 nonNullMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"3\", name: \"committed\", status: ACTIVE }) { id broken: nonNullFailure } second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"must-not-run\" } }) { name } }`"+`); if len(nonNullMutation.Errors)!=1 || len(nonNullMutation.Errors[0].Path)!=2 || nonNullMutation.Errors[0].Path[0]!="first" || nonNullMutation.Errors[0].Path[1]!="broken" || nonNullMutation.Data!=nil {t.Fatalf("non-null mutation=%%#v",nonNullMutation)}; var original,committed string; if err:=db.UnsafeSQLX().Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if err:=db.UnsafeSQLX().Get(&committed,`+"`SELECT name FROM users WHERE id=3`"+`);err!=nil{t.Fatal(err)};if original!="alice"||committed!="committed"{t.Fatalf("mutation order original=%%q committed=%%q",original,committed)}
+	 nonNullMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"3\", name: \"committed\", status: ACTIVE }) { id broken: nonNullFailure } second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"must-not-run\" } }) { name } }`"+`); if len(nonNullMutation.Errors)!=1 || len(nonNullMutation.Errors[0].Path)!=1 || nonNullMutation.Errors[0].Path[0]!="first" || nonNullMutation.Errors[0].Extensions["code"]!="COMMITTED_RESULT_UNAVAILABLE" || nonNullMutation.Errors[0].Extensions["committed"]!=true || nonNullMutation.Data!=nil {t.Fatalf("non-null mutation=%%#v",nonNullMutation)}; var original,committed string; if err:=db.UnsafeSQLX().Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if err:=db.UnsafeSQLX().Get(&committed,`+"`SELECT name FROM users WHERE id=3`"+`);err!=nil{t.Fatal(err)};if original!="alice"||committed!="committed"{t.Fatalf("mutation order original=%%q committed=%%q",original,committed)}
 	 nullableCustom:=request(t,server,`+"`mutation { first: nullableMutationFailure second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"nullable-continued\" } }) { name } }`"+`); if len(nullableCustom.Errors)!=1 || nullableCustom.Data["first"]!=nil || nullableCustom.Data["second"].(map[string]any)["name"]!="nullable-continued" || app.NullableMutationCalls!=1 {t.Fatalf("nullable custom=%%#v calls=%%d",nullableCustom,app.NullableMutationCalls)}
 	 nonNullCustom:=request(t,server,`+"`mutation { first: nonNullMutationFailure second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"custom-must-not-run\" } }) { name } }`"+`); if len(nonNullCustom.Errors)!=1 || nonNullCustom.Data!=nil || app.NonNullMutationCalls!=1 {t.Fatalf("non-null custom=%%#v calls=%%d",nonNullCustom,app.NonNullMutationCalls)}; if err:=db.UnsafeSQLX().Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if original!="nullable-continued"{t.Fatalf("non-null custom executed later root: %%q",original)}
 	 exact:=request(t,server,`+"`query { stringValues intValues bigValues decimalValues nestedValues statusValues echoStatus(status: ACTIVE) nullableValues nestedNullableValues maybeString jsonValue users { computedStatus } }`"+`); if len(exact.Errors)!=0 || exact.Data["bigValues"].([]any)[0]!="9007199254740993" || exact.Data["decimalValues"].([]any)[0]!="123.45" || exact.Data["echoStatus"]!="ACTIVE" || exact.Data["nullableValues"].([]any)[1]!=nil || exact.Data["maybeString"]!="maybe" || exact.Data["users"].([]any)[0].(map[string]any)["computedStatus"]!="ACTIVE" { t.Fatalf("exact=%%#v",exact) }

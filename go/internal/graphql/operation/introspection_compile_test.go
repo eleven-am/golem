@@ -1,7 +1,6 @@
 package operation
 
 import (
-	"strings"
 	"testing"
 
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
@@ -112,16 +111,16 @@ func TestCompilerStillRefusesOperationsThatSelectNoRootFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, testCase := range []struct{ query, want string }{
-		{`query Probe { __typename @skip(if: true) }`, "P5_OPERATION_ROOT: query selects no root fields"},
-		{`query Probe { __schema @include(if: false) { queryType { name } } }`, "P5_OPERATION_ROOT: query selects no root fields"},
-		{`mutation Probe { __typename @skip(if: true) }`, "P5_OPERATION_ROOT: mutation selects no root fields"},
+		{`query Probe { __typename @skip(if: true) }`, "Selection must not be empty"},
+		{`query Probe { __schema @include(if: false) { queryType { name } } }`, "Selection must not be empty"},
+		{`mutation Probe { __typename @skip(if: true) }`, "Selection must not be empty"},
 	} {
 		query, errors := gqlparser.LoadQuery(schema, testCase.query)
 		if len(errors) != 0 {
 			t.Fatalf("query errors = %v", errors)
 		}
 		_, err := compiler.Compile(query, query.Operations.ForName("Probe"), nil)
-		if err == nil || !strings.Contains(err.Error(), testCase.want) {
+		if err == nil || err.Error() != testCase.want {
 			t.Fatalf("%s compiled with error %v, want %q", testCase.query, err, testCase.want)
 		}
 	}

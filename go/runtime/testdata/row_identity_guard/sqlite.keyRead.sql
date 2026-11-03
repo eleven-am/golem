@@ -1,0 +1,1 @@
+SELECT "golem_r0"."id" AS "golem_c0", "golem_r0"."title" AS "golem_c1" FROM "posts" AS "golem_r0" WHERE TRUE ORDER BY "golem_r0"."title" IS NOT NULL ASC, ("golem_r0"."title" COLLATE BINARY) ASC, "golem_r0"."id" IS NOT NULL ASC, "golem_r0"."id" ASC LIMIT ?1

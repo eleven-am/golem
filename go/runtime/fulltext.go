@@ -162,7 +162,7 @@ func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		if !ok {
 			continue
 		}
-		item, err := golem.RuntimeFullTextResultWithIdentity(hydrated.row, ranked.Score, hydrated.identity, hydrated.fields, ranked.Key)
+		item, err := golem.RuntimeFullTextResult(hydrated, ranked.Score)
 		if err != nil {
 			return nil, err
 		}

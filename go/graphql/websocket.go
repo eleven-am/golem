@@ -171,18 +171,18 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				state.operationError(message.ID, PresentError(state.ctx, events.Failure(events.CodeSubscriptionLimit), nil, nil))
 				continue
 			}
-			requestValue, decodeErr := decodeWSRequest(message.Payload, server.limits.MaxVariableBytes)
-			if decodeErr != nil {
-				state.operationError(message.ID, publicError("BAD_REQUEST", "invalid GraphQL subscription request"))
+			requestValue, decodeFailure := decodeWSRequest(message.Payload, server.limits)
+			if decodeFailure != nil {
+				state.operationError(message.ID, *decodeFailure)
 				continue
 			}
 			prepared, failure := server.prepareRequest(requestValue, false)
 			if !validWSSubscriptionRequest(prepared, failure) {
-				failureValue := publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL subscription validation failed")
+				failures := []Error{publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL subscription validation failed")}
 				if failure != nil && len(failure.Errors) != 0 {
-					failureValue = failure.Errors[0]
+					failures = failure.Errors
 				}
-				state.operationError(message.ID, failureValue)
+				state.operationError(message.ID, failures...)
 				continue
 			}
 			opCtx, opCancel := context.WithCancel(state.ctx)
@@ -270,6 +270,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		serialized := state.server.selectionOrdered(response, prepared.Operation)
 		if state.server.executable != nil && response.Data != nil {
 			serialized = state.server.executePrepared(ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
+		}
+		if ctx.Err() != nil {
+			operationErr = context.Canceled
+			return
 		}
 		payload, err := encodeResponse(serialized)
 		if err != nil {
@@ -442,8 +446,8 @@ func (state *wsConnection[P]) close(code int, reason string) {
 	_ = state.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
 }
 
-func (state *wsConnection[P]) operationError(id string, failure Error) {
-	payload, _ := json.Marshal([]Error{failure})
+func (state *wsConnection[P]) operationError(id string, failures ...Error) {
+	payload, _ := json.Marshal(failures)
 	_ = state.write(wsMessage{ID: id, Type: "error", Payload: payload})
 }
 
@@ -501,29 +505,8 @@ func (state *wsConnection[P]) closeStream(stream ResponseStream) {
 	_ = stream.Close()
 }
 
-func decodeWSRequest(payload json.RawMessage, variableLimit int) (Request, error) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var envelope requestEnvelope
-	if err := decoder.Decode(&envelope); err != nil || envelope.Query == "" {
-		return Request{}, errors.New("invalid request")
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return Request{}, errors.New("invalid request")
-	}
-	variables := map[string]any{}
-	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
-		if len(envelope.Variables) > variableLimit {
-			return Request{}, errors.New("variables exceed limit")
-		}
-		values := json.NewDecoder(bytes.NewReader(envelope.Variables))
-		values.UseNumber()
-		if err := values.Decode(&variables); err != nil {
-			return Request{}, err
-		}
-	}
-	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, nil
+func decodeWSRequest(payload json.RawMessage, limits Limits) (Request, *Error) {
+	return decodeHTTPRequest(bytes.NewReader(payload), limits)
 }
 
 func containsProtocol(protocols []string, expected string) bool {

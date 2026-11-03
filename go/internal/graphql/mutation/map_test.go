@@ -2,7 +2,6 @@ package mutation
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -292,18 +291,18 @@ func TestMapBinderPreservesExplicitCreateNullAndRejectsBadMapsAndLimits(t *testi
 		input MapRootInput
 		want  string
 	}{
-		{"null selector", MapRootInput{Operation: Update, Model: ids.user, Where: nil, Data: update}, "explicit null"},
-		{"unknown selector", MapRootInput{Operation: Update, Model: ids.user, Where: map[string]any{"missing": int32(1)}, Data: update}, "unknown"},
-		{"unknown compound field", MapRootInput{Operation: Update, Model: ids.user, Where: map[string]any{"tenantHandle": map[string]any{"tenantID": int32(1), "wrong": "x"}}, Data: update}, "required"},
-		{"unknown where field", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"missing": map[string]any{"equals": "x"}}}, "unknown"},
-		{"unknown operator", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"name": map[string]any{"wat": "x"}}}, "unknown operator"},
-		{"depth", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"AND": []any{map[string]any{"AND": []any{map[string]any{"name": map[string]any{"equals": "x"}}}}}}}, "depth"},
-		{"list", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"OR": []any{map[string]any{"name": map[string]any{"equals": "a"}}, map[string]any{"name": map[string]any{"equals": "b"}}, map[string]any{"name": map[string]any{"equals": "c"}}}}}, "list item"},
+		{"null selector", MapRootInput{Operation: Update, Model: ids.user, Where: nil, Data: update}, "Argument where on User cannot be null"},
+		{"unknown selector", MapRootInput{Operation: Update, Model: ids.user, Where: map[string]any{"missing": int32(1)}, Data: update}, "Input where.missing on User is not available for this operation"},
+		{"unknown compound field", MapRootInput{Operation: Update, Model: ids.user, Where: map[string]any{"tenantHandle": map[string]any{"tenantID": int32(1), "wrong": "x"}}, Data: update}, "Input where.tenantHandle.handle on User is required"},
+		{"unknown where field", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"missing": map[string]any{"equals": "x"}}}, "Input where.missing on User is not available for this operation"},
+		{"unknown operator", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"name": map[string]any{"wat": "x"}}}, "Input where.name.wat on User is not supported for this field or provider"},
+		{"depth", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"AND": []any{map[string]any{"AND": []any{map[string]any{"name": map[string]any{"equals": "x"}}}}}}}, "Input exceeds MaxInputDepth (2)"},
+		{"list", MapRootInput{Operation: DeleteMany, Model: ids.user, Where: map[string]any{"OR": []any{map[string]any{"name": map[string]any{"equals": "a"}}, map[string]any{"name": map[string]any{"equals": "b"}}, map[string]any{"name": map[string]any{"equals": "c"}}}}}, "Input exceeds MaxListItems (2)"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := binder.Lower(test.input); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want substring %q", err, test.want)
+			if _, err := binder.Lower(test.input); err == nil || err.Error() != test.want {
+				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
 	}

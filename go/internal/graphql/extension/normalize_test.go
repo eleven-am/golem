@@ -27,7 +27,7 @@ func TestNormalizeComputedAndCustomExtensionsIntoContractOnly(t *testing.T) {
 	custom := []CustomOperationDeclaration{{Operation: ir.CustomOperationContractIR{
 		ExtensionID: "search-users", Operation: ir.CustomOperationQuery, Name: "searchUsers",
 		Arguments: []ir.GraphQLArgumentContractIR{{Name: "where", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypePredicate, Name: "User", Nullable: true}}},
-		Result:    ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Nullable: false, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "User", Nullable: false}},
+		Result:    ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Nullable: false, MaxItems: 10, Element: &ir.GraphQLTypeIR{Kind: ir.GraphQLTypeModel, Name: "User", Nullable: false}},
 		Resolver:  ir.AttachedMethodIR{PackagePath: "example/social", Name: "SearchUsers", Kind: "customQuery"}, Capability: ir.CustomOperationCallerOnly,
 	}}}
 	modelBefore := compilation.Model

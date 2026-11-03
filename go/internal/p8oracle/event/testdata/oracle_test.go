@@ -41,6 +41,15 @@ type signalTransport struct {
 	events.EventTransport
 	subscribed chan struct{}
 	count      atomic.Int64
+	published  atomic.Int64
+}
+
+func (transport *signalTransport) Publish(ctx context.Context, batch events.EventBatch) error {
+	err := transport.EventTransport.Publish(ctx, batch)
+	if err == nil {
+		transport.published.Add(int64(len(batch.Events())))
+	}
+	return err
 }
 
 func (transport *signalTransport) Subscribe(ctx context.Context, request events.Subscription) (events.Stream, error) {
@@ -148,7 +157,6 @@ type wsFrame struct {
 
 type cancellationCanaryRouter struct {
 	canaryID                  string
-	cancelledNextFrames       int
 	cancelledTerminalObserved bool
 }
 
@@ -157,16 +165,7 @@ func (router *cancellationCanaryRouter) route(frame wsFrame) (bool, error) {
 	case "cancel":
 		switch frame.Type {
 		case "next":
-			router.cancelledNextFrames++
-			if router.cancelledTerminalObserved {
-				return false, errors.New("cancelled operation emitted next after terminal")
-			}
-			if router.cancelledNextFrames > 1 {
-				return false, errors.New("cancelled operation exceeded buffered next bound")
-			}
-			if _, err := decodeGraphQLIDOnlyNext(frame.Payload); err != nil {
-				return false, fmt.Errorf("cancelled operation next payload: %w", err)
-			}
+			return false, errors.New("cancelled operation emitted next after complete")
 		case "error":
 			if router.cancelledTerminalObserved || !bytes.Contains(frame.Payload, []byte(`"code":"GOLEM_SUBSCRIPTION_CANCELLED"`)) {
 				return false, errors.New("invalid cancelled operation error terminal")
@@ -432,6 +431,32 @@ func (f *fixture) awaitSubscriptions(count int) {
 	}
 }
 
+func (f *fixture) awaitEventsPublished(count int64) {
+	f.t.Helper()
+	deadline := time.Now().Add(eventArrivalGrace)
+	for f.transport.published.Load() < count && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if f.transport.published.Load() < count {
+		f.t.Fatalf("transport published=%d want=%d", f.transport.published.Load(), count)
+	}
+}
+
+func (f *fixture) awaitDispatchedThroughSentinel() {
+	f.t.Helper()
+	sentinelID := mustUUID(f.t, "93000000-0000-0000-0000-000000000098")
+	sentinel, err := f.caller.Posts.Events(f.ctx, golem.EventWhere(social.Posts.ID.Eq(sentinelID)))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer sentinel.Close()
+	f.awaitMemberships(5)
+	f.createPost(f.caller.Posts, f.userID, sentinelID, "dispatch-sentinel", "sentinel body", true)
+	if received := recvCaller(f.t, sentinel); received.ID() != sentinelID {
+		f.t.Fatalf("dispatch sentinel id=%s want=%s", received.ID(), sentinelID)
+	}
+}
+
 func (f *fixture) awaitMemberships(count int) {
 	f.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -556,6 +581,7 @@ func (f *fixture) overflowCancellationIdentity() {
 	graphOverflow := f.openGraphQLSubscription("overflow", `subscription Overflow { postEvents(where: {title: {startsWith: "overflow-"}}) { id entity { id displayCode(prefix: "overflow:") } } }`, nil)
 	defer graphOverflow.Close()
 	f.awaitMemberships(4)
+	publishedBeforeOverflow := f.transport.published.Load()
 	for index := 0; index < 16; index++ {
 		id := mustUUID(f.t, fmt.Sprintf("93000000-0000-0000-0000-%012d", 30+index))
 		f.createPost(f.caller.Posts, f.userID, id, fmt.Sprintf("overflow-%d", index), "overflow body", true)
@@ -596,12 +622,15 @@ func (f *fixture) overflowCancellationIdentity() {
 		f.t.Fatalf("GraphQL overflow frame=%+v", graphOverflowFrame)
 	}
 
+	f.awaitEventsPublished(publishedBeforeOverflow + 16)
+	f.awaitDispatchedThroughSentinel()
+
 	cancelCtx, cancel := context.WithCancel(f.ctx)
 	cancelStream, err := f.caller.Posts.Events(cancelCtx)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.awaitMemberships(5)
+	f.awaitMemberships(6)
 	cancel()
 	if _, err := cancelStream.Recv(f.ctx); eventCode(err) != events.CodeSubscriptionCancelled {
 		f.t.Fatalf("caller cancellation code=%q error=%v", eventCode(err), err)
@@ -609,7 +638,7 @@ func (f *fixture) overflowCancellationIdentity() {
 
 	graphCancel := f.openGraphQLSubscription("cancel", `subscription Cancel { postEvents { id } }`, nil)
 	defer graphCancel.Close()
-	f.awaitMemberships(6)
+	f.awaitMemberships(7)
 	if err := graphCancel.WriteJSON(map[string]any{"id": "cancel", "type": "complete"}); err != nil {
 		f.t.Fatal(err)
 	}
@@ -623,7 +652,7 @@ func (f *fixture) overflowCancellationIdentity() {
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	f.awaitMemberships(7)
+	f.awaitMemberships(8)
 	f.createPost(f.caller.Posts, f.userID, canaryID, "connection-canary", "connection body", true)
 	assertCancellationCanaryRouterRegression(f.t, canaryID.String())
 	deadline := time.Now().Add(eventArrivalGrace)
@@ -666,8 +695,8 @@ func assertCancellationCanaryRouterRegression(t *testing.T, canaryID string) {
 		return json.RawMessage(fmt.Sprintf(`{"data":{"postEvents":{"id":%q}}}`, id))
 	}
 	router := cancellationCanaryRouter{canaryID: canaryID}
-	if done, err := router.route(wsFrame{ID: "cancel", Type: "next", Payload: payload(priorID)}); err != nil || done {
-		t.Fatalf("route exact buffered prior-ID frame: done=%t error=%v", done, err)
+	if done, err := router.route(wsFrame{ID: "cancel", Type: "complete"}); err != nil || done {
+		t.Fatalf("route cancelled operation terminal: done=%t error=%v", done, err)
 	}
 	if done, err := router.route(wsFrame{ID: "connection-canary", Type: "next", Payload: payload(canaryID)}); err != nil || !done {
 		t.Fatalf("route exact connection canary frame: done=%t error=%v", done, err)
@@ -677,8 +706,7 @@ func assertCancellationCanaryRouterRegression(t *testing.T, canaryID string) {
 		name   string
 		frames []wsFrame
 	}{
-		{name: "more-than-one-buffered-next", frames: []wsFrame{
-			{ID: "cancel", Type: "next", Payload: payload(priorID)},
+		{name: "buffered-next", frames: []wsFrame{
 			{ID: "cancel", Type: "next", Payload: payload(priorID)},
 		}},
 		{name: "next-after-terminal", frames: []wsFrame{

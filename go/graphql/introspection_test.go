@@ -15,7 +15,9 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-type introspectionExecutor struct{}
+type introspectionExecutor struct{ bounds map[string]int }
+
+var introspectionLimitBounds = map[string]int{"Query.nodes": 500, "Node.children": 500}
 
 func (introspectionExecutor) Execute(_ context.Context, _ int, operation graphql.Operation) graphql.Response {
 	data := map[string]any{}
@@ -35,6 +37,13 @@ const introspectionLimitSchema = `type Node { id: Int! child: Node children(take
 type Query { node: Node nodes(take: Int): [Node!]! }
 `
 
+func introspectionExecutorFor(sdl string) introspectionExecutor {
+	if sdl == introspectionLimitSchema {
+		return introspectionExecutor{bounds: introspectionLimitBounds}
+	}
+	return introspectionExecutor{}
+}
+
 func introspectionServer(t *testing.T, sdl string, introspection bool, limits graphql.Limits, executable gqlgengraphql.ExecutableSchema) *graphql.Server[int] {
 	t.Helper()
 	server, err := graphql.NewServer(sdl, graphql.Config[int]{
@@ -43,7 +52,7 @@ func introspectionServer(t *testing.T, sdl string, introspection bool, limits gr
 		Introspection:        introspection,
 		Limits:               limits,
 		ExecutableSchema:     executable,
-	}, introspectionExecutor{})
+	}, introspectionExecutorFor(sdl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +186,7 @@ func TestIntrospectionIsChargedOnePerFieldAndNeverAsAPaginatedRead(t *testing.T)
 		{"data beside introspection at the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 7, false},
 		{"data beside introspection one over the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 6, true},
 		{"data typename beside a data root", `{ __typename nodes(take: 3) { id } }`, 4, true},
-		{"unbounded data lists are still charged the page size", `{ nodes { children { id } } }`, 0, true},
+		{"lists without a take are charged their declared bound", `{ nodes { children { id } } }`, 0, true},
 		{"unbounded data lists beside introspection", `{ __schema { types { name } } nodes { children { id } } }`, 0, true},
 		{"unbounded data lists hidden in a fragment beside introspection", `{ ...Hide } fragment Hide on Query { __schema { types { name } } nodes { children { id } } }`, 0, true},
 		{"unbounded data lists in an inline fragment beside introspection", `{ __type(name: "Node") { fields { name } } ... on Query { nodes { children { id } } } }`, 0, true},
@@ -304,4 +313,8 @@ func TestServerWithoutExecutableRefusesMetaRootsInsteadOfOmittingThem(t *testing
 			t.Fatalf("%s errors=%#v", query, response.Errors)
 		}
 	}
+}
+
+func (executor introspectionExecutor) ListBounds() graphql.ListBounds {
+	return graphql.NewListBounds(executor.bounds)
 }

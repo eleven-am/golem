@@ -19,6 +19,14 @@ type p5SocialGraphQLHarness struct {
 
 func newP5SocialGraphQLHarness(t testing.TB, fixture socialMutationFixture) p5SocialGraphQLHarness {
 	t.Helper()
+	return newP5SocialGraphQLHarnessWith(t, fixture, publicgraphql.Limits{}, nil, nil)
+}
+
+func newP5SocialGraphQLHarnessWith(t testing.TB, fixture socialMutationFixture, limits publicgraphql.Limits, onBegin func(), report func(error)) p5SocialGraphQLHarness {
+	t.Helper()
+	if report == nil {
+		report = func(err error) { t.Errorf("unexpected internal GraphQL error: %v", err) }
+	}
 	bundle, compilation := p5GraphQLBundle(t, fixture.schema.Bundle)
 	document, err := graphqlschema.Build(compilation)
 	if err != nil {
@@ -26,7 +34,11 @@ func newP5SocialGraphQLHarness(t testing.TB, fixture socialMutationFixture) p5So
 	}
 	executor, err := publicgraphql.NewGeneratedExecutor(publicgraphql.GeneratedExecutorConfig[graphMutationPrincipal]{
 		Bundle: bundle,
+		Limits: limits,
 		BeginCaller: func(ctx context.Context, principal graphMutationPrincipal) (publicgraphql.CallerExecution, error) {
+			if onBegin != nil {
+				onBegin()
+			}
 			caller, callerErr := fixture.app.ForPrincipal(ctx, principal)
 			if callerErr != nil {
 				return nil, callerErr
@@ -40,9 +52,7 @@ func newP5SocialGraphQLHarness(t testing.TB, fixture socialMutationFixture) p5So
 				CallerMutationModel[graphMutationPrincipal, graphMutationActor](fixture.postTagDescriptor),
 			)
 		},
-		ReportInternalError: func(_ context.Context, err error) {
-			t.Errorf("unexpected internal GraphQL error: %v", err)
-		},
+		ReportInternalError: func(_ context.Context, err error) { report(err) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,9 +62,7 @@ func newP5SocialGraphQLHarness(t testing.TB, fixture socialMutationFixture) p5So
 			return graphMutationPrincipal{}, true
 		},
 		ContractFingerprint: bundle.Contract().Fingerprint(),
-		ReportInternalError: func(_ context.Context, err error) {
-			t.Errorf("unexpected internal GraphQL server error: %v", err)
-		},
+		ReportInternalError: func(_ context.Context, err error) { report(err) },
 	}, executor)
 	if err != nil {
 		t.Fatal(err)

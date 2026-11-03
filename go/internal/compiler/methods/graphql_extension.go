@@ -3,6 +3,7 @@ package methods
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/types"
 	"reflect"
 	"strings"
@@ -254,7 +255,7 @@ func (in *interpreter) evalComputedField(call *ast.CallExpr, parameter *types.Va
 }
 
 func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.Var, kind ir.CustomOperationKind) (graphqlextension.CustomOperationDeclaration, bool) {
-	if len(call.Args) != 3 || !in.isParameter(call.Args[0], parameter) {
+	if len(call.Args) < 3 || !in.isParameter(call.Args[0], parameter) {
 		in.errorAt("P5_CUSTOM_ARITY", "custom operation requires the schema destination, name, and resolver", call)
 		return graphqlextension.CustomOperationDeclaration{}, false
 	}
@@ -284,6 +285,25 @@ func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.
 		in.errorAt("P5_CUSTOM_RESULT_TYPE", "custom resolver result is not a registered scalar, enum, model row, or list", call.Args[2])
 		return graphqlextension.CustomOperationDeclaration{}, false
 	}
+	maxima, declared, valid := in.customMaxima(call.Args[3:])
+	if !valid {
+		return graphqlextension.CustomOperationDeclaration{}, false
+	}
+	owner := fmt.Sprintf("custom %s %s", kind, name)
+	depth := result.ListDepth()
+	switch {
+	case declared && depth == 0:
+		in.errorAt("P5_GRAPHQL_LIST_MAX_SCALAR", fmt.Sprintf("%s result is not a list and cannot carry a maximum item count", owner), call)
+		return graphqlextension.CustomOperationDeclaration{}, false
+	case declared && len(maxima) != depth:
+		in.errorAt("P5_GRAPHQL_LIST_MAX_ARITY", fmt.Sprintf("%s declares %d maximum item counts for a result with %d list levels", owner, len(maxima), depth), call)
+		return graphqlextension.CustomOperationDeclaration{}, false
+	}
+	result = result.WithListMaxima(maxima)
+	if missing := graphqlextension.ResultBoundDiagnostics(owner, graphqlextension.CustomBoundHint, result, in.span(call)); len(missing) != 0 {
+		in.diagnostics = append(in.diagnostics, missing...)
+		return graphqlextension.CustomOperationDeclaration{}, false
+	}
 	identity, diagnostic := in.config.IDRegistry.Register(ir.ObjectExtension, ir.OwnedIdentity(string(in.config.Compilation.Model.Schema.ID), "graphql-custom\x00"+string(kind)+"\x00"+name), in.span(call))
 	if diagnostic != nil {
 		in.diagnostics = append(in.diagnostics, *diagnostic)
@@ -293,6 +313,48 @@ func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.
 		ExtensionID: ir.ExtensionIDFrom(identity), Operation: kind, Name: name, Arguments: arguments, Result: result,
 		Resolver: callable, Capability: ir.CustomOperationCallerOnly,
 	}}, true
+}
+
+func (in *interpreter) customMaxima(options []ast.Expr) ([]uint32, bool, bool) {
+	var maxima []uint32
+	declared, valid := false, true
+	for _, option := range options {
+		call, ok := unparen(option).(*ast.CallExpr)
+		if !ok || in.callOperation(call) != "MaxItems" {
+			in.errorAt("P5_CUSTOM_OPTION", "custom operation options must be direct golem.MaxItems calls", option)
+			valid = false
+			continue
+		}
+		if declared {
+			in.errorAt("P5_CUSTOM_OPTION_DUPLICATE", "custom operation declares MaxItems more than once", call)
+			valid = false
+			continue
+		}
+		declared = true
+		for _, argument := range call.Args {
+			value, constant := in.maxItemsConstant(argument)
+			switch {
+			case !constant:
+				in.errorAt("P5_GRAPHQL_LIST_MAX_CONSTANT", "maximum item count must be a uint32 constant", argument)
+				valid = false
+			case value == 0:
+				in.errorAt("P5_GRAPHQL_LIST_MAX_ZERO", "maximum item count must be at least 1", argument)
+				valid = false
+			default:
+				maxima = append(maxima, value)
+			}
+		}
+	}
+	return maxima, declared, valid
+}
+
+func (in *interpreter) maxItemsConstant(expression ast.Expr) (uint32, bool) {
+	value := in.pkg.TypesInfo.Types[expression].Value
+	if value == nil || value.Kind() != constant.Int {
+		return 0, false
+	}
+	integer, exact := constant.Uint64Val(value)
+	return uint32(integer), exact && integer <= uint64(^uint32(0))
 }
 
 func (in *interpreter) computedDependencies(expressions []ast.Expr) []ir.FieldID {
@@ -334,16 +396,25 @@ func (in *interpreter) graphQLResultType(expression ast.Expr) (ir.GraphQLTypeIR,
 	}
 	operation := in.callOperation(call)
 	if operation == "GraphQLList" {
-		if len(call.Args) != 1 {
-			in.errorAt("P5_COMPUTED_RESULT_TYPE", "GraphQLList requires one closed element type", call)
+		if len(call.Args) != 2 {
+			in.errorAt("P5_COMPUTED_RESULT_TYPE", "GraphQLList requires one closed element type and its maximum item count", call)
 			return ir.GraphQLTypeIR{}, nil, false
 		}
 		element, _, valid := in.graphQLResultType(call.Args[0])
 		witness := graphQLTypeWitness(in.pkg.TypesInfo.TypeOf(expression), in.config.GolemImportPath)
+		maximum, constantValid := in.maxItemsConstant(call.Args[1])
+		switch {
+		case !constantValid:
+			in.errorAt("P5_GRAPHQL_LIST_MAX_CONSTANT", "maximum item count must be a uint32 constant", call.Args[1])
+			valid = false
+		case maximum == 0:
+			in.errorAt("P5_GRAPHQL_LIST_MAX_ZERO", "maximum item count must be at least 1", call.Args[1])
+			valid = false
+		}
 		if !valid || witness == nil {
 			return ir.GraphQLTypeIR{}, nil, false
 		}
-		return ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Nullable: true, Element: &element}, witness, true
+		return ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Nullable: true, Element: &element, MaxItems: maximum}, witness, true
 	}
 	scalars := map[string]string{
 		"GraphQLBoolean": "Boolean", "GraphQLInt": "Int", "GraphQLFloat": "Float", "GraphQLString": "String",

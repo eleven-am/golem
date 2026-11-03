@@ -3,6 +3,9 @@ package golem
 import (
 	"fmt"
 	"reflect"
+	"strings"
+
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
 // MutationFieldOperation is the closed portable scalar mutation vocabulary.
@@ -312,8 +315,11 @@ func RuntimeMutationInputFromFields(model ModelID, fields []RuntimeMutationField
 		if field.HasValue != needsValue {
 			return FrozenMutationInput{}, invalidMutation("runtime update", model, field.Field, "field operand shape is invalid")
 		}
+		if err := rejectEngineMutationValue("runtime update", model, field); err != nil {
+			return FrozenMutationInput{}, err
+		}
 		seen[field.Field] = struct{}{}
-		result.fields[index] = FrozenMutationField{field: field.Field, operation: field.Operation, value: cloneMutationValue(field.Value), hasValue: field.HasValue}
+		result.fields[index] = FrozenMutationField{field: field.Field, operation: field.Operation, value: freezeMutationValue(field.Value), hasValue: field.HasValue}
 	}
 	return result, nil
 }
@@ -381,7 +387,7 @@ func freezeMutationInput(operation string, model ModelID, values []mutationValue
 		}
 		result.fields = append(result.fields, FrozenMutationField{
 			field: value.field, operation: value.operation,
-			value: cloneMutationValue(value.value), hasValue: value.hasValue,
+			value: freezeMutationValue(value.value), hasValue: value.hasValue,
 		})
 	}
 	return result, nil
@@ -537,6 +543,55 @@ func invalidMutationCause(operation string, model ModelID, field FieldID, messag
 	failure := invalidMutation(operation, model, field, message).(*Error)
 	failure.cause = cause
 	return failure
+}
+
+func rejectEngineMutationValue(operation string, model ModelID, field RuntimeMutationFieldValue) error {
+	if _, engine := field.Value.(policyir.Value); engine {
+		return invalidMutation(operation, model, field.Field, "field value is an engine policy value; supply the public Go value")
+	}
+	return nil
+}
+
+func freezeMutationValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return publicMutationReflect(cloneMutationReflect(reflect.ValueOf(value))).Interface()
+}
+
+var mutationListPackage = reflect.TypeFor[List[int]]().PkgPath()
+
+func isMutationList(typ reflect.Type) bool {
+	return typ.Kind() == reflect.Slice && typ.PkgPath() == mutationListPackage && strings.HasPrefix(typ.Name(), "List[")
+}
+
+func publicMutationType(typ reflect.Type) reflect.Type {
+	switch {
+	case typ.Kind() == reflect.String:
+		return reflect.TypeFor[string]()
+	case isMutationList(typ):
+		return reflect.SliceOf(publicMutationType(typ.Elem()))
+	default:
+		return typ
+	}
+}
+
+func publicMutationReflect(value reflect.Value) reflect.Value {
+	target := publicMutationType(value.Type())
+	if target == value.Type() {
+		return value
+	}
+	if value.Kind() == reflect.String {
+		return value.Convert(target)
+	}
+	if value.IsNil() {
+		return reflect.Zero(target)
+	}
+	result := reflect.MakeSlice(target, value.Len(), value.Len())
+	for index := 0; index < value.Len(); index++ {
+		result.Index(index).Set(publicMutationReflect(value.Index(index)))
+	}
+	return result
 }
 
 func cloneMutationValue(value any) any {

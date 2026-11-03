@@ -15,10 +15,11 @@ func TestRuntimeTransportBindingDecodesOnlyCanonicalHistoricalEvents(t *testing.
 	encoder, history := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "broker")
 	input := testCDCEncodeInput(fixture, golem.EventCreated, nil, &after)
-	want, err := encoder.EncodeCDC(context.Background(), input)
+	produced, err := encoder.EncodeCDC(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := produced.Notice
 	binding, err := newRuntimeEventBinding(history, 0)
 	if err != nil {
 		t.Fatal(err)

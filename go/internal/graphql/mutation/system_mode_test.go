@@ -1,7 +1,6 @@
 package mutation
 
 import (
-	"strings"
 	"testing"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -33,11 +32,11 @@ func systemModeBinder(t *testing.T, field compilerir.FieldID, modes ...compileri
 func TestGraphQLInputRefusesSystemModeScalarOnCreateAndUpdate(t *testing.T) {
 	binder, ids := systemModeBinder(t, compilerir.FieldID(hexID(6)), compilerir.ModeSystem)
 	create := map[string]any{"data": map[string]any{"name": "x"}}
-	if _, err := binder.LowerValues(Create, ids.user, create, nil); err == nil || !strings.Contains(err.Error(), "writable") {
+	if _, err := binder.LowerValues(Create, ids.user, create, nil); err == nil || err.Error() != "Input data.name on User is not available for this operation" {
 		t.Fatalf("create accepted a system field: %v", err)
 	}
 	update := map[string]any{"data": map[string]any{"name": map[string]any{"set": "x"}}, "where": map[string]any{"id": int32(1)}}
-	if _, err := binder.LowerValues(Update, ids.user, update, nil); err == nil || !strings.Contains(err.Error(), "writable") {
+	if _, err := binder.LowerValues(Update, ids.user, update, nil); err == nil || err.Error() != "Input data.name on User is not available for this operation" {
 		t.Fatalf("update accepted a system field: %v", err)
 	}
 }
@@ -45,7 +44,7 @@ func TestGraphQLInputRefusesSystemModeScalarOnCreateAndUpdate(t *testing.T) {
 func TestGraphQLInputRefusesSystemImmutableScalarOnCreate(t *testing.T) {
 	binder, ids := systemModeBinder(t, compilerir.FieldID(hexID(6)), compilerir.ModeSystem, compilerir.ModeImmutable)
 	create := map[string]any{"data": map[string]any{"name": "x"}}
-	if _, err := binder.LowerValues(Create, ids.user, create, nil); err == nil || !strings.Contains(err.Error(), "writable") {
+	if _, err := binder.LowerValues(Create, ids.user, create, nil); err == nil || err.Error() != "Input data.name on User is not available for this operation" {
 		t.Fatalf("create accepted a system immutable field: %v", err)
 	}
 }

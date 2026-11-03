@@ -6,9 +6,9 @@ package selectset
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -75,7 +75,7 @@ type compiler struct {
 
 func Compile(request Request) (Result, error) {
 	if request.Model == "" || len(request.Selections) == 0 {
-		return Result{}, fmt.Errorf("P5_SELECT_INPUT: model and selection set are required")
+		return Result{}, compileerr.Invariantf("selection compile requires a model and a selection set")
 	}
 	if request.MaxDepth <= 0 {
 		request.MaxDepth = 12
@@ -117,18 +117,18 @@ type fieldOccurrence struct {
 
 func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSet, depth int, stack map[string]bool) ([]readir.Selection, []Slot, error) {
 	if depth > in.request.MaxDepth {
-		return nil, nil, fmt.Errorf("P5_SELECT_LIMIT: selection depth exceeds %d", in.request.MaxDepth)
+		return nil, nil, selectionLimit("MaxDepth", in.request.MaxDepth)
 	}
 	if depth > in.maxDepth {
 		in.maxDepth = depth
 	}
 	model, ok := in.models[modelID]
 	if !ok {
-		return nil, nil, fmt.Errorf("P5_SELECT_MODEL: model %s is absent", modelID)
+		return nil, nil, compileerr.Invariantf("model %s is absent", modelID)
 	}
 	contract, ok := in.contracts[modelID]
 	if !ok || !contract.Exposed {
-		return nil, nil, fmt.Errorf("P5_SELECT_MODEL: model %s is not exposed", modelID)
+		return nil, nil, compileerr.Invariantf("model %s is not exposed", modelID)
 	}
 	occurrences, err := in.expand(set, stack)
 	if err != nil {
@@ -163,12 +163,12 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 	for _, occurrence := range occurrences {
 		in.fields++
 		if in.fields > in.request.MaxFields {
-			return nil, nil, fmt.Errorf("P5_SELECT_LIMIT: selected occurrences exceed %d", in.request.MaxFields)
+			return nil, nil, selectionLimit("MaxSelectedFields", in.request.MaxFields)
 		}
 		if occurrence.responseName != occurrence.field.Name {
 			in.aliases++
 			if in.aliases > in.request.MaxAliases {
-				return nil, nil, fmt.Errorf("P5_SELECT_LIMIT: aliases exceed %d", in.request.MaxAliases)
+				return nil, nil, selectionLimit("MaxAliases", in.request.MaxAliases)
 			}
 		}
 		if occurrence.field.Name == "__typename" {
@@ -198,14 +198,14 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 			var children []Slot
 			if target, object := in.computedResultModel(computed.Result); object {
 				if len(occurrence.selections) == 0 {
-					return nil, nil, fmt.Errorf("P5_SELECT_COMPUTED: object field %s.%s requires a selection set", contract.GraphQLName, computed.Name)
+					return nil, nil, shapeError(compileerr.ShapeNeedsSelection, computed.Name, contract.GraphQLName)
 				}
 				outputProjection, children, dependencyErr = in.compileModel(target, occurrence.selections, depth+1, stack)
 				if dependencyErr != nil {
 					return nil, nil, dependencyErr
 				}
 			} else if len(occurrence.selections) != 0 {
-				return nil, nil, fmt.Errorf("P5_SELECT_COMPUTED: leaf field %s.%s has a selection set", contract.GraphQLName, computed.Name)
+				return nil, nil, shapeError(compileerr.ShapeForbidsSelection, computed.Name, contract.GraphQLName)
 			}
 			slots = append(slots, Slot{Kind: SlotComputed, ResponseName: occurrence.responseName, Children: children, Computed: &graphqlextension.ComputedSelection{
 				ExtensionID: computed.ExtensionID, Result: computed.Result, Arguments: arguments, CanonicalArguments: canonical,
@@ -215,11 +215,11 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 		}
 		binding, exists := fieldsByName[occurrence.field.Name]
 		if !exists || !compilerir.ModesReadable(binding.contract.Modes) {
-			return nil, nil, fmt.Errorf("P5_SELECT_FIELD: %s.%s is absent or not readable", contract.GraphQLName, occurrence.field.Name)
+			return nil, nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableField, compileerr.Path(occurrence.field.Name), compileerr.Model(contract.GraphQLName))
 		}
 		if binding.model.Kind != compilerir.FieldRelation {
 			if len(occurrence.selections) != 0 {
-				return nil, nil, fmt.Errorf("P5_SELECT_FIELD: scalar %s.%s has a selection set", contract.GraphQLName, occurrence.field.Name)
+				return nil, nil, shapeError(compileerr.ShapeForbidsSelection, occurrence.field.Name, contract.GraphQLName)
 			}
 			if !selectedScalars[binding.model.ID] {
 				fieldID, idErr := policyFieldID(binding.model.ID)
@@ -237,7 +237,7 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 			continue
 		}
 		if len(occurrence.selections) == 0 {
-			return nil, nil, fmt.Errorf("P5_SELECT_FIELD: relation %s.%s requires a selection set", contract.GraphQLName, occurrence.field.Name)
+			return nil, nil, shapeError(compileerr.ShapeNeedsSelection, occurrence.field.Name, contract.GraphQLName)
 		}
 		relation, target, relationErr := in.relation(modelID, binding.model)
 		if relationErr != nil {
@@ -277,7 +277,7 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 
 func (in *compiler) compileCounts(modelID compilerir.ModelID, set ast.SelectionSet, depth int, stack map[string]bool) ([]readir.Selection, []Slot, error) {
 	if depth > in.request.MaxDepth {
-		return nil, nil, fmt.Errorf("P5_SELECT_LIMIT: selection depth exceeds %d", in.request.MaxDepth)
+		return nil, nil, selectionLimit("MaxDepth", in.request.MaxDepth)
 	}
 	model := in.models[modelID]
 	contract := in.contracts[modelID]
@@ -301,7 +301,7 @@ func (in *compiler) compileCounts(modelID compilerir.ModelID, set ast.SelectionS
 	for _, occurrence := range occurrences {
 		field, ok := byName[occurrence.field.Name]
 		if !ok || field.Relation == nil || field.Relation.Kind != compilerir.RelationHasMany {
-			return nil, nil, fmt.Errorf("P5_SELECT_COUNT: %s.%s is not a readable to-many relation count", contract.GraphQLName, occurrence.field.Name)
+			return nil, nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableField, compileerr.Path(occurrence.field.Name), compileerr.Model(contract.GraphQLName))
 		}
 		relation, target, relationErr := in.relation(modelID, field)
 		if relationErr != nil {
@@ -360,7 +360,7 @@ func (in *compiler) expand(set ast.SelectionSet, stack map[string]bool) ([]field
 						return argumentErr
 					}
 					if ordered[index].field.Name != value.Name || !same {
-						return fmt.Errorf("P5_SELECT_MERGE: response name %q refers to incompatible fields", response)
+						return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentIncompatible)
 					}
 					ordered[index].selections = append(ordered[index].selections, value.SelectionSet...)
 				} else {
@@ -387,10 +387,10 @@ func (in *compiler) expand(set ast.SelectionSet, stack map[string]bool) ([]field
 				}
 				fragment := in.fragments[value.Name]
 				if fragment == nil {
-					return fmt.Errorf("P5_SELECT_FRAGMENT: fragment %q is absent", value.Name)
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentMissing)
 				}
 				if stack[value.Name] {
-					return fmt.Errorf("P5_SELECT_FRAGMENT: fragment cycle through %q", value.Name)
+					return compileerr.New(compileerr.KindFragmentInvalid, compileerr.FragmentCycle)
 				}
 				stack[value.Name] = true
 				err = visit(fragment.SelectionSet)
@@ -399,7 +399,7 @@ func (in *compiler) expand(set ast.SelectionSet, stack map[string]bool) ([]field
 					return err
 				}
 			default:
-				return fmt.Errorf("P5_SELECT_AST: unknown selection node %T", selection)
+				return compileerr.Invariantf("unknown selection node %T", selection)
 			}
 		}
 		return nil
@@ -418,15 +418,15 @@ func included(directives ast.DirectiveList, variables map[string]any) (bool, err
 		}
 		argument := directive.Arguments.ForName("if")
 		if argument == nil || argument.Value == nil {
-			return false, fmt.Errorf("P5_SELECT_DIRECTIVE: @%s requires if", directive.Name)
+			return false, directiveError(directive.Name)
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return false, fmt.Errorf("P5_SELECT_DIRECTIVE: @%s if: %w", directive.Name, err)
+			return false, directiveError(directive.Name)
 		}
 		boolean, ok := value.(bool)
 		if !ok {
-			return false, fmt.Errorf("P5_SELECT_DIRECTIVE: @%s if is not Boolean", directive.Name)
+			return false, directiveError(directive.Name)
 		}
 		if directive.Name == "skip" && boolean {
 			result = false
@@ -440,11 +440,11 @@ func included(directives ast.DirectiveList, variables map[string]any) (bool, err
 
 func (in *compiler) relation(owner compilerir.ModelID, field compilerir.FieldIR) (compilerir.RelationIR, compilerir.ModelID, error) {
 	if field.Relation == nil {
-		return compilerir.RelationIR{}, "", fmt.Errorf("P5_SELECT_RELATION: field %s has no relation metadata", field.ID)
+		return compilerir.RelationIR{}, "", compileerr.Invariantf("field %s has no relation metadata", field.ID)
 	}
 	relation, ok := in.relations[field.Relation.RelationID]
 	if !ok {
-		return compilerir.RelationIR{}, "", fmt.Errorf("P5_SELECT_RELATION: relation %s is absent", field.Relation.RelationID)
+		return compilerir.RelationIR{}, "", compileerr.Invariantf("relation %s is absent", field.Relation.RelationID)
 	}
 	target := relation.TargetModel
 	if relation.TargetModel == owner {
@@ -504,7 +504,7 @@ func (in *compiler) computedDependencies(modelID compilerir.ModelID, fields map[
 		seen[id] = true
 		field, ok := fields[id]
 		if !ok {
-			return nil, nil, fmt.Errorf("P5_SELECT_COMPUTED_DEPENDENCY: %s references absent field %s", computed.Name, id)
+			return nil, nil, compileerr.Invariantf("computed field %s references absent field %s", computed.Name, id)
 		}
 		if field.Kind != compilerir.FieldRelation {
 			access := graphqlextension.DependencyAccess{Kind: graphqlextension.DependencyMaskedScalar, FieldID: id}
@@ -591,30 +591,46 @@ func canonicalFieldArguments(arguments ast.ArgumentList, variables map[string]an
 	seen := map[string]bool{}
 	for _, argument := range arguments {
 		if seen[argument.Name] {
-			return "", fmt.Errorf("P5_SELECT_ARGUMENT: argument %q is duplicated", argument.Name)
+			return "", compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateArgument, compileerr.Path(argument.Name))
 		}
 		seen[argument.Name] = true
 		if argument.Value == nil {
-			return "", fmt.Errorf("P5_SELECT_ARGUMENT: argument %q has no value", argument.Name)
+			return "", compileerr.Invariantf("argument %q has no value", argument.Name)
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
-			return "", fmt.Errorf("P5_SELECT_ARGUMENT: argument %q: %w", argument.Name, err)
+			return "", compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name))
 		}
 		encoded, err := json.Marshal(value)
 		if err != nil {
-			return "", fmt.Errorf("P5_SELECT_ARGUMENT: argument %q cannot be canonicalized", argument.Name)
+			return "", compileerr.Invariantf("argument %q cannot be canonicalized: %w", argument.Name, err)
 		}
 		values = append(values, graphqlextension.CanonicalArgument{Name: argument.Name, Value: encoded})
 	}
-	return graphqlextension.CanonicalArguments(values...)
+	key, err := graphqlextension.CanonicalArguments(values...)
+	if err != nil {
+		return "", compileerr.Invariant(err)
+	}
+	return key, nil
+}
+
+func selectionLimit(name string, maximum int) error {
+	return compileerr.New(compileerr.KindSelectionLimit, compileerr.DetailNone, compileerr.Limit(name, maximum))
+}
+
+func shapeError(detail compileerr.Detail, field, model string) error {
+	return compileerr.New(compileerr.KindSelectionShape, detail, compileerr.Path(field), compileerr.Model(model))
+}
+
+func directiveError(name string) error {
+	return compileerr.New(compileerr.KindDirectiveInvalid, compileerr.DirectiveNeedsBoolean, compileerr.Path(name))
 }
 
 func fixedID(value string) ([16]byte, error) {
 	var result [16]byte
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != len(result) {
-		return result, fmt.Errorf("P5_SELECT_ID: %q is not a canonical 128-bit identity", value)
+		return result, compileerr.Invariantf("%q is not a canonical 128-bit identity", value)
 	}
 	copy(result[:], decoded)
 	return result, nil

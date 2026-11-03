@@ -4,9 +4,8 @@
 package mutation
 
 import (
-	"fmt"
-
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
@@ -205,7 +204,7 @@ type lowerer struct {
 func Lower(root RootInput, limits Limits) (Request, error) {
 	limits = normalizeLimits(limits)
 	if root.Model == (golem.ModelID{}) || root.Operation < Create || root.Operation > DeleteMany {
-		return Request{}, fmt.Errorf("P5_MUTATION_ROOT: model and supported operation are required")
+		return Request{}, compileerr.Invariantf("P5_MUTATION_ROOT: model and supported operation are required")
 	}
 	lower := lowerer{limits: limits}
 	request := Request{operation: rootIR(root.Operation), model: root.Model, selection: append([]readir.Selection(nil), root.Selection...)}
@@ -229,10 +228,10 @@ func Lower(root RootInput, limits Limits) (Request, error) {
 		return Request{}, err
 	}
 	if root.Target != nil && root.Target.Selector().ModelID() != root.Model {
-		return Request{}, fmt.Errorf("P5_MUTATION_TARGET: root selector belongs to another model")
+		return Request{}, compileerr.Invariantf("P5_MUTATION_TARGET: root selector belongs to another model")
 	}
 	if root.Where != nil && root.Where.View().RootModelID() != root.Model {
-		return Request{}, fmt.Errorf("P5_MUTATION_WHERE: root predicate belongs to another model")
+		return Request{}, compileerr.Invariantf("P5_MUTATION_WHERE: root predicate belongs to another model")
 	}
 	var err error
 	switch root.Operation {
@@ -290,7 +289,7 @@ func validateRootShape(root RootInput) error {
 		valid = !hasTarget && hasWhere && !hasData && !hasCreate && !hasUpdate && !hasSelection && !hasExisting && !hasExpectation
 	}
 	if !valid {
-		return fmt.Errorf("P5_MUTATION_ROOT: operation arguments do not match the generated root shape")
+		return compileerr.Invariantf("P5_MUTATION_ROOT: operation arguments do not match the generated root shape")
 	}
 	return nil
 }
@@ -304,10 +303,10 @@ func rootIR(operation RootOperation) mutationir.Operation {
 
 func (lower *lowerer) input(input *Input, expected InputKind, expectedModel golem.ModelID, depth int) (*golem.FrozenMutationInput, error) {
 	if input == nil || input.Model == (golem.ModelID{}) || input.Model != expectedModel || input.Kind != expected {
-		return nil, fmt.Errorf("P5_MUTATION_INPUT: required %d input is absent or has the wrong kind", expected)
+		return nil, compileerr.Invariantf("P5_MUTATION_INPUT: required %d input is absent or has the wrong kind", expected)
 	}
 	if depth > lower.limits.MaxInputDepth {
-		return nil, fmt.Errorf("P5_MUTATION_LIMIT: input depth exceeds %d", lower.limits.MaxInputDepth)
+		return nil, limitError("MaxInputDepth", lower.limits.MaxInputDepth)
 	}
 	if err := lower.consume(1 + len(input.Scalars) + len(input.Relations)); err != nil {
 		return nil, err
@@ -316,33 +315,33 @@ func (lower *lowerer) input(input *Input, expected InputKind, expectedModel gole
 	seenFields := make(map[golem.FieldID]struct{}, len(input.Scalars))
 	for index, scalar := range input.Scalars {
 		if scalar.Field == (golem.FieldID{}) {
-			return nil, fmt.Errorf("P5_MUTATION_FIELD: scalar %d has no stable identity", index)
+			return nil, compileerr.Invariantf("P5_MUTATION_FIELD: scalar %d has no stable identity", index)
 		}
 		if _, duplicate := seenFields[scalar.Field]; duplicate {
-			return nil, fmt.Errorf("P5_MUTATION_FIELD: field operation is duplicated")
+			return nil, compileerr.Invariantf("P5_MUTATION_FIELD: field operation is duplicated")
 		}
 		if !scalarAllowed(expected, scalar.Operation) {
-			return nil, fmt.Errorf("P5_MUTATION_FIELD: operation is invalid for input kind")
+			return nil, compileerr.Invariantf("P5_MUTATION_FIELD: operation is invalid for input kind")
 		}
 		hasValue := scalar.Operation != golem.MutationFieldNull
 		fields[index] = golem.RuntimeMutationFieldValue{Field: scalar.Field, Operation: scalar.Operation, Value: scalar.Value, HasValue: hasValue}
 		seenFields[scalar.Field] = struct{}{}
 	}
 	if expected == UpdateManyInput && len(input.Relations) != 0 {
-		return nil, fmt.Errorf("P5_MUTATION_INPUT: update-many cannot contain relations")
+		return nil, compileerr.New(compileerr.KindNotAllowedHere, compileerr.NotAllowedBatchRelation)
 	}
 	var relations []golem.RuntimeNestedMutationValue
-	for index, relation := range input.Relations {
+	for _, relation := range input.Relations {
 		values, err := lower.relation(input.Model, expected, relation, depth)
 		if err != nil {
-			return nil, fmt.Errorf("P5_MUTATION_RELATION: relation %d: %w", index, err)
+			return nil, err
 		}
 		relations = append(relations, values...)
 	}
 	kind := map[InputKind]golem.RuntimeMutationInputKind{CreateInput: golem.RuntimeMutationCreateInput, UpdateInput: golem.RuntimeMutationUpdateInput, UpdateManyInput: golem.RuntimeMutationUpdateManyInput}[expected]
 	frozen, err := golem.RuntimeMutationInputFromValues(kind, input.Model, fields, relations)
 	if err != nil {
-		return nil, fmt.Errorf("P5_MUTATION_BOUNDARY: %w", err)
+		return nil, compileerr.Invariantf("P5_MUTATION_BOUNDARY: %w", err)
 	}
 	return &frozen, nil
 }
@@ -356,16 +355,16 @@ func scalarAllowed(kind InputKind, operation golem.MutationFieldOperation) bool 
 
 func (lower *lowerer) relation(parent golem.ModelID, kind InputKind, relation Relation, depth int) ([]golem.RuntimeNestedMutationValue, error) {
 	if relation.Field == (golem.FieldID{}) || relation.Relation == (golem.RelationID{}) || relation.TargetModel == (golem.ModelID{}) {
-		return nil, fmt.Errorf("stable relation identities are incomplete")
+		return nil, compileerr.Invariantf("stable relation identities are incomplete")
 	}
 	if relation.Action < golem.MutationRelationCreate || relation.Action > golem.MutationRelationDeleteMany {
-		return nil, fmt.Errorf("nested action is invalid")
+		return nil, compileerr.Invariantf("nested action is invalid")
 	}
 	if kind == CreateInput && relation.Action > golem.MutationRelationConnectOrCreate {
-		return nil, fmt.Errorf("update-only nested action appears in create input")
+		return nil, compileerr.Invariantf("update-only nested action appears in create input")
 	}
 	if len(relation.Entries) > lower.limits.MaxListItems {
-		return nil, fmt.Errorf("list items exceed %d", lower.limits.MaxListItems)
+		return nil, limitError("MaxListItems", lower.limits.MaxListItems)
 	}
 	if err := lower.consume(len(relation.Entries)); err != nil {
 		return nil, err
@@ -376,16 +375,16 @@ func (lower *lowerer) relation(parent golem.ModelID, kind InputKind, relation Re
 		return []golem.RuntimeNestedMutationValue{base}, nil
 	}
 	if len(relation.Entries) == 0 {
-		return nil, fmt.Errorf("nested action has no explicit entries")
+		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone)
 	}
 	perEntry := relation.Action == golem.MutationRelationConnectOrCreate || relation.Action == golem.MutationRelationUpdate ||
 		relation.Action == golem.MutationRelationUpdateMany || relation.Action == golem.MutationRelationUpsert ||
 		relation.Action == golem.MutationRelationDelete || relation.Action == golem.MutationRelationDeleteMany
 	var result []golem.RuntimeNestedMutationValue
-	for index, entry := range relation.Entries {
+	for _, entry := range relation.Entries {
 		branches, err := lower.entry(relation, entry, depth+1)
 		if err != nil {
-			return nil, fmt.Errorf("entry %d: %w", index, err)
+			return nil, err
 		}
 		if perEntry {
 			value := base
@@ -411,7 +410,7 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 	switch relation.Action {
 	case golem.MutationRelationCreate, golem.MutationRelationCreateMany:
 		if entry.Target != nil || entry.Predicate != nil || entry.Update != nil {
-			return nil, fmt.Errorf("create entry contains a target, predicate, or update")
+			return nil, compileerr.Invariantf("create entry contains a target, predicate, or update")
 		}
 		input, err := lowerInput(entry.Create, CreateInput)
 		if err != nil {
@@ -422,21 +421,21 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 		return []golem.RuntimeNestedMutationBranchValue{value}, nil
 	case golem.MutationRelationConnect, golem.MutationRelationDisconnect, golem.MutationRelationSet:
 		if entry.Predicate != nil || entry.Create != nil || entry.Update != nil {
-			return nil, fmt.Errorf("membership entry contains an input or predicate")
+			return nil, compileerr.Invariantf("membership entry contains an input or predicate")
 		}
 		if relation.Action != golem.MutationRelationDisconnect && entry.Target == nil {
-			return nil, fmt.Errorf("membership entry requires a target")
+			return nil, compileerr.Invariantf("membership entry requires a target")
 		}
 		if entry.Target != nil && entry.Target.Selector().ModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("membership target belongs to another model")
+			return nil, compileerr.Invariantf("membership target belongs to another model")
 		}
 		return []golem.RuntimeNestedMutationBranchValue{branch(relation.Action)}, nil
 	case golem.MutationRelationConnectOrCreate:
 		if entry.Target == nil || entry.Predicate != nil || entry.Update != nil {
-			return nil, fmt.Errorf("connect-or-create requires target and create only")
+			return nil, compileerr.Invariantf("connect-or-create requires target and create only")
 		}
 		if entry.Target.Selector().ModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("connect-or-create target belongs to another model")
+			return nil, compileerr.Invariantf("connect-or-create target belongs to another model")
 		}
 		input, err := lowerInput(entry.Create, CreateInput)
 		if err != nil {
@@ -448,10 +447,10 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 		}, nil
 	case golem.MutationRelationUpdate:
 		if entry.Predicate != nil || entry.Create != nil {
-			return nil, fmt.Errorf("update entry contains create or predicate")
+			return nil, compileerr.Invariantf("update entry contains create or predicate")
 		}
 		if entry.Target != nil && entry.Target.Selector().ModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("update target belongs to another model")
+			return nil, compileerr.Invariantf("update target belongs to another model")
 		}
 		input, err := lowerInput(entry.Update, UpdateInput)
 		if err != nil {
@@ -462,10 +461,10 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 		return []golem.RuntimeNestedMutationBranchValue{value}, nil
 	case golem.MutationRelationUpdateMany:
 		if entry.Target != nil || entry.Predicate == nil || entry.Create != nil {
-			return nil, fmt.Errorf("update-many requires predicate and update only")
+			return nil, compileerr.Invariantf("update-many requires predicate and update only")
 		}
 		if entry.Predicate.View().RootModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("update-many predicate belongs to another model")
+			return nil, compileerr.Invariantf("update-many predicate belongs to another model")
 		}
 		input, err := lowerInput(entry.Update, UpdateManyInput)
 		if err != nil {
@@ -476,10 +475,10 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 		return []golem.RuntimeNestedMutationBranchValue{value}, nil
 	case golem.MutationRelationUpsert:
 		if entry.Predicate != nil {
-			return nil, fmt.Errorf("upsert entry cannot contain a predicate")
+			return nil, compileerr.Invariantf("upsert entry cannot contain a predicate")
 		}
 		if entry.Target != nil && entry.Target.Selector().ModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("upsert target belongs to another model")
+			return nil, compileerr.Invariantf("upsert target belongs to another model")
 		}
 		create, err := lowerInput(entry.Create, CreateInput)
 		if err != nil {
@@ -495,29 +494,29 @@ func (lower *lowerer) entry(relation Relation, entry RelationEntry, depth int) (
 		}, nil
 	case golem.MutationRelationDelete:
 		if entry.Predicate != nil || entry.Create != nil || entry.Update != nil {
-			return nil, fmt.Errorf("delete entry contains an input or predicate")
+			return nil, compileerr.Invariantf("delete entry contains an input or predicate")
 		}
 		if entry.Target != nil && entry.Target.Selector().ModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("delete target belongs to another model")
+			return nil, compileerr.Invariantf("delete target belongs to another model")
 		}
 		return []golem.RuntimeNestedMutationBranchValue{branch(golem.MutationRelationDelete)}, nil
 	case golem.MutationRelationDeleteMany:
 		if entry.Target != nil || entry.Predicate == nil || entry.Create != nil || entry.Update != nil {
-			return nil, fmt.Errorf("delete-many requires predicate only")
+			return nil, compileerr.Invariantf("delete-many requires predicate only")
 		}
 		if entry.Predicate.View().RootModelID() != relation.TargetModel {
-			return nil, fmt.Errorf("delete-many predicate belongs to another model")
+			return nil, compileerr.Invariantf("delete-many predicate belongs to another model")
 		}
 		return []golem.RuntimeNestedMutationBranchValue{branch(golem.MutationRelationDeleteMany)}, nil
 	default:
-		return nil, fmt.Errorf("unsupported nested action")
+		return nil, compileerr.Invariantf("unsupported nested action")
 	}
 }
 
 func (lower *lowerer) consume(nodes int) error {
 	lower.nodes += nodes
 	if lower.nodes > lower.limits.MaxInputNodes {
-		return fmt.Errorf("P5_MUTATION_LIMIT: input nodes exceed %d", lower.limits.MaxInputNodes)
+		return limitError("MaxInputNodes", lower.limits.MaxInputNodes)
 	}
 	return nil
 }

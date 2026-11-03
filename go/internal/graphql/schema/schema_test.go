@@ -40,7 +40,8 @@ func TestSocialSDLIsDeterministicAndValid(t *testing.T) {
 	}
 }
 
-func TestSemanticIndexAddsGeneratedSearchQuery(t *testing.T) {
+func semanticRecordCompilation(t *testing.T, limits compilerir.LimitContractIR) compilerir.CompilationIR {
+	t.Helper()
 	compilation := compilerir.CompilationIR{
 		Model: compilerir.ModelIR{Schema: compilerir.SchemaIdentityIR{PackagePath: "example.test/app"}, Models: []compilerir.ModelDeclIR{{
 			ID: "record", Go: compilerir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Record"}, LogicalName: "Record",
@@ -48,7 +49,7 @@ func TestSemanticIndexAddsGeneratedSearchQuery(t *testing.T) {
 			PrimaryKey: &compilerir.KeyIR{ID: "record-primary", Kind: compilerir.KeyPrimary, Fields: []compilerir.FieldID{"record-id"}},
 		}}},
 		Contract: compilerir.ContractIR{GraphQLABIVersion: 5, Models: []compilerir.ModelContractIR{{
-			ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: compilerir.LimitContractIR{DefaultPageSize: 25},
+			ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: limits,
 			Fields: []compilerir.FieldContractIR{{FieldID: "record-id", GraphQLName: "id"}}, Selectors: []compilerir.SelectorContractIR{{KeyID: "record-primary", Kind: compilerir.KeyPrimary, Name: "primary", Fields: []compilerir.FieldID{"record-id"}}},
 		}}},
 	}
@@ -57,13 +58,81 @@ func TestSemanticIndexAddsGeneratedSearchQuery(t *testing.T) {
 	if diagnostics := graphqlextension.AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
 		t.Fatalf("semantic diagnostics = %#v", diagnostics)
 	}
+	return compilation
+}
+
+func TestSemanticIndexAddsGeneratedSearchQuery(t *testing.T) {
+	document, err := Build(semanticRecordCompilation(t, compilerir.LimitContractIR{DefaultPageSize: 25}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "searchRecordsByContent(query: String!, take: Int = 25, where: RecordWhereInput): [Record!]!"
+	if !strings.Contains(document.SDL, want) {
+		t.Fatalf("semantic SDL missing %q:\n%s", want, document.SDL)
+	}
+}
+
+func TestSearchOperationAdvertisesItsTakeDefaultNarrowedByTheModelMaximum(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		limits compilerir.LimitContractIR
+		want   string
+	}{
+		{"page default below every maximum", compilerir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 500}, "take: Int = 25"},
+		{"model take maximum below the page default", compilerir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 500, MaxTake: 10}, "take: Int = 10"},
+		{"model page maximum below the page default", compilerir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 7}, "take: Int = 7"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			document, err := Build(semanticRecordCompilation(t, testCase.limits))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(document.SDL, "searchRecordsByContent(query: String!, "+testCase.want+", where: RecordWhereInput)") {
+				t.Fatalf("search SDL does not advertise %q:\n%s", testCase.want, document.SDL)
+			}
+		})
+	}
+}
+
+func TestRelationListDefaultTakeIsTargetModels(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	compilation := *compiled.Compilation
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	defaults := map[string]int64{}
+	for index := range compilation.Contract.Models {
+		compilation.Contract.Models[index].Limits.DefaultPageSize = uint32(10 * (index + 1))
+		compilation.Contract.Models[index].Limits.MaxPageSize = 1000
+		defaults[compilation.Contract.Models[index].GraphQLName] = int64(10 * (index + 1))
+	}
 	document, err := Build(compilation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "searchRecordsByContent(query: String!, take: Int, where: RecordWhereInput): [Record!]!"
-	if !strings.Contains(document.SDL, want) {
-		t.Fatalf("semantic SDL missing %q:\n%s", want, document.SDL)
+	schema, err := gqlparser.LoadSchema(astSource(document.SDL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for owner := range defaults {
+		for _, definition := range []*ast.Definition{schema.Types[owner], schema.Types["Query"]} {
+			for _, field := range definition.Fields {
+				take := field.Arguments.ForName("take")
+				want, listsModel := defaults[namedType(field.Type)]
+				if take == nil || take.DefaultValue == nil || field.Type.Elem == nil || !listsModel {
+					continue
+				}
+				checked++
+				if got, err := take.DefaultValue.Value(nil); err != nil || got != want {
+					t.Errorf("%s.%s advertises take default %v, want %d (the default of %s)", definition.Name, field.Name, got, want, namedType(field.Type))
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no list field with a take default was checked")
 	}
 }
 
@@ -156,7 +225,7 @@ func TestGraphQLHookOwnedRefusesAuthoredRootWithNoClientCreatePosition(t *testin
 		HookOwnedCreateFields: []compilerir.FieldID{fieldID},
 	}
 	view := modelView{model: model, contract: contract, fields: map[compilerir.FieldID]compilerir.FieldContractIR{fieldID: contract.Fields[0]}, relations: map[compilerir.RelationID]compilerir.RelationIR{}}
-	if _, _, _, err := renderRoots([]modelView{view}, nil); err == nil || !strings.Contains(err.Error(), "P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE") {
+	if _, _, _, err := renderRoots([]modelView{view}, compilerir.CompilationIR{}); err == nil || !strings.Contains(err.Error(), "P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE") {
 		t.Fatalf("all-server-owned create root error = %v", err)
 	}
 
@@ -165,7 +234,7 @@ func TestGraphQLHookOwnedRefusesAuthoredRootWithNoClientCreatePosition(t *testin
 	model.Fields[0].Scalar = &defaulted
 	contract.HookOwnedCreateFields = nil
 	view = modelView{model: model, contract: contract, fields: map[compilerir.FieldID]compilerir.FieldContractIR{fieldID: contract.Fields[0]}, relations: map[compilerir.RelationID]compilerir.RelationIR{}}
-	_, mutation, _, err := renderRoots([]modelView{view}, nil)
+	_, mutation, _, err := renderRoots([]modelView{view}, compilerir.CompilationIR{})
 	if err != nil {
 		t.Fatalf("defaulted create position refused: %v", err)
 	}
@@ -536,16 +605,20 @@ func TestGraphQLNestedInputCompileAndSchemaFixturesExposeOnlyLegalCardinalityOpe
 
 	requireFieldNames(t, requireDefinition(t, parsed, "UUIDUpdateOperationsInput"), "set")
 	requireFieldNames(t, requireDefinition(t, parsed, "NullableUUIDUpdateOperationsInput"), "set", "setNull")
-	requireFieldNames(t, requireDefinition(t, parsed, "BigIntUpdateOperationsInput"), "decrement", "increment", "set")
+	preludeSchema, err := gqlparser.LoadSchema(astSource(prelude()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "BigIntUpdateOperationsInput"), "decrement", "increment", "set")
 	if requireDefinition(t, parsed, "UUIDUpdateOperationsInput").Fields.ForName("setNull") != nil {
 		t.Fatal("non-null UUID update envelope exposes setNull")
 	}
 
-	requireFieldNames(t, requireDefinition(t, parsed, "BooleanFilter"), "equals", "in", "not", "notIn")
-	requireFieldNames(t, requireDefinition(t, parsed, "StringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "lt", "lte", "mode", "not", "notIn", "startsWith")
-	requireFieldNames(t, requireDefinition(t, parsed, "NullableStringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "isNull", "lt", "lte", "mode", "not", "notIn", "startsWith")
-	requireFieldNames(t, requireDefinition(t, parsed, "JSONFilter"), "arrayContains", "arrayEndsWith", "arrayStartsWith", "equals", "gt", "gte", "lt", "lte", "mode", "not", "path", "stringContains", "stringEndsWith", "stringStartsWith")
-	if parsed.Types["BytesListFilter"] != nil || parsed.Types["NullableBytesListFilter"] != nil {
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "BooleanFilter"), "equals", "in", "not", "notIn")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "StringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "lt", "lte", "mode", "not", "notIn", "startsWith")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "NullableStringFilter"), "contains", "endsWith", "equals", "gt", "gte", "in", "isNull", "lt", "lte", "mode", "not", "notIn", "startsWith")
+	requireFieldNames(t, requireDefinition(t, preludeSchema, "JSONFilter"), "arrayContains", "arrayEndsWith", "arrayStartsWith", "equals", "gt", "gte", "lt", "lte", "mode", "not", "path", "stringContains", "stringEndsWith", "stringStartsWith")
+	if preludeSchema.Types["BytesListFilter"] != nil || preludeSchema.Types["NullableBytesListFilter"] != nil {
 		t.Fatal("SDL exposes scalar-list operators for provider-ineligible Bytes elements")
 	}
 

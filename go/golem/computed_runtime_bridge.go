@@ -10,15 +10,11 @@ type RuntimeComputedRelationDependency struct {
 	Occurrence RuntimeOccurrenceID
 }
 
-// RuntimeComputedDependencyRow constructs the least-authority parent row for a
-// computed resolver. Only named scalar dependencies and named relation
-// occurrences are copied. Null/masked state is preserved; private P3 hydration,
-// unrelated selected fields, counts, and response occurrences are excluded.
 func RuntimeComputedDependencyRow(source RuntimeModelRow, scalars []FieldID, relations []RuntimeComputedRelationDependency) (RuntimeModelRow, error) {
 	if source.model == (ModelID{}) {
 		return RuntimeModelRow{}, fmt.Errorf("computed dependency row: source model is absent")
 	}
-	result := RuntimeModelRow{model: source.model, cells: make(map[FieldID]readCell, len(scalars)+len(relations)), counts: map[relationCountKey]readCell{}, occurrences: map[runtimeOccurrenceKey]readCell{}}
+	result := RuntimeModelRow{model: source.model, cells: make(map[FieldID]readCell, len(scalars)+len(relations)), counts: map[relationCountKey]readCell{}, occurrences: map[runtimeOccurrenceKey]readCell{}, identity: source.identity}
 	for _, field := range scalars {
 		if field == (FieldID{}) {
 			return RuntimeModelRow{}, fmt.Errorf("computed dependency row: scalar field is zero")
