@@ -563,6 +563,12 @@ func publicErrorExtensions(failure *golem.Error) map[string]any {
 		extensions["limit"] = string(failure.Limit)
 		extensions["max"] = failure.LimitMax
 	}
+	if failure.Code == golem.CodeCommittedResultUnavailable {
+		extensions["committed"] = true
+	}
+	if failure.Unreadable != 0 {
+		extensions["unreadable"] = failure.Unreadable
+	}
 	return extensions
 }
 

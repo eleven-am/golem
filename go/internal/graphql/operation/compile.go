@@ -104,6 +104,8 @@ type CustomRoot struct {
 	Result       compilerir.GraphQLTypeIR
 	Slots        []selectset.Slot
 	semantic     *semanticCustomRoot
+	model        compilerir.ModelID
+	selection    []readir.Selection
 }
 
 type MutationRoot struct {
@@ -650,16 +652,13 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
 	}
 	result := prepared.ResultType()
-	isObject := result.Kind == compilerir.GraphQLTypeModel || result.Kind == compilerir.GraphQLTypeList && result.Element != nil && result.Element.Kind == compilerir.GraphQLTypeModel
+	modelName := customResultModelName(result)
+	isObject := modelName != ""
 	if isObject && len(root.selections) == 0 || !isObject && len(root.selections) != 0 {
 		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s has an invalid result selection", root.responseName)
 	}
 	compiled := CustomRoot{ResponseName: root.responseName, Name: root.field.Name, Kind: kind, Arguments: arguments, Result: result}
 	if isObject {
-		modelName := result.Name
-		if result.Kind == compilerir.GraphQLTypeList {
-			modelName = result.Element.Name
-		}
 		modelID, ok := c.modelIDByGraphQLName(modelName)
 		if !ok {
 			return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: result model %s is absent", modelName)
@@ -678,8 +677,9 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 			return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, selectErr)
 		}
 		compiled.Slots = selectset.StableSlots(selected.Slots)
+		compiled.model, compiled.selection = modelID, selected.Selections
 		if semantic {
-			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, selected.Selections, arguments)
+			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, arguments)
 			if err != nil {
 				return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
 			}

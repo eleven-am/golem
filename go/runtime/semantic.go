@@ -9,7 +9,6 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
-	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	policyresolve "github.com/eleven-am/golem/go/internal/policy/resolve"
@@ -366,20 +365,14 @@ func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, oper
 // assembleSemanticResults returns the rows still readable after ranking in
 // distance order. Rows deleted or newly unauthorized before hydration vanish
 // from the page rather than failing the request.
-type semanticHydratedRow[M any] struct {
-	row      golem.Row[M]
-	identity golem.FrozenPredicate
-	fields   []golem.FieldID
-}
-
-func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[string]semanticHydratedRow[M]) ([]golem.SemanticResult[M], error) {
+func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[string]golem.Row[M]) ([]golem.SemanticResult[M], error) {
 	result := make([]golem.SemanticResult[M], 0, len(ranks))
 	for _, ranked := range ranks {
 		hydrated, ok := rows[ranked.Key]
 		if !ok {
 			continue
 		}
-		item, err := golem.RuntimeSemanticResultWithIdentity(hydrated.row, ranked.Distance, hydrated.identity, hydrated.fields, ranked.Key)
+		item, err := golem.RuntimeSemanticResult(hydrated, ranked.Distance)
 		if err != nil {
 			return nil, err
 		}
@@ -392,17 +385,13 @@ func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[strin
 // authorized row statement. Ranking already restricted candidacy to the
 // authorized predicate; reading the projected rows through the same plan is
 // what keeps masks, relations, and row policy identical to a plain findMany.
-func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, operation string, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]semanticHydratedRow[M], error) {
+func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, operation string, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
 	chunk := semanticIdentityChunkSize(planned, len(fields), baseArguments)
 	if chunk < 1 {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
 	}
 	var err error
-	result := make(map[string]semanticHydratedRow[M], len(ranks))
-	publicFields := make([]golem.FieldID, len(fields))
-	for index, field := range fields {
-		publicFields[index] = golem.FieldID(field)
-	}
+	result := make(map[string]golem.Row[M], len(ranks))
 	for start := 0; start < len(ranks); {
 		end := start + chunk
 		if end > len(ranks) {
@@ -457,19 +446,7 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			if keyErr != nil {
 				continue
 			}
-			identityCells := make([]readdecode.Cell, len(fields))
-			for index, field := range fields {
-				identityCells[index] = item.values[field]
-			}
-			condition, conditionErr := semanticIdentityCondition(app, planned.ModelID(), fields, identityCells)
-			if conditionErr != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic hydration identity predicate could not be rebuilt", conditionErr)
-			}
-			identity, freezeErr := policybind.FreezeCondition(golem.ModelID(planned.ModelID()), condition, policybind.RegistryEnumLabels(app.registry))
-			if freezeErr != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic hydration identity predicate could not be frozen", freezeErr)
-			}
-			result[key] = semanticHydratedRow[M]{row: row, identity: identity, fields: append([]golem.FieldID(nil), publicFields...)}
+			result[key] = row
 		}
 		if size := end - start; size < chunk {
 			chunk = size

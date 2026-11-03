@@ -67,6 +67,37 @@ drain undelivered events before upgrading, then remove this bundle from
 HistoricalEventBundles". V2 events written under an event schema that has not
 changed are still delivered normally.
 
+**Custom and computed model results are read through the caller.** A custom
+query, custom mutation or computed field that returns model rows used to be
+encoded from the rows the resolver built. Relations and `_count` on them failed
+with `INTERNAL_SERVER_ERROR` (for example `me { team { owner } }`), and what a
+client saw depended on how the resolver obtained its rows and on which fields
+were selected. golem now reads every returned row again by its primary key
+through the caller, with the client's selection, in one read per root and one
+per computed field. Relations, `_count` and computed fields work, read policy
+and field masks are the caller's, and order, duplicates and nested lists are
+kept. Semantic and full-text search results take the same path, so a scalar-only
+selection now costs one read. In queries and computed fields, a row the caller
+cannot read or that was deleted is left out of its list, and a single result that
+is gone is `null`, or `NOT_FOUND` when the field is non-null.
+- A custom mutation never hides its commit. Any failure after the resolver
+  returned (an unreadable or vanished result, a read or encode error) is
+  `COMMITTED_RESULT_UNAVAILABLE` with `extensions.committed: true`, and
+  `reason: RESULT_NOT_READABLE` plus `unreadable: <rows>` when the caller cannot
+  read the result. The root is `null`, a list is never shortened, and a non-null
+  root makes `data` `null`. New: `golem.CodeCommittedResultUnavailable`,
+  `golem.ReasonResultNotReadable`, `graphql.CustomResultError`.
+- A row built by hand with `golem.RuntimeReadRow` has no identity and is now an
+  internal fault in a custom or computed result.
+- A computed field that returns rows of another model (`GraphQLObject[Invite]()`
+  on `Team`) failed to encode before; it works now.
+- A custom root may return a list of lists of rows.
+- The semantic and full-text result transport is gone: `golem.RuntimeSemanticRow`
+  and its hydration helpers, `RuntimeSemanticResultWithIdentity` and
+  `RuntimeFullTextResultWithIdentity` are removed (`RuntimeFullTextResult` and
+  `RuntimeIdentityHydrationRequest` replace them). They were generated-code
+  plumbing, not application API.
+
 ---
 
 ## go/v0.7.3

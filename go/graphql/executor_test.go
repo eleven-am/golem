@@ -20,10 +20,10 @@ import (
 func TestSemanticHydrationChunkReductionUsesReadCapacityErrors(t *testing.T) {
 	overflow := readsql.ValidateStatementComplexity(policyir.ModelID{1}, strings.Repeat("x", 2), 1, readsql.MaxStatementAliases)
 	wrapped := golem.RuntimeReadError(golem.CodeBadUserInput, "findMany", golem.ModelID{}, golem.FieldID{}, "read plan could not be rendered", overflow)
-	if end, retry := reduceSemanticHydrationChunk(2, 10, wrapped); !retry || end != 6 {
+	if end, retry := reduceHydrationChunk(2, 10, wrapped); !retry || end != 6 {
 		t.Fatalf("capacity error reduced to %d retry=%t", end, retry)
 	}
-	if end, retry := reduceSemanticHydrationChunk(2, 10, errors.New("read failed")); retry || end != 10 {
+	if end, retry := reduceHydrationChunk(2, 10, errors.New("read failed")); retry || end != 10 {
 		t.Fatalf("unrelated error reduced to %d retry=%t", end, retry)
 	}
 }

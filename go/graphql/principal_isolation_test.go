@@ -245,16 +245,21 @@ func principalIsolationDocument(fixture computedTestFixture) string {
 
 func principalIsolationRow(t testing.TB, fixture computedTestFixture, principal int) golem.RuntimeModelRow {
 	t.Helper()
+	key := golem.RuntimePresentReadCell(fixture.id, fixture.uuid(1), nil)
 	row, err := golem.RuntimeModelReadRow(fixture.model,
 		// Identical primary/computed cache key across every principal is
 		// intentional; only the masked dependency differs.
-		golem.RuntimePresentReadCell(fixture.id, fixture.uuid(1), nil),
+		key,
 		golem.RuntimePresentReadCell(fixture.name, fmt.Sprintf("principal-%03d", principal), nil),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return row
+	identity, err := golem.RuntimeNewRowIdentity([]golem.FieldID{fixture.id}, []golem.RuntimeReadCell{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return golem.RuntimeModelRowWithIdentity(row, identity)
 }
 
 func principalIsolationName(row golem.RuntimeModelRow, field golem.FieldID) (string, error) {

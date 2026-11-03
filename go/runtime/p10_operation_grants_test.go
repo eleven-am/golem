@@ -96,12 +96,32 @@ func (observer *p10OperationObserver) snapshot(exclude observe.Kind) []p10Operat
 	return result
 }
 
+type p10OperationReports struct {
+	mu     sync.Mutex
+	errors []error
+}
+
+func (reports *p10OperationReports) record(err error) {
+	reports.mu.Lock()
+	defer reports.mu.Unlock()
+	reports.errors = append(reports.errors, err)
+}
+
+func (reports *p10OperationReports) take() []error {
+	reports.mu.Lock()
+	defer reports.mu.Unlock()
+	result := reports.errors
+	reports.errors = nil
+	return result
+}
+
 type p10OperationFixture struct {
 	app      *p10operations.App[p10operations.Principal]
 	server   *p10operations.GraphQLServer
 	database *sqlx.DB
 	gate     *p10CommitGate
 	observer *p10OperationObserver
+	reports  *p10OperationReports
 	alpha    golem.UUID
 	beta     golem.UUID
 }
@@ -154,6 +174,7 @@ func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p
 		t.Fatal(err)
 	}
 	observer := &p10OperationObserver{}
+	reports := &p10OperationReports{}
 	transport, err := events.NewMemoryTransport(events.MemoryLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -181,12 +202,16 @@ func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p
 			principal, ok := ctx.Value(p10OperationPrincipalKey{}).(p10operations.Principal)
 			return principal, ok
 		},
-		ReportInternalError: func(_ context.Context, err error) { t.Logf("reported GraphQL error: %v", err) },
+		Limits: p10operations.GraphQLLimits{MaxComplexity: 100_000, MaxPageSize: 50},
+		ReportInternalError: func(_ context.Context, err error) {
+			t.Logf("reported GraphQL error: %v", err)
+			reports.record(err)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &p10OperationFixture{app: application, server: server, database: database, gate: gate, observer: observer, alpha: p10OperationID(t, 1), beta: p10OperationID(t, 2)}
+	fixture := &p10OperationFixture{app: application, server: server, database: database, gate: gate, observer: observer, reports: reports, alpha: p10OperationID(t, 1), beta: p10OperationID(t, 2)}
 	system := application.System()
 	for owner, team := range map[string]golem.UUID{"alpha": fixture.alpha, "beta": fixture.beta} {
 		if _, err := system.Teams.Create(ctx, p10operations.Teams.Create(p10operations.Teams.ID.Create(team), p10operations.Teams.Owner.Create(owner))); err != nil {

@@ -99,9 +99,9 @@ func bindCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, 
 				}
 				value, ok := dispatched.(R)
 				if !ok && dispatched != nil {
-					return nil, fmt.Errorf("GraphQL custom resolver result type does not match generated binding")
+					return nil, &CustomResultError{cause: fmt.Errorf("GraphQL custom resolver result type does not match generated binding")}
 				}
-				return encode(value)
+				return encodeCustomResult(encode, value)
 			}
 			if provider, ok := rawCaller.(interface{ GolemGraphQLCustomCallerValue() any }); ok {
 				rawCaller = provider.GolemGraphQLCustomCallerValue()
@@ -118,10 +118,24 @@ func bindCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, 
 			if err != nil {
 				return nil, err
 			}
-			return encode(value)
+			return encodeCustomResult(encode, value)
 		},
 	}, nil
 }
+
+func encodeCustomResult[R any](encode CustomResultEncoder[R], value R) (any, error) {
+	encoded, err := encode(value)
+	if err != nil {
+		return nil, &CustomResultError{cause: err}
+	}
+	return encoded, nil
+}
+
+type CustomResultError struct{ cause error }
+
+func (failure *CustomResultError) Error() string { return failure.cause.Error() }
+
+func (failure *CustomResultError) Unwrap() error { return failure.cause }
 
 type customMutationDispatcher interface {
 	GolemGraphQLDispatchCustomMutation(context.Context, any, func(context.Context, any) (any, error)) (any, error)
@@ -224,7 +238,7 @@ func (execution *CallerCustomExecution) Execute(ctx context.Context, operation C
 	}
 	finished, err := execution.registry.contract.Finish(request, value)
 	if err != nil {
-		return CustomResult{}, err
+		return CustomResult{}, &CustomResultError{cause: err}
 	}
 	return CustomResult{value: finished.Value()}, nil
 }

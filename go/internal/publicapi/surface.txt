@@ -1925,6 +1925,7 @@ golem.CausationID type [16]uint8
 golem.Check func[M any](string, SchemaPredicate[M]) ModelOption[M]
 golem.Coalesce func[M any, V any](...SchemaValue[M, V]) SchemaExpr[M, V]
 golem.CodeBadUserInput const ErrorCode = "BAD_USER_INPUT"
+golem.CodeCommittedResultUnavailable const ErrorCode = "COMMITTED_RESULT_UNAVAILABLE"
 golem.CodeConflict const ErrorCode = "CONFLICT"
 golem.CodeForbidden const ErrorCode = "FORBIDDEN"
 golem.CodeLimitExceeded const ErrorCode = "LIMIT_EXCEEDED"
@@ -1982,6 +1983,7 @@ golem.Error.Message field string
 golem.Error.Model field ModelID
 golem.Error.Operation field string
 golem.Error.Reason field Reason
+golem.Error.Unreadable field int
 golem.ErrorCode comparable
 golem.ErrorCode type string
 golem.EventAction comparable
@@ -2758,6 +2760,7 @@ golem.ReasonInvalidValue const Reason = "INVALID_VALUE"
 golem.ReasonLimitExceeded const Reason = "LIMIT_EXCEEDED"
 golem.ReasonNotGranted const Reason = "NOT_GRANTED"
 golem.ReasonPolicyInvalid const Reason = "POLICY_INVALID"
+golem.ReasonResultNotReadable const Reason = "RESULT_NOT_READABLE"
 golem.ReasonValuePrecision const Reason = "VALUE_PRECISION"
 golem.ReasonValueRange const Reason = "VALUE_RANGE"
 golem.ReasonValueTooLong const Reason = "VALUE_TOO_LONG"
@@ -2816,6 +2819,7 @@ golem.RuntimeAnalyticsTermKey func(FrozenAnalyticsTerm) string
 golem.RuntimeBatchResult func(int64) BatchResult
 golem.RuntimeCDCModelRow func(ModelID, ...RuntimeReadCell) (RuntimeModelRow, error)
 golem.RuntimeCDCModelRowInventory func(RuntimeModelRow) ([]FieldID, bool)
+golem.RuntimeCommittedResultError func(string, Reason, int, Limit, int, string, error) error
 golem.RuntimeComputedDependencyRow func(RuntimeModelRow, []FieldID, []RuntimeComputedRelationDependency) (RuntimeModelRow, error)
 golem.RuntimeComputedRelationDependency comparable
 golem.RuntimeComputedRelationDependency type struct
@@ -2835,6 +2839,7 @@ golem.RuntimeDeleteManyMutationHookRequest func(ModelID, FrozenPredicate) Runtim
 golem.RuntimeDeleteManyMutationHookResult func(ModelID, int64) RuntimeMutationHookResult
 golem.RuntimeDeleteMutationHookRequest func(ModelID, FrozenMutationTarget) RuntimeMutationHookRequest
 golem.RuntimeDeleteMutationHookResult func(ModelID, RuntimeModelRow) RuntimeMutationHookResult
+golem.RuntimeEraseRows func(any) (any, bool)
 golem.RuntimeFindFirstHookRequest func[M any]([]ReadOption[M]) *FindFirstHookRequest[M]
 golem.RuntimeFindFirstHookResult func[M any](Row[M], bool) FindFirstHookResult[M]
 golem.RuntimeFindManyHookRequest func[M any]([]ReadOption[M]) *FindManyHookRequest[M]
@@ -2855,7 +2860,7 @@ golem.RuntimeFreezeScopedQuery func[M any](ScopedQuery[M]) (FrozenScopedQuery, e
 golem.RuntimeFreezeUpdateInput func[M any](UpdateInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeUpdateManyInput func[M any](UpdateManyInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeVersionedMutationRequest func(RuntimeVersionedMutationRequestInput) (RuntimeMutationRequest, error)
-golem.RuntimeFullTextResultWithIdentity func[M any](Row[M], float64, FrozenPredicate, []FieldID, string) (FullTextResult[M], error)
+golem.RuntimeFullTextResult func[M any](Row[M], float64) (FullTextResult[M], error)
 golem.RuntimeFullTextRowFromResult func[M any](FullTextResult[M]) (RuntimeModelRow, error)
 golem.RuntimeGroupAnd const uint8 = 2
 golem.RuntimeGroupCompare const uint8 = 1
@@ -2890,6 +2895,7 @@ golem.RuntimeHookMetadata unkeyed literal {Model, Operation, Phase}
 golem.RuntimeHookMetadata.Model field ModelID
 golem.RuntimeHookMetadata.Operation field HookOperation
 golem.RuntimeHookMetadata.Phase field HookPhase
+golem.RuntimeIdentityHydrationRequest func(FrozenReadRequest, []RuntimeRowIdentity, ...FrozenPredicate) (FrozenReadRequest, error)
 golem.RuntimeInvokeHooks func[A any](context.Context, ApplicationBindings[A], ModelID, HookOperation, HookPhase, any) error
 golem.RuntimeInvokeMutationBeforeHooks func[A any](context.Context, ApplicationBindings[A], RuntimeMutationHookRequest, func(RuntimeMutationHookRequest) error) (RuntimeMutationHookRequest, error)
 golem.RuntimeInvokeMutationResultHooks func[A any](context.Context, ApplicationBindings[A], RuntimeMutationHookResult, HookPhase) error
@@ -2905,7 +2911,6 @@ golem.RuntimeModelRow type struct
 golem.RuntimeModelRowFromTyped func[M any](Row[M]) RuntimeModelRow
 golem.RuntimeModelRowIdentity func(RuntimeModelRow) RuntimeRowIdentity
 golem.RuntimeModelRowWithIdentity func(RuntimeModelRow, RuntimeRowIdentity) RuntimeModelRow
-golem.RuntimeModelRowWithSemanticIdentity func(RuntimeModelRow, string) RuntimeModelRow
 golem.RuntimeMutationCountResult func(int64) (RuntimeMutationResult, error)
 golem.RuntimeMutationCreate const RuntimeMutationOperation = 1
 golem.RuntimeMutationCreateInput const RuntimeMutationInputKind = 1
@@ -3079,19 +3084,11 @@ golem.RuntimeSelectorValue type struct
 golem.RuntimeSelectorValue unkeyed literal {Field, Value}
 golem.RuntimeSelectorValue.Field field FieldID
 golem.RuntimeSelectorValue.Value field any
-golem.RuntimeSemanticHydratedIdentity func(RuntimeModelRow) (RuntimeSemanticIdentityToken, bool)
-golem.RuntimeSemanticHydrationRequest func(FrozenReadRequest, []RuntimeSemanticRow, ...FrozenPredicate) (FrozenReadRequest, error)
-golem.RuntimeSemanticIdentityFields func(FrozenReadRequest) []FieldID
 golem.RuntimeSemanticIdentityToken comparable
 golem.RuntimeSemanticIdentityToken type struct
-golem.RuntimeSemanticPublicRow func(RuntimeSemanticRow) RuntimeModelRow
 golem.RuntimeSemanticRecordKey func[M any](Row[M], []FieldID) (string, error)
 golem.RuntimeSemanticResult func[M any](Row[M], float64) (SemanticResult[M], error)
-golem.RuntimeSemanticResultWithIdentity func[M any](Row[M], float64, FrozenPredicate, []FieldID, string) (SemanticResult[M], error)
-golem.RuntimeSemanticRow type struct
 golem.RuntimeSemanticRowFromResult func[M any](SemanticResult[M]) (RuntimeModelRow, error)
-golem.RuntimeSemanticRowIdentity func(RuntimeSemanticRow) (RuntimeSemanticIdentityToken, []FieldID)
-golem.RuntimeSemanticTransport func(RuntimeModelRow) (RuntimeSemanticRow, bool)
 golem.RuntimeTextSearchReadOptions func[M any]([]Predicate[M], ...Projection[M]) ([]ReadOption[M], error)
 golem.RuntimeToManyOccurrenceCell func(FieldID, RuntimeOccurrenceID, []RuntimeModelRow) RuntimeOccurrenceCell
 golem.RuntimeToManyReadCell func(FieldID, []RuntimeModelRow) RuntimeReadCell
@@ -3410,6 +3407,8 @@ graphql.(*CustomArgument).Name func() string
 graphql.(*CustomArgument).Value func() any
 graphql.(*CustomRegistry).ForCaller func(CustomCallerCapability) (*CallerCustomExecution, error)
 graphql.(*CustomResult).Value func() any
+graphql.(*CustomResultError).Error func() string
+graphql.(*CustomResultError).Unwrap func() error
 graphql.(*Server).ContractFingerprint func() golem.SchemaDigest
 graphql.(*Server).Execute func(context.Context, P, Request) Response
 graphql.(*Server).Handler func() net/http.Handler
@@ -3496,6 +3495,8 @@ graphql.CustomRegistry type struct
 graphql.CustomResult comparable
 graphql.CustomResult type struct
 graphql.CustomResultEncoder[R any] type func(R) (any, error)
+graphql.CustomResultError comparable
+graphql.CustomResultError type struct
 graphql.Error type struct
 graphql.Error unkeyed literal {Message, Path, Extensions}
 graphql.Error.Extensions field map[string]any tag "json:\"extensions\""

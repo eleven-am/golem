@@ -82,6 +82,7 @@ type generatedResponseStream[P any] struct {
 	executor *generatedExecutor[P]
 	root     graphqloperation.EventRoot
 	source   EventStream
+	hydrator resultHydrator
 	once     sync.Once
 	closeErr error
 }
@@ -106,7 +107,7 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 	if err != nil {
 		return nil, err
 	}
-	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source}, nil
+	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source, hydrator: resultHydrator{compiler: executor.compiler, caller: caller}}, nil
 }
 
 func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, error) {
@@ -122,6 +123,7 @@ func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, e
 		return Response{}, err
 	}
 	defer computed.close()
+	computed.hydrator = &stream.hydrator
 	var entity *golem.RuntimeModelRow
 	if event.entityPresent {
 		entity = &event.entity

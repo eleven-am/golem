@@ -1172,6 +1172,63 @@ database. It may open `caller.Transaction` itself. A custom mutation can be
 granted writes the caller cannot perform directly; see
 [Operations that own a write](#operations-that-own-a-write).
 
+#### What a custom operation returns
+
+A custom query, a custom mutation or a computed field may return model rows
+(`golem.Row[Invite]`, `[]golem.Row[Invite]`, lists of lists). golem never
+encodes the rows your resolver built. It reads every returned row again through
+the caller, in one read per root (per computed field, for computed fields),
+with the selection the client asked for. The client therefore sees exactly what
+the generated roots would show it:
+
+- Relations, `_count` and computed fields work under a custom root as they do
+  under `invites` or `teams`.
+- Read policy and field masks are the caller's. A row you read with `System`
+  inside the resolver, or one the caller cannot read, is not disclosed, and a
+  field masked for the caller is `null`, whichever fields the client selected.
+- Order, duplicates and nested list shape are kept.
+- A row built by hand (`golem.RuntimeReadRow`) has no identity to read again
+  and is an internal fault: `INTERNAL_SERVER_ERROR`, reported through
+  `ReportInternalError`.
+
+For queries and computed fields, a row that was deleted before the read or that
+the caller cannot read is left out of its list. A single result that is gone is
+`null` when the field is nullable and `NOT_FOUND` when it is not.
+
+A custom mutation has already committed when its resolver returns, so golem
+never hides that. If anything fails after the resolver returned, because the
+returned row cannot be read by the caller, vanished, or could not be read or
+encoded, the root fails with `COMMITTED_RESULT_UNAVAILABLE`:
+
+```json
+{
+  "message": "custom mutation submitInvite committed, but its result is unavailable",
+  "path": ["submitInvite"],
+  "extensions": {
+    "code": "COMMITTED_RESULT_UNAVAILABLE",
+    "reason": "RESULT_NOT_READABLE",
+    "committed": true,
+    "unreadable": 1
+  }
+}
+```
+
+`committed: true` is always present. `reason` is `RESULT_NOT_READABLE`, with the
+number of rows in `unreadable`, when the caller cannot read the result, and
+`LIMIT_EXCEEDED` when a list passed its limit. It is absent for any other
+failure, which is also reported through `ReportInternalError`. A list is never
+shortened: if one row is unreadable the whole root is `null` with this error. A
+nullable root is `null` and later mutation roots in the same document still
+run; a non-null root makes `data` `null` and later roots do not run. A resolver
+that returns `null` from a nullable root is not an error. An error returned by
+the resolver itself is presented as before, because nothing committed.
+
+A resolver that creates a row its caller is not allowed to read, for example
+through a `golem.Within` grant, still gets a `golem.Row` back with no readable
+cells. It carries the new row's primary key privately, so golem can report it as
+`RESULT_NOT_READABLE` instead of treating it as a fault. A create without a
+projection returns a row with no key and cannot be returned as a model result.
+
 To run a custom mutation from Go, call the generated `Mutate`:
 
 ```go

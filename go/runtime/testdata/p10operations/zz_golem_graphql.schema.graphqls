@@ -207,6 +207,9 @@ type Team {
   id: UUID
   owner: String
   invites(where: InviteWhereInput, orderBy: [InviteOrderByInput!], cursor: InviteWhereUniqueInput, distinct: [InviteScalarField!], skip: Int, take: Int = 50): [Invite!]
+  newestInvite: Invite
+  openInvites: [Invite!]!
+  pinnedInvite: Invite!
   _count: TeamCountOutput
 }
 
@@ -329,7 +332,11 @@ type Query {
   invites(where: InviteWhereInput, orderBy: [InviteOrderByInput!], cursor: InviteWhereUniqueInput, distinct: [InviteScalarField!], skip: Int, take: Int = 50): [Invite!]!
   team(where: TeamWhereUniqueInput!): Team
   teams(where: TeamWhereInput, orderBy: [TeamOrderByInput!], cursor: TeamWhereUniqueInput, distinct: [TeamScalarField!], skip: Int, take: Int = 50): [Team!]!
+  firstInvite(owner: String!): Invite
+  groupedInvites(owner: String!): [[Invite!]!]!
+  requiredInvite(owner: String!): Invite!
   searchInvites(owner: String!): [Invite!]!
+  searchTeams(owner: String!): [Team!]!
 }
 
 type Mutation {
@@ -350,6 +357,12 @@ type Mutation {
   nestedTeamInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
   renewInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
   reviewInvite(alsoEmail: Boolean!, id: UUID!): String!
+  submitBlank(email: String!, id: UUID!, owner: String!, teamID: UUID!): Invite!
+  submitInvite(email: String!, id: UUID!, owner: String!, teamID: UUID!): Invite!
+  submitInviteMaybe(email: String!, id: UUID!, owner: String!, teamID: UUID!): Invite
+  submitInvites(first: UUID!, foreign: String!, second: UUID!, teamID: UUID!, third: UUID!): [Invite!]!
+  submitNested(email: String!, id: UUID!, owner: String!, teamID: UUID!): Invite!
+  submitTeam(id: UUID!, owner: String!): Team!
   transactionalInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
 }
 

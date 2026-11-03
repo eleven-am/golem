@@ -164,11 +164,10 @@ type System[P, A any] struct {
 // PreparedRead is an opaque, schema-bound request. Later P3 planning and
 // execution stages consume the private IR without reopening public identities.
 type PreparedRead struct {
-	request          readir.Request
-	policies         *policyruntime.Set
-	system           bool
-	executor         *executionBinding
-	semanticIdentity []golem.FieldID
+	request  readir.Request
+	policies *policyruntime.Set
+	system   bool
+	executor *executionBinding
 }
 
 func (prepared PreparedRead) ModelID() golem.ModelID {
@@ -561,7 +560,7 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 	if _, err := caller.executor.queryerFor(caller.app.database); err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
 	}
-	return PreparedRead{request: bound, policies: caller.policies, executor: caller.executor, semanticIdentity: golem.RuntimeSemanticIdentityFields(request)}, nil
+	return PreparedRead{request: bound, policies: caller.policies, executor: caller.executor}, nil
 }
 
 func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRead, error) {
@@ -578,7 +577,7 @@ func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRea
 	if _, err := system.executor.queryerFor(system.app.database); err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
 	}
-	return PreparedRead{request: bound, system: true, executor: system.executor, semanticIdentity: golem.RuntimeSemanticIdentityFields(request)}, nil
+	return PreparedRead{request: bound, system: true, executor: system.executor}, nil
 }
 
 // CallerExecuteFrozenRead is the model-erased P3 execution seam used by the
@@ -657,17 +656,6 @@ func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared 
 	rows := make([]golem.RuntimeModelRow, len(executed))
 	for index := range executed {
 		rows[index] = executed[index].row
-		if len(prepared.semanticIdentity) != 0 {
-			fields := make([]policyir.FieldID, len(prepared.semanticIdentity))
-			for fieldIndex, field := range prepared.semanticIdentity {
-				fields[fieldIndex] = policyir.FieldID(field)
-			}
-			key, keyErr := semanticHydrationRecordKey(executed[index].values, fields)
-			if keyErr != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "semantic hydration identity is unavailable", keyErr)
-			}
-			rows[index] = golem.RuntimeModelRowWithSemanticIdentity(rows[index], key)
-		}
 	}
 	return rows, nil
 }

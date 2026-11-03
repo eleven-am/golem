@@ -59,13 +59,11 @@ func (cell RuntimeReadCell) FieldID() FieldID { return cell.field }
 // before a generated model type is known. It remains model-ID checked when a
 // generated accessor turns it into Row[M].
 type RuntimeModelRow struct {
-	model             ModelID
-	cells             map[FieldID]readCell
-	counts            map[relationCountKey]readCell
-	occurrences       map[runtimeOccurrenceKey]readCell
-	semanticIdentity  RuntimeSemanticIdentityToken
-	identity          *rowIdentity
-	semanticTransport *RuntimeSemanticRow
+	model       ModelID
+	cells       map[FieldID]readCell
+	counts      map[relationCountKey]readCell
+	occurrences map[runtimeOccurrenceKey]readCell
+	identity    *rowIdentity
 	// cdcExact is set only by RuntimeCDCModelRow. Ordinary public/authorized
 	// rows deliberately cannot be reinterpreted as exact database images:
 	// ReadNull intentionally conflates stored NULL with authorization masking.
@@ -343,15 +341,7 @@ func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccur
 }
 
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	result := RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), semanticIdentity: row.semanticIdentity, identity: row.identity, cdcExact: row.cdcExact}
-	if row.semanticTransport != nil {
-		transport := *row.semanticTransport
-		transport.row = cloneRuntimeModelRow(transport.row)
-		transport.identity = cloneFrozenPredicate(transport.identity)
-		transport.identityFields = append([]FieldID(nil), transport.identityFields...)
-		result.semanticTransport = &transport
-	}
-	return result
+	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), identity: row.identity, cdcExact: row.cdcExact}
 }
 
 func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
@@ -1088,6 +1078,8 @@ const (
 	CodeForbidden       ErrorCode = "FORBIDDEN"
 	CodeConflict        ErrorCode = "CONFLICT"
 	CodeLimitExceeded   ErrorCode = "LIMIT_EXCEEDED"
+
+	CodeCommittedResultUnavailable ErrorCode = "COMMITTED_RESULT_UNAVAILABLE"
 )
 
 func (code ErrorCode) Error() string { return string(code) }
@@ -1104,6 +1096,7 @@ const (
 	ReasonFieldNotReadable      Reason = "FIELD_NOT_READABLE"
 	ReasonAuthorizationUnproven Reason = "AUTHORIZATION_UNPROVEN"
 	ReasonPolicyInvalid         Reason = "POLICY_INVALID"
+	ReasonResultNotReadable     Reason = "RESULT_NOT_READABLE"
 )
 
 func (reason Reason) Error() string { return string(reason) }
@@ -1129,15 +1122,16 @@ const (
 // Error is the transport-neutral public operation error. Cause is retained for
 // trusted logs through Unwrap but is never part of Error's public text.
 type Error struct {
-	Code      ErrorCode
-	Reason    Reason
-	Operation string
-	Model     ModelID
-	Field     FieldID
-	Limit     Limit
-	LimitMax  int
-	Message   string
-	cause     error
+	Code       ErrorCode
+	Reason     Reason
+	Operation  string
+	Model      ModelID
+	Field      FieldID
+	Limit      Limit
+	LimitMax   int
+	Message    string
+	Unreadable int
+	cause      error
 }
 
 // RuntimeReadError is the narrow trusted-runtime constructor for a stable
@@ -1161,6 +1155,10 @@ func RuntimeOperationErrorWithReason(code ErrorCode, reason Reason, operation st
 	failure := RuntimeOperationError(code, operation, model, field, message, cause).(*Error)
 	failure.Reason = reason
 	return failure
+}
+
+func RuntimeCommittedResultError(operation string, reason Reason, unreadable int, limit Limit, limitMax int, message string, cause error) error {
+	return &Error{Code: CodeCommittedResultUnavailable, Reason: reason, Operation: operation, Limit: limit, LimitMax: limitMax, Unreadable: unreadable, Message: message, cause: cause}
 }
 
 func RuntimeLimitError(operation string, model ModelID, limit Limit, maximum int, message string, cause error) error {
@@ -1254,19 +1252,18 @@ func (selection FrozenReadSelection) Request() (FrozenReadRequest, bool) {
 // FrozenReadRequest is a schema-agnostic immutable read request. The P3 binder
 // validates every identity against the active fingerprinted schema.
 type FrozenReadRequest struct {
-	operation        ReadOperation
-	model            ModelID
-	where            *FrozenPredicate
-	orders           []FrozenReadOrder
-	take             *int
-	skip             *int
-	distinct         []FieldID
-	selection        []FrozenReadSelection
-	projection       ReadProjectionMode
-	omit             []FieldID
-	selector         *FrozenUniqueSelector
-	cursor           *FrozenReadCursor
-	semanticIdentity []FieldID
+	operation  ReadOperation
+	model      ModelID
+	where      *FrozenPredicate
+	orders     []FrozenReadOrder
+	take       *int
+	skip       *int
+	distinct   []FieldID
+	selection  []FrozenReadSelection
+	projection ReadProjectionMode
+	omit       []FieldID
+	selector   *FrozenUniqueSelector
+	cursor     *FrozenReadCursor
 }
 
 type FrozenUniqueSelector struct {
@@ -1352,7 +1349,6 @@ func (request FrozenReadRequest) clone() FrozenReadRequest {
 	result.distinct = request.Distinct()
 	result.selection = request.Selection()
 	result.omit = request.Omitted()
-	result.semanticIdentity = append([]FieldID(nil), request.semanticIdentity...)
 	if request.take != nil {
 		value := *request.take
 		result.take = &value

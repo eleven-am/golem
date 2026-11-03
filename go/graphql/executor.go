@@ -11,7 +11,6 @@ import (
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
-	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -111,6 +110,8 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
 	defer computed.close()
+	hydrator := resultHydrator{compiler: executor.compiler, caller: caller}
+	computed.hydrator = &hydrator
 	var customCaller *CallerCustomExecution
 	if len(compiled.Custom) != 0 {
 		capability, ok := caller.(CustomCallerCapability)
@@ -135,7 +136,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		if !ok && len(compiled.Mutations) != 0 {
 			return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 		}
-		return executor.executeMutationOrder(ctx, compiled, mutationCaller, customCaller, computed)
+		return executor.executeMutationOrder(ctx, compiled, hydrator, mutationCaller, customCaller, computed)
 	}
 	data := make(map[string]any, len(compiled.Reads))
 	response := Response{Data: data}
@@ -166,41 +167,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 				response.Errors = append(response.Errors, PresentError(ctx, executeErr, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil
 			} else {
-				value := result.Value()
-				hydration, semantic, hydrateErr := executor.compiler.PrepareSemanticCustomHydration(root, value)
-				if hydrateErr == nil && semantic {
-					value = []any{}
-					if hydration.Len() != 0 {
-						rows := make([]golem.RuntimeModelRow, 0, hydration.Len())
-						chunk := hydration.Len()
-						for start := 0; start < hydration.Len() && hydrateErr == nil; {
-							end := start + chunk
-							if end > hydration.Len() {
-								end = hydration.Len()
-							}
-							var request golem.FrozenReadRequest
-							request, hydrateErr = executor.compiler.SemanticCustomHydrationRequest(hydration, start, end)
-							if hydrateErr != nil {
-								break
-							}
-							var batch []golem.RuntimeModelRow
-							batch, hydrateErr = caller.ExecuteFrozenRead(customContext, request)
-							if hydrateErr != nil {
-								reduced, retry := reduceSemanticHydrationChunk(start, end, hydrateErr)
-								if retry {
-									chunk, hydrateErr = reduced-start, nil
-									continue
-								}
-								break
-							}
-							rows = append(rows, batch...)
-							start = end
-						}
-						if hydrateErr == nil {
-							value, hydrateErr = executor.compiler.FinishSemanticCustomHydration(root, hydration.Order(), rows)
-						}
-					}
-				}
+				value, _, hydrateErr := hydrator.root(customContext, root, result.Value())
 				if hydrateErr != nil {
 					finishGraphQLChild(observation, hydrateErr)
 					response.Errors = append(response.Errors, PresentError(ctx, hydrateErr, []any{root.ResponseName}, executor.report))
@@ -246,14 +213,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	return response
 }
 
-func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {
-	if end-start <= 1 || !readsql.StatementCapacityExceeded(err) {
-		return end, false
-	}
-	return start + (end-start)/2, true
-}
-
-func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
+func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, hydrator resultHydrator, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
 	response := Response{Data: map[string]any{}}
 	data := response.Data.(map[string]any)
 	for _, reference := range compiled.Order {
@@ -267,39 +227,50 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 				return response
 			}
 			encoded, failures, encodeErr := executor.compiler.EncodeMutationWithComputedPartial(ctx, root, result, computed.resolve)
+			if encodeErr == nil {
+				encodeErr = propagatedComputedFailure(failures)
+			}
 			if encodeErr != nil {
-				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
+				response.Errors = append(response.Errors, presentCommittedResult(ctx, "mutation "+root.ResponseName, encodeErr, []any{root.ResponseName}, executor.report))
 				response.Data = nil
 				return response
 			}
 			data[root.ResponseName] = encoded
 			response.Errors = appendComputedFailures(ctx, response.Errors, failures, executor.report)
-			if computedFailurePropagatesToRoot(failures) {
-				response.Data = nil
-				return response
-			}
 		case graphqloperation.RootCustomMutation:
 			root := compiled.Custom[reference.Index]
 			customContext, observation := observeexec.BeginChild(ctx, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.PhaseFinish)
+			path := []any{root.ResponseName}
 			result, err := custom.Execute(customContext, CustomMutation, root.Name, root.Arguments)
-			if err != nil {
-				finishGraphQLChild(observation, err)
-				response.Errors = append(response.Errors, PresentError(ctx, err, []any{root.ResponseName}, executor.report))
-				data[root.ResponseName] = nil
-				if !root.Result.Nullable {
-					response.Data = nil
-					return response
+			var encoded any
+			var failures []graphqloperation.ComputedFieldFailure
+			var resultFailure *CustomResultError
+			var presented Error
+			if err != nil && !errors.As(err, &resultFailure) {
+				presented = PresentError(ctx, err, path, executor.report)
+			} else {
+				computed.invalidateAfterWrite()
+				if err == nil {
+					var value any
+					var absent int
+					value, absent, err = hydrator.root(customContext, root, result.Value())
+					if err == nil && absent != 0 {
+						err = &unreadableResult{count: absent}
+					}
+					if err == nil {
+						encoded, failures, err = executor.compiler.EncodeCustomWithComputedPartial(customContext, root, value, computed.resolve)
+						if err == nil {
+							err = propagatedComputedFailure(failures)
+						}
+					}
 				}
-				continue
+				if err != nil {
+					presented = presentCommittedResult(ctx, "custom mutation "+root.Name, err, path, executor.report)
+				}
 			}
-			// A successful custom mutation may have committed writes even when its
-			// result later fails GraphQL encoding. Invalidate before encoding so
-			// subsequent serial mutation roots cannot observe stale loader state.
-			computed.invalidateAfterWrite()
-			encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, result.Value(), computed.resolve)
-			finishGraphQLChild(observation, encodeErr)
-			if encodeErr != nil {
-				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
+			finishGraphQLChild(observation, err)
+			if err != nil {
+				response.Errors = append(response.Errors, presented)
 				data[root.ResponseName] = nil
 				if !root.Result.Nullable {
 					response.Data = nil
@@ -309,22 +280,18 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 			}
 			data[root.ResponseName] = encoded
 			response.Errors = appendComputedFailures(ctx, response.Errors, failures, executor.report)
-			if computedFailurePropagatesToRoot(failures) {
-				response.Data = nil
-				return response
-			}
 		}
 	}
 	return response
 }
 
-func computedFailurePropagatesToRoot(failures []graphqloperation.ComputedFieldFailure) bool {
+func propagatedComputedFailure(failures []graphqloperation.ComputedFieldFailure) error {
 	for _, failure := range failures {
 		if failure.PropagatesToRoot {
-			return true
+			return failure.Err
 		}
 	}
-	return false
+	return nil
 }
 
 func appendComputedFailures(ctx context.Context, target []Error, failures []graphqloperation.ComputedFieldFailure, report func(context.Context, error)) []Error {

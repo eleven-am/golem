@@ -995,7 +995,21 @@ func materializeNestedMutationProjection[P, A, M any](ctx context.Context, app *
 	}
 	if len(rows) == 0 {
 		// An authorized mutation does not imply caller read reach for its result.
-		return golem.RuntimeReadRow(descriptor)
+		identity, err := mutationdecode.PrimaryIdentity(app.registry, image)
+		if err != nil {
+			return golem.Row[M]{}, err
+		}
+		components := make(map[policyir.FieldID]mutationdecode.IdentityComponent, len(identity.Components()))
+		for _, component := range identity.Components() {
+			components[component.FieldID()] = component
+		}
+		return unreadableMutationRow(app, descriptor, func(field policyir.FieldID) (policyir.Value, bool) {
+			component, present := components[field]
+			if !present {
+				return policyir.Value{}, false
+			}
+			return component.PolicyValue()
+		})
 	}
 	if len(rows) != 1 {
 		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_NESTED_PROJECTION: identity-constrained projection returned %d rows", len(rows))

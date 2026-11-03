@@ -84,6 +84,9 @@ func (c *Compiler) encodeCustomPreparedValuePartial(ctx context.Context, typ com
 		if typ.Element == nil || reflected.Kind() != reflect.Slice && reflected.Kind() != reflect.Array {
 			return nil, nil, fmt.Errorf("custom list has value %T", value)
 		}
+		if typ.Element.Kind == compilerir.GraphQLTypeModel {
+			return c.encodeComputedValuePartial(ctx, typ, value, children, resolve, path)
+		}
 		result := make([]any, reflected.Len())
 		var failures []ComputedFieldFailure
 		for index := range result {
@@ -402,29 +405,33 @@ func (c *Compiler) encodeComputedValuePartial(ctx context.Context, typ compileri
 			return nil, nil, fmt.Errorf("computed list has value %T", value)
 		}
 		if typ.Element.Kind == compilerir.GraphQLTypeModel {
-			rows := make([]golem.RuntimeModelRow, reflected.Len())
-			for index := range rows {
-				row, ok := reflected.Index(index).Interface().(golem.RuntimeModelRow)
-				if !ok {
-					return nil, nil, fmt.Errorf("computed model list item %d has value %T", index, reflected.Index(index).Interface())
-				}
-				rows[index] = row
-			}
 			model, ok := c.modelByGraphQLName(typ.Element.Name)
 			if !ok {
 				return nil, nil, fmt.Errorf("computed model type %s is absent", typ.Element.Name)
 			}
-			paths := make([][]any, len(rows))
-			for index := range paths {
-				paths[index] = appendPath(path, index)
+			result := make([]any, reflected.Len())
+			rows := make([]golem.RuntimeModelRow, 0, reflected.Len())
+			positions := make([]int, 0, reflected.Len())
+			paths := make([][]any, 0, reflected.Len())
+			for index := range result {
+				item := reflected.Index(index).Interface()
+				if item == nil && typ.Element.Nullable {
+					continue
+				}
+				row, ok := item.(golem.RuntimeModelRow)
+				if !ok {
+					return nil, nil, fmt.Errorf("computed model list item %d has value %T", index, item)
+				}
+				rows = append(rows, row)
+				positions = append(positions, index)
+				paths = append(paths, appendPath(path, index))
 			}
 			encoded, failures, err := c.encodeComputedRowsPartial(ctx, model, rows, children, resolve, paths)
 			if err != nil {
 				return nil, nil, err
 			}
-			result := make([]any, len(encoded))
 			for index := range encoded {
-				result[index] = encoded[index]
+				result[positions[index]] = encoded[index]
 			}
 			return result, propagateThroughList(failures, *typ.Element, typ), nil
 		}
