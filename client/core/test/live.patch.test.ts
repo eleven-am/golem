@@ -78,6 +78,16 @@ describe('composite primary keys on events', () => {
   })
 })
 
+describe('numeric primary keys on events', () => {
+  it('removes the row fetched with id 5 when a DELETED event names id 5 as a number', async () => {
+    const numbered = (id: number) => ({ __typename: 'Post', id, _version: '1', title: `t-${id}` })
+    const view = await mount(socialManifest, '{ posts { title } }', () => ({ posts: [numbered(5), numbered(6)] }))
+    view.emit('postEvents', { version: '2', type: 'DELETED', id: 5, entity: null })
+    expect((view.query.state.data as { posts: Array<{ id: number }> }).posts.map((row) => row.id)).toEqual([6])
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
+  })
+})
+
 describe('single slots', () => {
   const featured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: false } })
   const maybeFeatured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: true } })

@@ -24,7 +24,7 @@ export type Occurrences = ReadonlyArray<string>
 
 const childPath = (path: string, name: string): string => (path === '' ? name : `${path}.${name}`)
 
-export type EventIdentity = string | Readonly<Record<string, unknown>>
+export type EventIdentity = string | number | Readonly<Record<string, unknown>>
 
 export interface Eviction {
   readonly data: unknown
@@ -67,7 +67,7 @@ export class Patcher {
       }
     }
     const [field] = described.primaryKey
-    const source = typeof id === 'string' ? (described.primaryKey.length === 1 && field !== undefined ? { [field]: id } : undefined) : id
+    const source = typeof id === 'string' || typeof id === 'number' ? (described.primaryKey.length === 1 && field !== undefined ? { [field]: id } : undefined) : id
     const key = source === undefined ? undefined : this.keyOf(model, source)
     if (key === undefined) {
       throw new GolemProtocolError(`an event for ${model} carries an identity that does not hold ${described.primaryKey.join(', ')}`)

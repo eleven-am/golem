@@ -34,6 +34,12 @@ describe('Patcher keys and versions', () => {
     expect(() => store.eventKey('Nope', 'a', null)).toThrow(GolemProtocolError)
   })
 
+  it('keys a numeric identity the same as the row fetched with that number', () => {
+    expect(store.eventKey('Post', 5, null)).toBe(store.keyOf('Post', { id: 5 }))
+    expect(store.eventKey('Post', 5, null)).toBe('Post:5')
+    expect(() => store.eventKey('PostTag', 5, null)).toThrow(GolemProtocolError)
+  })
+
   it('names a composite-key delete by the identity object, in the manifest key order', () => {
     expect(store.eventKey('PostTag', { tagName: 't', postID: 'p' }, null)).toBe(store.keyOf('PostTag', { postID: 'p', tagName: 't' }))
     expect(store.eventKey('PostTag', { tagName: 't', postID: 'p' }, null)).toBe('PostTag:p\u0001t')

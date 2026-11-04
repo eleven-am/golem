@@ -106,7 +106,7 @@ function frameOf(plan: StreamPlan, data: unknown): EventFrame {
     throw new GolemProtocolError(`an event frame for ${plan.eventsRoot} carried no ${plan.eventsRoot} object`)
   }
   const { version, type, id, entity } = frame as Record<string, unknown>
-  if (typeof version !== 'string' || typeof type !== 'string' || !(typeof id === 'string' || (typeof id === 'object' && id !== null))) {
+  if (typeof version !== 'string' || typeof type !== 'string' || !(typeof id === 'string' || typeof id === 'number' || (typeof id === 'object' && id !== null))) {
     throw new GolemProtocolError(`an event frame for ${plan.eventsRoot} lacks version, type or id`)
   }
   return { version, type, id: id as EventIdentity, entity: typeof entity === 'object' && entity !== null ? (entity as Record<string, unknown>) : null }
