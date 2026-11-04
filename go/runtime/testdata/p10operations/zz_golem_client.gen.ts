@@ -12,6 +12,7 @@ export const golemClientManifest = {
         "team": {
           "target": "Team",
           "list": false,
+          "nullable": true,
           "inverse": "invites"
         }
       },
@@ -27,6 +28,7 @@ export const golemClientManifest = {
         "invites": {
           "target": "Invite",
           "list": true,
+          "nullable": true,
           "inverse": "team"
         }
       },
@@ -53,235 +55,270 @@ export const golemClientManifest = {
     "acceptInvite": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "cappedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "createInvite": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createTeam": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "deleteInvite": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteManyInvites": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyTeams": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteTeam": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "firstInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "groupedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "invite": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "inviteMember": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "invites": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "nestedTeamInvite": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "renewInvite": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "requiredInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "reviewInvite": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "searchInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "searchTeams": {
       "kind": "opaque",
       "models": [
         "Team"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "submitBlank": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "submitCappedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "submitInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "submitInviteMaybe": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "submitInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "submitNested": {
       "kind": "opaque",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "submitTeam": {
       "kind": "opaque",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "team": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "teams": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "transactionalInvite": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "updateInvite": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateManyInvites": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyTeams": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateTeam": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertInvite": {
       "kind": "generated",
       "models": [
         "Invite"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertTeam": {
       "kind": "generated",
       "models": [
         "Team"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     }
   }
 } as const;

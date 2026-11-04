@@ -1920,8 +1920,8 @@ It exports `golemClientManifest` (`as const`) and its type
     `primaryKey` fields for a compound key;
   - `events`: the name of the model's events subscription root, or `null`;
   - `relations`, keyed by relation field: its `target` type, whether it is a
-    `list`, and its `inverse` field on the target, or `null` when the other side
-    is not exposed;
+    `list`, whether the field is `nullable` in the schema, and its `inverse` field
+    on the target, or `null` when the other side is not exposed;
   - `computed`, keyed by computed field: the models whose rows its result holds.
 - `roots`, keyed by every Query and Mutation field in the SDL: `kind` is
   `generated` for the roots golem builds from a model and `opaque` for custom,
@@ -1932,12 +1932,17 @@ It exports `golemClientManifest` (`as const`) and its type
   shape the client patches the root with:
   - `rows`: a list of model rows (`findMany`, and a custom root returning a list
     of a model);
-  - `row`: one model row (`findOne`, `create`, `update`, `upsert`, `delete`, and
+  - `row`: one model row (`findOne`, `create`, `update`, `upsert`, and
     a custom root returning one model);
+  - `deletedRow`: the generated `delete` root, which returns the row it removes;
   - `aggregate`: the `aggregate` root's result;
   - `groupBy`: the `groupBy` and `relationGroupBy` roots' result;
   - `updateMany` and `deleteMany`: the many-row mutations' counts;
   - `value`: a custom root whose result is neither a model nor a list of one.
+
+  `nullable` is `true` when the root's schema type is nullable (`findOne` is, a
+  mutation's row is not). A client sets a single-row slot to `null` only when it
+  is `nullable`.
 
 The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 

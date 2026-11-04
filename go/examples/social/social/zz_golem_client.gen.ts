@@ -12,21 +12,25 @@ export const golemClientManifest = {
         "author": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "comments"
         },
         "parent": {
           "target": "Comment",
           "list": false,
+          "nullable": true,
           "inverse": "replies"
         },
         "post": {
           "target": "Post",
           "list": false,
+          "nullable": true,
           "inverse": "comments"
         },
         "replies": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "parent"
         }
       },
@@ -42,16 +46,19 @@ export const golemClientManifest = {
         "author": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "posts"
         },
         "comments": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "post"
         },
         "postTags": {
           "target": "PostTag",
           "list": true,
+          "nullable": true,
           "inverse": "post"
         }
       },
@@ -71,11 +78,13 @@ export const golemClientManifest = {
         "post": {
           "target": "Post",
           "list": false,
+          "nullable": true,
           "inverse": "postTags"
         },
         "tag": {
           "target": "Tag",
           "list": false,
+          "nullable": true,
           "inverse": "postTags"
         }
       },
@@ -91,6 +100,7 @@ export const golemClientManifest = {
         "postTags": {
           "target": "PostTag",
           "list": true,
+          "nullable": true,
           "inverse": "tag"
         }
       },
@@ -106,11 +116,13 @@ export const golemClientManifest = {
         "comments": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "author"
         },
         "posts": {
           "target": "Post",
           "list": true,
+          "nullable": true,
           "inverse": "author"
         }
       },
@@ -132,355 +144,406 @@ export const golemClientManifest = {
       "models": [
         "Post"
       ],
-      "shape": "aggregate"
+      "shape": "aggregate",
+      "nullable": false
     },
     "comment": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "comments": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "createComment": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createPost": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createTag": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createUser": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "deleteComment": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyUsers": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "deleteMany"
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deletePost": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deletePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteTag": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteUser": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "row"
+      "shape": "deletedRow",
+      "nullable": false
     },
     "groupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "groupBy"
+      "shape": "groupBy",
+      "nullable": false
     },
     "post": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "postTag": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "postTags": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "posts": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "publishPost": {
       "kind": "opaque",
       "models": [],
-      "shape": "value"
+      "shape": "value",
+      "nullable": false
     },
     "relationGroupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "groupBy"
+      "shape": "groupBy",
+      "nullable": false
     },
     "searchPosts": {
       "kind": "opaque",
       "models": [
         "Post"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "tag": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "tags": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "updateComment": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyUsers": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "updateMany"
+      "shape": "updateMany",
+      "nullable": false
     },
     "updatePost": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updatePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateTag": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateUser": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertComment": {
       "kind": "generated",
       "models": [
         "Comment"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertPost": {
       "kind": "generated",
       "models": [
         "Post"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertTag": {
       "kind": "generated",
       "models": [
         "Tag"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertUser": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "upsertVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "user": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "users": {
       "kind": "generated",
       "models": [
         "User"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     },
     "versionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "versionedNotes": {
       "kind": "generated",
       "models": [
         "VersionedNote"
       ],
-      "shape": "rows"
+      "shape": "rows",
+      "nullable": false
     }
   }
 } as const;

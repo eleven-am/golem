@@ -7,6 +7,8 @@ import {
   socialWithEventfulUsers,
   socialWithPostTagEvents,
   teamsManifest,
+  socialPostNotNullable,
+  socialWithRoot,
 } from './fixtures/manifests.js'
 
 const normal = (text: string): string => print(parse(text))
@@ -235,7 +237,7 @@ describe('G7: a query is live, or it says it is not', () => {
   it.each(['aggregate', 'groupBy', 'updateMany', 'deleteMany', 'value'] as const)('classifies a root by the manifest shape %s, whatever its name', (shape) => {
     const renamed = {
       ...socialManifest,
-      roots: { ...socialManifest.roots, posts: { kind: 'generated' as const, models: ['Post'], shape } },
+      roots: { ...socialManifest.roots, posts: { kind: 'generated' as const, models: ['Post'], shape, nullable: false } },
     }
     const error = notLive(new DocumentAnalyzer(renamed), '{ posts { title } }')
     expect([error.reason, error.subject]).toEqual(['non-row-root', 'posts'])
@@ -244,7 +246,7 @@ describe('G7: a query is live, or it says it is not', () => {
   it('treats a root named like an aggregate as rows when the manifest says rows', () => {
     const renamed = {
       ...socialManifest,
-      roots: { ...socialManifest.roots, aggregatePosts: { kind: 'generated' as const, models: ['Post'], shape: 'rows' as const } },
+      roots: { ...socialManifest.roots, aggregatePosts: { kind: 'generated' as const, models: ['Post'], shape: 'rows' as const, nullable: false } },
     }
     expect(new DocumentAnalyzer(renamed).analyze('{ aggregatePosts { title } }').live).toBe(true)
   })
@@ -334,6 +336,21 @@ describe('ranking, slots and nullable roots', () => {
   it('reports the response keys of generated single roots as nullable, aliases included', () => {
     const analysis = social.analyze('query($id: UUID!) { first: post(where: { ID: $id }) { title } posts { title } searchPosts(take: 1, where: {}) { title } }')
     expect([...analysis.nullableRoots]).toEqual(['first'])
+  })
+})
+
+describe('nullable roots from the manifest', () => {
+  const custom = (nullable: boolean) =>
+    new DocumentAnalyzer(socialWithRoot('featuredPost', { kind: 'opaque', models: ['Post'], shape: 'row', nullable }))
+
+  it('reports a custom single root only when the manifest marks it nullable', () => {
+    expect([...custom(true).analyze('{ featuredPost { title } }').nullableRoots]).toEqual(['featuredPost'])
+    expect([...custom(false).analyze('{ featuredPost { title } }').nullableRoots]).toEqual([])
+  })
+
+  it('does not report a generated single root the manifest marks non-nullable', () => {
+    const strict = new DocumentAnalyzer(socialPostNotNullable)
+    expect([...strict.analyze('query($id: UUID!) { post(where: { ID: $id }) { title } }').nullableRoots]).toEqual([])
   })
 })
 

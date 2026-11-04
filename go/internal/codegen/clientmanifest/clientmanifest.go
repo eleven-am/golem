@@ -20,6 +20,7 @@ const (
 
 	ShapeRows       = "rows"
 	ShapeRow        = "row"
+	ShapeDeletedRow = "deletedRow"
 	ShapeAggregate  = "aggregate"
 	ShapeGroupBy    = "groupBy"
 	ShapeUpdateMany = "updateMany"
@@ -42,15 +43,17 @@ type Model struct {
 }
 
 type Relation struct {
-	Target  string  `json:"target"`
-	List    bool    `json:"list"`
-	Inverse *string `json:"inverse"`
+	Target   string  `json:"target"`
+	List     bool    `json:"list"`
+	Nullable bool    `json:"nullable"`
+	Inverse  *string `json:"inverse"`
 }
 
 type Root struct {
-	Kind   string   `json:"kind"`
-	Models []string `json:"models"`
-	Shape  string   `json:"shape"`
+	Kind     string   `json:"kind"`
+	Models   []string `json:"models"`
+	Shape    string   `json:"shape"`
+	Nullable bool     `json:"nullable"`
 }
 
 type generatedRoot struct {
@@ -86,6 +89,10 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 	for _, value := range compilation.Contract.Models {
 		contracts[value.ModelID] = value
 	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "client-manifest.graphql", Input: sdl})
+	if err != nil {
+		return Manifest{}, fmt.Errorf("client manifest: parse generated schema: %w", err)
+	}
 	result := Manifest{Contract: string(contract), Models: map[string]Model{}, Roots: map[string]Root{}}
 	generatedRoots := map[string]generatedRoot{}
 	for _, modelContract := range compilation.Contract.Models {
@@ -96,7 +103,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 		if !ok {
 			return Manifest{}, fmt.Errorf("client manifest: contract references unknown model %s", modelContract.ModelID)
 		}
-		entry, err := buildModel(model, modelContract, models, contracts, relations)
+		entry, err := buildModel(model, modelContract, models, contracts, relations, schema)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -109,17 +116,15 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 	for _, operation := range compilation.Contract.CustomOperations {
 		opaqueRoots[operation.Name] = Root{Kind: RootOpaque, Models: resultModels(operation.Result), Shape: resultShape(operation.Result)}
 	}
-	roots, err := sdlRoots(sdl)
-	if err != nil {
-		return Manifest{}, err
-	}
-	for _, name := range roots {
+	for _, name := range sdlRoots(schema) {
+		nullable := !rootType(schema, name).NonNull
 		if held, ok := opaqueRoots[name]; ok {
+			held.Nullable = nullable
 			result.Roots[name] = held
 			continue
 		}
 		if owner, ok := generatedRoots[name]; ok {
-			result.Roots[name] = Root{Kind: RootGenerated, Models: []string{owner.owner}, Shape: owner.shape}
+			result.Roots[name] = Root{Kind: RootGenerated, Models: []string{owner.owner}, Shape: owner.shape, Nullable: nullable}
 			continue
 		}
 		return Manifest{}, fmt.Errorf("client manifest: schema root %q is neither generated nor custom", name)
@@ -127,7 +132,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 	return result, nil
 }
 
-func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR) (Model, error) {
+func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR, schema *ast.Schema) (Model, error) {
 	names := make(map[ir.FieldID]ir.FieldContractIR, len(contract.Fields))
 	for _, field := range contract.Fields {
 		names[field.FieldID] = field
@@ -179,10 +184,19 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 		if !ok || !target.Exposed {
 			return Model{}, fmt.Errorf("client manifest: relation %s.%s targets an unexposed model %s", contract.GraphQLName, fc.GraphQLName, targetID)
 		}
+		declared := schema.Types[contract.GraphQLName]
+		var definition *ast.FieldDefinition
+		if declared != nil {
+			definition = declared.Fields.ForName(fc.GraphQLName)
+		}
+		if definition == nil {
+			return Model{}, fmt.Errorf("client manifest: schema type %s has no field %s", contract.GraphQLName, fc.GraphQLName)
+		}
 		entry.Relations[fc.GraphQLName] = Relation{
-			Target:  target.GraphQLName,
-			List:    field.Relation.Kind == ir.RelationHasMany,
-			Inverse: visibleFieldName(target, counterpart),
+			Target:   target.GraphQLName,
+			List:     field.Relation.Kind == ir.RelationHasMany,
+			Nullable: !definition.Type.NonNull,
+			Inverse:  visibleFieldName(target, counterpart),
 		}
 	}
 	for _, computed := range contract.Computed {
@@ -211,7 +225,7 @@ func generatedRootShapes(roots ir.GraphQLRootNamesIR) map[string]string {
 		{roots.Create, ShapeRow},
 		{roots.Update, ShapeRow},
 		{roots.Upsert, ShapeRow},
-		{roots.Delete, ShapeRow},
+		{roots.Delete, ShapeDeletedRow},
 		{roots.UpdateMany, ShapeUpdateMany},
 		{roots.DeleteMany, ShapeDeleteMany},
 		{roots.Aggregate, ShapeAggregate},
@@ -252,23 +266,35 @@ func resultModels(value ir.GraphQLTypeIR) []string {
 	return result
 }
 
-func sdlRoots(sdl string) ([]string, error) {
-	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "client-manifest.graphql", Input: sdl})
-	if err != nil {
-		return nil, fmt.Errorf("client manifest: parse generated schema: %w", err)
-	}
-	var names []string
-	for _, root := range []*ast.Definition{parsed.Query, parsed.Mutation} {
+func rootFields(schema *ast.Schema) []*ast.FieldDefinition {
+	var fields []*ast.FieldDefinition
+	for _, root := range []*ast.Definition{schema.Query, schema.Mutation} {
 		if root == nil {
 			continue
 		}
 		for _, field := range root.Fields {
-			if strings.HasPrefix(field.Name, "__") {
-				continue
+			if !strings.HasPrefix(field.Name, "__") {
+				fields = append(fields, field)
 			}
-			names = append(names, field.Name)
 		}
 	}
+	return fields
+}
+
+func rootType(schema *ast.Schema, name string) *ast.Type {
+	for _, field := range rootFields(schema) {
+		if field.Name == name {
+			return field.Type
+		}
+	}
+	return nil
+}
+
+func sdlRoots(schema *ast.Schema) []string {
+	var names []string
+	for _, field := range rootFields(schema) {
+		names = append(names, field.Name)
+	}
 	sort.Strings(names)
-	return names, nil
+	return names
 }

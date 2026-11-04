@@ -16,7 +16,11 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.8.2 / Unreleased.
 
-**The client manifest names each root's result shape.** Every entry of `roots` in `zz_golem_client.gen.ts` gains `shape`: `rows`, `row`, `aggregate`, `groupBy`, `updateMany`, `deleteMany`, or `value` (a custom root whose result is not a model or a list of one). A client reads it instead of guessing from the root name. Regenerate to get it.
+**The client manifest names each root's result shape.** Every entry of `roots` in `zz_golem_client.gen.ts` gains `shape`: `rows`, `row`, `deletedRow` (a generated delete root, which returns the row it removes), `aggregate`, `groupBy`, `updateMany`, `deleteMany`, or `value` (a custom root whose result is not a model or a list of one). A client reads it instead of guessing from the root name. Regenerate to get it.
+
+**The client manifest names nullability.** Every root and every relation gains `nullable`, read from the generated schema's type, so a client nulls a removed single-row slot only where the schema allows it and reports a typed not-found elsewhere. Regenerate to get it.
+
+**The socket closes with 4401 at credential expiry, with no error frame first.** When a connection's credential deadline passed while a subscription was open, the server could send that subscription a `GOLEM_SUBSCRIPTION_CANCELLED` error frame before the 4401 close, and a client that read the frame as a normal end never saw the close and never reauthenticated. Operation error frames are no longer sent once the connection's context is done, so the close is the only signal.
 
 ---
 
