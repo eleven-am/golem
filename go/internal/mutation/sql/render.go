@@ -9,6 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
+	"github.com/eleven-am/golem/go/internal/mutation/rowversion"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -88,6 +89,15 @@ func render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 	} else if versioned {
 		return Program{}, fail(CodeInput, node.ModelID(), policyir.FieldID{}, "explicit concurrency rendering requires a concurrency-enabled model", nil)
 	}
+	if field, enabled := logicalModel.RowVersion(); enabled {
+		value := policyir.FieldID(field)
+		namespace, _ := registry.PhysicalSystemNamespace(golem.PostgreSQL)
+		next, nextErr := rowversion.Next(provider, namespace)
+		if nextErr != nil {
+			return Program{}, fail(CodeSchema, node.ModelID(), value, "row version expression is unavailable", nextErr)
+		}
+		context.version, context.versionNext = &value, next
+	}
 	if node.IdentityBehavior() == mutationir.IdentityMayChange && registry.IdentityChangeRequiresReferentialEnumeration(golem.ModelID(node.ModelID()), golemFields(scalarOperationFields(node.ScalarOperations()))) {
 		return Program{}, fail(CodeUnsupported, node.ModelID(), policyir.FieldID{}, "identity-changing scalar update has relation effects that are not enumerated by this mutation graph", nil)
 	}
@@ -136,7 +146,61 @@ type renderContext struct {
 	model                     policysql.Model
 	alias                     physical.PhysicalName
 	concurrency               *policyir.FieldID
+	version                   *policyir.FieldID
+	versionNext               string
 	precheckAllAuthorizations bool
+}
+
+func (context renderContext) versionFields() []policyir.FieldID {
+	if context.version == nil {
+		return nil
+	}
+	return []policyir.FieldID{*context.version}
+}
+
+func (context renderContext) versionColumn() (string, error) {
+	field, ok := context.resolver.Field(context.provider, context.node.ModelID(), *context.version)
+	if !ok || field.Type.Kind() != policyir.ValueInt64 || field.Type.Nullable() {
+		return "", fail(CodeSchema, context.node.ModelID(), *context.version, "row version field has no exact non-null int64 descriptor", nil)
+	}
+	return context.dialect.Quote(field.Column), nil
+}
+
+func (context renderContext) advanceVersionStatement() ([]Statement, error) {
+	if context.version == nil {
+		return nil, nil
+	}
+	if !rowversion.Advances(context.provider) {
+		return nil, nil
+	}
+	field, ok := context.resolver.Field(context.provider, context.node.ModelID(), *context.version)
+	if !ok {
+		return nil, fail(CodeSchema, context.node.ModelID(), *context.version, "row version field has no physical descriptor", nil)
+	}
+	projected := policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(rowversion.AdvanceColumn()))
+	text := rowversion.Advance(projected + " AS " + context.dialect.Quote("golem_c0"))
+	return []Statement{{role: StampVersion, text: text, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyOneRow}}, nil
+}
+
+func (context renderContext) stampCreatedVersionStatement(source uint32) ([]Statement, error) {
+	if context.version == nil {
+		return nil, nil
+	}
+	if rowversion.Advances(context.provider) {
+		return context.advanceVersionStatement()
+	}
+	column, err := context.versionColumn()
+	if err != nil {
+		return nil, err
+	}
+	where, bindings, err := context.priorPrimaryKeyWhere(source)
+	if err != nil {
+		return nil, err
+	}
+	field, _ := context.resolver.Field(context.provider, context.node.ModelID(), *context.version)
+	projected := policysql.ProjectColumn(context.provider, field.Type, column)
+	text := "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + column + " = " + context.versionNext + " WHERE " + where + " RETURNING " + projected + " AS " + context.dialect.Quote("golem_c0")
+	return []Statement{{role: StampVersion, text: text, bindings: bindings, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyOneRow}}, nil
 }
 
 func (context renderContext) renderCreate() ([]Statement, error) {
@@ -171,7 +235,17 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 			return nil, fail(CodeInput, context.node.ModelID(), operation.FieldID(), "create carries an unsupported scalar operation", nil)
 		}
 	}
-	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), scalarOperationFields(operations))
+	var insertedVersion []policyir.FieldID
+	if context.version != nil && rowversion.Advances(context.provider) {
+		column, columnErr := context.versionColumn()
+		if columnErr != nil {
+			return nil, columnErr
+		}
+		columns = append(columns, column)
+		values = append(values, context.versionNext)
+		insertedVersion = context.versionFields()
+	}
+	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), scalarOperationFields(operations), insertedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +272,11 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 	if present {
 		statements = append(statements, verify)
 	}
-	return statements, nil
+	stamp, err := context.stampCreatedVersionStatement(0)
+	if err != nil {
+		return nil, err
+	}
+	return append(statements, stamp...), nil
 }
 
 func (context renderContext) renderUpdate() ([]Statement, error) {
@@ -251,6 +329,13 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		column := context.dialect.Quote(field.Column)
 		assignments = append(assignments, column+" = ("+column+" + 1)")
 	}
+	if context.version != nil {
+		column, columnErr := context.versionColumn()
+		if columnErr != nil {
+			return nil, columnErr
+		}
+		assignments = append(assignments, column+" = "+context.versionNext)
+	}
 	updateWhere, updateWhereBindings, err := context.actionWhere(target, true, len(updateBindings))
 	if err != nil {
 		return nil, err
@@ -262,16 +347,11 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		updateWhere += " AND " + context.qualified(field.Column) + " = " + context.dialect.Placeholder(len(updateBindings))
 		updateWhere += " AND " + context.qualified(field.Column) + " < 9223372036854775807"
 	}
-	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields())
+	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields(), context.versionFields())
 	if err != nil {
 		return nil, err
 	}
 	if len(assignments) == 0 {
-		// Relation-only single updates still need the root action constraint,
-		// locked image, postcondition, projection, and fact contract, but must not
-		// manufacture a scalar write (or fire database update triggers). Treat the
-		// already locked root as a verified no-op apply image. Public binding is
-		// responsible for rejecting a truly empty update input.
 		selectList, resultColumns, err := context.selectFields(returned)
 		if err != nil {
 			return nil, err
@@ -303,12 +383,16 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 	if present {
 		statements = append(statements, verify)
 	}
-	return statements, nil
+	advance, err := context.advanceVersionStatement()
+	if err != nil {
+		return nil, err
+	}
+	return append(statements, advance...), nil
 }
 
 func (context renderContext) renderDelete() ([]Statement, error) {
 	target, _ := context.node.Target()
-	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), context.concurrencyFields())
+	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), context.concurrencyFields(), context.versionFields())
 	if err != nil {
 		return nil, err
 	}

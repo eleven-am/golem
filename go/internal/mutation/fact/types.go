@@ -34,30 +34,20 @@ func ParseEventSchemaFingerprint(value compilerir.Fingerprint) (golem.SchemaDige
 }
 
 const (
-	FormatVersionV1 uint16 = 1
-	FormatVersionV2 uint16 = 2
-	CodecIdentityV1        = "golem.fact.v1"
-	CodecIdentityV2        = "golem.fact.v2"
-
-	// FormatVersion and CodecIdentity remain aliases for the historical P4 API.
-	// New P7 runtime paths must opt into NewV2 with a normalized event-schema
-	// digest; silently relabelling old constructors would make compatibility
-	// tests incapable of producing genuine V1 bytes.
-	FormatVersion = FormatVersionV1
-	CodecIdentity = CodecIdentityV1
+	FormatVersion uint16 = 3
+	CodecIdentity        = "golem.fact.v3"
 )
 
 type EventID [16]byte
 type CausationID [16]byte
 
 type Envelope struct {
-	formatVersion  uint16
-	codecIdentity  string
 	event          EventID
 	generation     golem.SchemaDigest
 	eventSchema    golem.SchemaDigest
 	model          policyir.ModelID
 	action         mutationir.FactAction
+	rowVersion     int64
 	causation      CausationID
 	ordinal        uint32
 	beforeIdentity *mutationdecode.Identity
@@ -67,19 +57,21 @@ type Envelope struct {
 	deleteState    mutationir.DeleteSnapshotState
 }
 
-func New(registry *schema.Registry, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, before, after *mutationdecode.Row) (Envelope, error) {
-	return newEnvelope(registry, event, requirement, causation, ordinal, before, after, false)
-}
-
-func newEnvelope(registry *schema.Registry, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, before, after *mutationdecode.Row, allowEventSchema bool) (Envelope, error) {
+func New(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, rowVersion int64, before, after *mutationdecode.Row) (Envelope, error) {
 	if registry == nil {
 		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: active schema registry is required")
 	}
 	if event == (EventID{}) || causation == (CausationID{}) {
 		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: event and causation identities must be non-zero")
 	}
-	if _, present := requirement.EventSchema(); present && !allowEventSchema {
-		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: event-schema-bound requirement must use V2 constructor")
+	if rowVersion < 0 {
+		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: row version %d is negative", rowVersion)
+	}
+	if eventSchema == (golem.SchemaDigest{}) {
+		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: event-schema fingerprint is zero")
+	}
+	if required, present := requirement.EventSchema(); !present || golem.SchemaDigest(required) != eventSchema {
+		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: requirement and event-schema fingerprints differ")
 	}
 	action, enabled := requirement.Action()
 	if !enabled {
@@ -103,8 +95,11 @@ func newEnvelope(registry *schema.Registry, event EventID, requirement mutationi
 			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: created fact requires only an after image")
 		}
 	case mutationir.FactUpdated:
-		if len(beforeFields) == 0 || len(afterFields) == 0 || before == nil || after == nil {
-			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact requires before and after images")
+		if len(beforeFields) == 0 || len(afterFields) == 0 || after == nil {
+			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact requires an after image")
+		}
+		if before == nil && (requirement.DeleteSnapshotState() != mutationir.DeleteSnapshotUnverifiable || len(snapshotFields) != 0) {
+			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact without a before image must be unverifiable")
 		}
 	case mutationir.FactDeleted:
 		if len(beforeFields) == 0 || len(afterFields) != 0 || before == nil || after != nil {
@@ -117,15 +112,21 @@ func newEnvelope(registry *schema.Registry, event EventID, requirement mutationi
 	if generation == (golem.SchemaDigest{}) {
 		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: generation fingerprint is zero")
 	}
+	if rowVersion == 0 && action != mutationir.FactDeleted {
+		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: a %s fact needs a stamped row version", actionText(action))
+	}
 	result := Envelope{
-		formatVersion: FormatVersionV1, codecIdentity: CodecIdentityV1,
-		event: event, generation: generation, model: model, action: action,
+		event: event, generation: generation, eventSchema: eventSchema, model: model, action: action, rowVersion: rowVersion,
 		causation: causation, ordinal: ordinal,
 		snapshotFields: append([]policyir.FieldID(nil), snapshotFields...),
 		deleteState:    requirement.DeleteSnapshotState(),
 	}
 	if len(beforeFields) != 0 {
-		identity, err := mutationdecode.ExtractOrderedIdentity(registry, *before, beforeFields)
+		source := before
+		if source == nil {
+			source = after
+		}
+		identity, err := mutationdecode.ExtractOrderedIdentity(registry, *source, beforeFields)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: before identity: %w", err)
 		}
@@ -148,37 +149,16 @@ func newEnvelope(registry *schema.Registry, event EventID, requirement mutationi
 	return result, nil
 }
 
-// NewV2 constructs a fact bound to the compiler-owned event-schema digest.
-// The digest must come from compiler/ir.EventSchemaFingerprint; this package
-// deliberately does not maintain a second schema hash implementation.
-func NewV2(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, before, after *mutationdecode.Row) (Envelope, error) {
-	if eventSchema == (golem.SchemaDigest{}) {
-		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: event-schema fingerprint is zero")
-	}
-	if required, present := requirement.EventSchema(); !present || golem.SchemaDigest(required) != eventSchema {
-		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: requirement and event-schema fingerprints differ")
-	}
-	envelope, err := newEnvelope(registry, event, requirement, causation, ordinal, before, after, true)
-	if err != nil {
-		return Envelope{}, err
-	}
-	envelope.formatVersion = FormatVersionV2
-	envelope.codecIdentity = CodecIdentityV2
-	envelope.eventSchema = eventSchema
-	return envelope, nil
-}
-
-func (envelope Envelope) FormatVersion() uint16          { return envelope.formatVersion }
-func (envelope Envelope) CodecIdentity() string          { return envelope.codecIdentity }
-func (envelope Envelope) EventID() EventID               { return envelope.event }
-func (envelope Envelope) Generation() golem.SchemaDigest { return envelope.generation }
-func (envelope Envelope) EventSchemaDigest() (golem.SchemaDigest, bool) {
-	return envelope.eventSchema, envelope.formatVersion == FormatVersionV2
-}
-func (envelope Envelope) ModelID() policyir.ModelID     { return envelope.model }
-func (envelope Envelope) Action() mutationir.FactAction { return envelope.action }
-func (envelope Envelope) CausationID() CausationID      { return envelope.causation }
-func (envelope Envelope) TransactionOrdinal() uint32    { return envelope.ordinal }
+func (envelope Envelope) FormatVersion() uint16                 { return FormatVersion }
+func (envelope Envelope) CodecIdentity() string                 { return CodecIdentity }
+func (envelope Envelope) RowVersion() int64                     { return envelope.rowVersion }
+func (envelope Envelope) EventID() EventID                      { return envelope.event }
+func (envelope Envelope) Generation() golem.SchemaDigest        { return envelope.generation }
+func (envelope Envelope) EventSchemaDigest() golem.SchemaDigest { return envelope.eventSchema }
+func (envelope Envelope) ModelID() policyir.ModelID             { return envelope.model }
+func (envelope Envelope) Action() mutationir.FactAction         { return envelope.action }
+func (envelope Envelope) CausationID() CausationID              { return envelope.causation }
+func (envelope Envelope) TransactionOrdinal() uint32            { return envelope.ordinal }
 func (envelope Envelope) WithTransactionOrdinal(ordinal uint32) (Envelope, error) {
 	if ordinal == 0 {
 		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: transaction ordinal must be positive")
@@ -211,8 +191,8 @@ func (envelope Envelope) DeleteSnapshotState() mutationir.DeleteSnapshotState {
 	return envelope.deleteState
 }
 func (envelope Envelope) WithUnverifiableDeleteSnapshot() (Envelope, error) {
-	if envelope.action != mutationir.FactDeleted {
-		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: only a deleted fact can drop its private snapshot")
+	if envelope.action != mutationir.FactDeleted && envelope.action != mutationir.FactUpdated {
+		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: only an updated or deleted fact can drop its private snapshot")
 	}
 	envelope.deleteState = mutationir.DeleteSnapshotUnverifiable
 	envelope.snapshotFields = nil
@@ -231,4 +211,28 @@ func actionText(action mutationir.FactAction) string {
 	default:
 		return ""
 	}
+}
+
+func RowVersionOf(registry *schema.Registry, image mutationdecode.Row) (int64, error) {
+	if registry == nil {
+		return 0, fmt.Errorf("P4_FACT_INPUT: active schema registry is required")
+	}
+	model, ok := registry.Model(golem.ModelID(image.ModelID()))
+	if !ok {
+		return 0, fmt.Errorf("P4_FACT_INPUT: registry does not own the image model")
+	}
+	field, ok := model.RowVersion()
+	if !ok {
+		return 0, fmt.Errorf("P4_FACT_INPUT: model has no row version")
+	}
+	cell, present := image.Cell(policyir.FieldID(field))
+	if !present || cell.IsNull() {
+		return 0, fmt.Errorf("P4_FACT_INPUT: image carries no row version")
+	}
+	value, _ := cell.PolicyValue()
+	version, ok := value.Signed()
+	if !ok || version < 0 {
+		return 0, fmt.Errorf("P4_FACT_INPUT: image row version is negative")
+	}
+	return version, nil
 }

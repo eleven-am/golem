@@ -141,7 +141,7 @@ func p7ObserverLease(t testing.TB, fixture p7EventRuntimeFixture) eventprovider.
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := mutationfact.New(fixture.schema.Registry, mutationfact.EventID{15: 91}, requirement, mutationfact.CausationID{15: 92}, 1, nil, &row)
+	fact, err := newRuntimeTestFact(fixture.schema.Registry, mutationfact.EventID{15: 91}, requirement, mutationfact.CausationID{15: 92}, 1, nil, &row)
 	if err != nil {
 		t.Fatal(err)
 	}

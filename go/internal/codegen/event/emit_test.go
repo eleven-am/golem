@@ -156,7 +156,7 @@ func TestEmptyBytesIdentity(t *testing.T) {
   if err != nil { t.Fatal(err) }
   schema := golem.EventSchemaDigest{0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44}
   metadata := func(model golem.ModelID) typedvalue.Metadata {
-    return typedvalue.Metadata{EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:model}
+    return typedvalue.Metadata{Version: 7, EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:model}
   }
   single, err := typedvalue.New(metadata(golem.ModelID{0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01}), []any{[]byte{}}, nil)
   if err != nil { t.Fatal(err) }
@@ -199,22 +199,22 @@ func TestGeneratedFactories(t *testing.T) {
   schema := golem.EventSchemaDigest{0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44}
   runtimeRow, err := golem.RuntimeModelReadRow(postModel)
   if err != nil { t.Fatal(err) }
-  input, err := typedvalue.New(typedvalue.Metadata{EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,123456789), Generation:golem.SchemaDigest{9}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{3}}, &runtimeRow)
+  input, err := typedvalue.New(typedvalue.Metadata{Version: 7, EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,123456789), Generation:golem.SchemaDigest{9}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{3}}, &runtimeRow)
   if err != nil { t.Fatal(err) }
   built, err := golemruntime.RuntimeBuildValidatedEvent(registry, input)
   event, ok := built.(PostEvent)
   if err != nil || !ok || event.ID() != (golem.UUID{3}) { t.Fatalf("event=%#v ok=%v err=%v", built, ok, err) }
   if _, present := event.Entity(); !present { t.Fatal("validated entity was not retained") }
-  if _, err := typedvalue.New(typedvalue.Metadata{EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:golem.EventSchemaDigest{5}, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{3}}, nil); err == nil { t.Fatal("different wire and resolved event schemas were accepted") }
-  incompatible, _ := typedvalue.New(typedvalue.Metadata{EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:golem.EventSchemaDigest{5}, HasEventSchema:true, ResolvedEventSchema:golem.EventSchemaDigest{5}, ModelID:postModel}, []any{golem.UUID{3}}, nil)
+  if _, err := typedvalue.New(typedvalue.Metadata{Version: 7, EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:golem.EventSchemaDigest{5}, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{3}}, nil); err == nil { t.Fatal("different wire and resolved event schemas were accepted") }
+  incompatible, _ := typedvalue.New(typedvalue.Metadata{Version: 7, EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:golem.EventSchemaDigest{5}, HasEventSchema:true, ResolvedEventSchema:golem.EventSchemaDigest{5}, ModelID:postModel}, []any{golem.UUID{3}}, nil)
   if _, err := golemruntime.RuntimeBuildValidatedEvent(registry, incompatible); err == nil { t.Fatal("incompatible resolved event schema was accepted") }
-  historicalV1, err := typedvalue.New(typedvalue.Metadata{EventID:golem.EventID{8}, Action:golem.EventCreated, CausationID:golem.CausationID{9}, Ordinal:1, RecordedAt:time.Unix(3,0), Generation:golem.SchemaDigest{7}, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{10}}, nil)
+  historicalV1, err := typedvalue.New(typedvalue.Metadata{Version: 7, EventID:golem.EventID{8}, Action:golem.EventCreated, CausationID:golem.CausationID{9}, Ordinal:1, RecordedAt:time.Unix(3,0), Generation:golem.SchemaDigest{7}, ResolvedEventSchema:schema, ModelID:postModel}, []any{golem.UUID{10}}, nil)
   if err != nil { t.Fatal(err) }
   built, err = golemruntime.RuntimeBuildValidatedEvent(registry, historicalV1)
   historical, ok := built.(PostEvent)
   if err != nil || !ok || historical.ID() != (golem.UUID{10}) { t.Fatalf("historical=%#v ok=%v err=%v", built, ok, err) }
   friendModel := golem.ModelID{0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11}
-  composite, _ := typedvalue.New(typedvalue.Metadata{EventID:golem.EventID{4}, Action:golem.EventCreated, CausationID:golem.CausationID{5}, Ordinal:1, RecordedAt:time.Unix(2,0), Generation:golem.SchemaDigest{8}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:friendModel}, []any{golem.UUID{6},golem.UUID{7}}, nil)
+  composite, _ := typedvalue.New(typedvalue.Metadata{Version: 7, EventID:golem.EventID{4}, Action:golem.EventCreated, CausationID:golem.CausationID{5}, Ordinal:1, RecordedAt:time.Unix(2,0), Generation:golem.SchemaDigest{8}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:friendModel}, []any{golem.UUID{6},golem.UUID{7}}, nil)
   built, err = golemruntime.RuntimeBuildValidatedEvent(registry, composite)
   friendship, ok := built.(FriendshipEvent)
   if err != nil || !ok || friendship.ID().UserID() != (golem.UUID{6}) || friendship.ID().FriendID() != (golem.UUID{7}) { t.Fatalf("composite=%#v ok=%v err=%v", built, ok, err) }

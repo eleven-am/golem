@@ -77,8 +77,10 @@ events.(*Capabilities).SubscriptionModelIDs func() []golem.ModelID
 events.(*Capabilities).Transport func() TransportCapabilities
 events.(*Capabilities).TransportAvailable func() bool
 events.(*Error).Code func() ErrorCode
+events.(*Error).Detail func() string
 events.(*Error).Error func() string
 events.(*Error).Is func(error) bool
+events.(*Error).Reason func() Reason
 events.(*Error).Unwrap func() error
 events.(*Limits).RetentionEnabled func() bool
 events.(*Observation).Action func() golem.EventAction
@@ -219,6 +221,7 @@ events.EventTransport.Publish func(context.Context, internal/event/value.EventBa
 events.EventTransport.Subscribe func(context.Context, internal/event/value.Subscription) (Stream, error)
 events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
+events.FailureWithReason func(ErrorCode, Reason, string) error
 events.Limits comparable
 events.Limits type struct
 events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher, RevalidateEvery, MaxSubscriptionsPerPrincipal}
@@ -321,6 +324,11 @@ events.OutcomeSuppressed const Outcome = "suppressed"
 events.PayloadLimitOf func(EventTransport) (int, bool)
 events.PayloadLimitReporter type interface {MaxEncodedEventBytes}
 events.PayloadLimitReporter.MaxEncodedEventBytes func() int
+events.Reason comparable
+events.Reason type string
+events.ReasonDependencyChanged const Reason = "DEPENDENCY_CHANGED"
+events.ReasonDependencyUnobservable const Reason = "DEPENDENCY_UNOBSERVABLE"
+events.ReasonOf func(error) (Reason, bool)
 events.ReportOperatorAudit func(OperatorAudit, context.Context, OperatorAuditRecord)
 events.RetentionDisabled const time.Duration = -1
 events.RetentionPolicy comparable
@@ -340,13 +348,13 @@ events.Stream type interface {Close, Recv}
 events.Stream.Close func() error
 events.Stream.Recv func(context.Context) (internal/event/value.Notice, error)
 events.Subscription = internal/event/value.Subscription
+events.SuppressionCDCSuperseded const SuppressionReason = "cdc_superseded"
 events.SuppressionCorrelatedGolemWrite const SuppressionReason = "correlated_golem_write"
 events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
 events.SuppressionDeleteOverDelivered const SuppressionReason = "delete_over_delivered"
 events.SuppressionDeletionUnverifiable const SuppressionReason = "deletion-unverifiable"
 events.SuppressionEntityAbsent const SuppressionReason = "entity_absent"
 events.SuppressionFiltered const SuppressionReason = "filtered"
-events.SuppressionPolicyUnavailable const SuppressionReason = "policy_unavailable"
 events.SuppressionReason comparable
 events.SuppressionReason type string
 events.SuppressionUnauthorized const SuppressionReason = "unauthorized"
@@ -458,6 +466,7 @@ golem.(*EventMetadata).GenerationDigest func() SchemaDigest
 golem.(*EventMetadata).ModelID func() ModelID
 golem.(*EventMetadata).RecordedAt func() time.Time
 golem.(*EventMetadata).TransactionOrdinal func() uint32
+golem.(*EventMetadata).Version func() int64
 golem.(*EventModelMetadata).EventSchemaDigest func() EventSchemaDigest
 golem.(*EventModelMetadata).IdentityFields func() []FieldID
 golem.(*EventModelMetadata).IdentityTypeName func() string
@@ -1213,6 +1222,7 @@ golem.(EventMetadata).GenerationDigest func() SchemaDigest
 golem.(EventMetadata).ModelID func() ModelID
 golem.(EventMetadata).RecordedAt func() time.Time
 golem.(EventMetadata).TransactionOrdinal func() uint32
+golem.(EventMetadata).Version func() int64
 golem.(EventModelMetadata).EventSchemaDigest func() EventSchemaDigest
 golem.(EventModelMetadata).IdentityFields func() []FieldID
 golem.(EventModelMetadata).IdentityTypeName func() string
@@ -1991,6 +2001,7 @@ golem.EventAction comparable
 golem.EventAction type string
 golem.EventCreated const EventAction = "created"
 golem.EventDeleted const EventAction = "deleted"
+golem.EventExited const EventAction = "exited"
 golem.EventID comparable
 golem.EventID type [16]uint8
 golem.EventMetadata comparable
@@ -2478,6 +2489,7 @@ golem.GroupPredicate[M any] type struct
 golem.GroupRequest[M any] type struct
 golem.GroupRow[M any] type struct
 golem.GroupValue func[M any, V any](GroupRow[M], GroupCell[M, V]) ReadValue[V]
+golem.HasNoCredentialExpiry func(context.Context) bool
 golem.HookAfter const HookPhase = "after"
 golem.HookAfterCommit const HookPhase = "afterCommit"
 golem.HookBefore const HookPhase = "before"
@@ -3307,6 +3319,7 @@ golem.Via func[M any, R any, V any](ToOneRelation[M, R], RelationDimensionPath[R
 golem.Virtual const GeneratedStorage = "virtual"
 golem.Where func[M any](Predicate[M]) ReadOption[M]
 golem.Within func[M any, R any](*Rules[M], R) *OperationRules[M]
+golem.WithoutCredentialExpiry func(context.Context) context.Context
 golem.WithoutGraphQL func(*Schema)
 golem.anyNullSentinel comparable
 golem.anyNullSentinel type uint8
@@ -3574,9 +3587,10 @@ graphql.ResolvePreparedField func[T any](context.Context, PreparedObject) (T, er
 graphql.ResolvePreparedRoot func[T any](context.Context) (T, error)
 graphql.ResolvePreparedSubscriptionRoot func[T any](context.Context) (<-chan T, error)
 graphql.Response type struct
-graphql.Response unkeyed literal {Data, Errors}
+graphql.Response unkeyed literal {Data, Errors, Extensions}
 graphql.Response.Data field any tag "json:\"data,omitempty\""
 graphql.Response.Errors field []Error tag "json:\"errors,omitempty\""
+graphql.Response.Extensions field map[string]any tag "json:\"extensions,omitempty\""
 graphql.ResponseStream type interface {Close, Recv}
 graphql.ResponseStream.Close func() error
 graphql.ResponseStream.Recv func(context.Context) (Response, error)
@@ -3595,6 +3609,7 @@ internal/event/metadatavalue.(*Value).Generation func() [32]uint8
 internal/event/metadatavalue.(*Value).ModelID func() [16]uint8
 internal/event/metadatavalue.(*Value).Ordinal func() uint32
 internal/event/metadatavalue.(*Value).RecordedAt func() time.Time
+internal/event/metadatavalue.(*Value).Version func() int64
 internal/event/metadatavalue.(Value).Action func() string
 internal/event/metadatavalue.(Value).CausationID func() [16]uint8
 internal/event/metadatavalue.(Value).EventID func() [16]uint8
@@ -3603,6 +3618,7 @@ internal/event/metadatavalue.(Value).Generation func() [32]uint8
 internal/event/metadatavalue.(Value).ModelID func() [16]uint8
 internal/event/metadatavalue.(Value).Ordinal func() uint32
 internal/event/metadatavalue.(Value).RecordedAt func() time.Time
+internal/event/metadatavalue.(Value).Version func() int64
 internal/event/metadatavalue.Value comparable
 internal/event/metadatavalue.Value type struct
 internal/event/typedvalue.(*ValidatedEvent).Entity func() (golem.RuntimeModelRow, bool)
@@ -3819,6 +3835,7 @@ observe.PhaseVerify const Phase = "verify"
 observe.Reason comparable
 observe.Reason type string
 observe.ReasonAuthorization const Reason = "authorization"
+observe.ReasonCDCSuperseded const Reason = "cdc_superseded"
 observe.ReasonCapability const Reason = "capability"
 observe.ReasonClosed const Reason = "closed"
 observe.ReasonConflict const Reason = "conflict"

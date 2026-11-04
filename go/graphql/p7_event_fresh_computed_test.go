@@ -64,7 +64,7 @@ func (stream *p7ComputedEventStream) Recv(context.Context) (GeneratedEvent, erro
 	var eventID golem.EventID
 	eventID[14], eventID[15] = byte(stream.next>>8), byte(stream.next)
 	causation := golem.CausationID(eventID)
-	validated, err := typedvalue.New(typedvalue.Metadata{
+	validated, err := typedvalue.New(typedvalue.Metadata{Version: 7,
 		EventID: eventID, Action: golem.EventUpdated, CausationID: causation, Ordinal: 1,
 		RecordedAt: time.Unix(stream.next, 0).UTC(), Generation: stream.fixture.bundle.GenerationDigest(),
 		EventSchema: stream.schema, HasEventSchema: true, ResolvedEventSchema: stream.schema, ModelID: stream.fixture.model,
@@ -241,7 +241,7 @@ func p7ComputedSubscriptionFixture(t *testing.T) (computedTestFixture, golem.Eve
 		contract.Subscriptions = true
 		contract.Roots.Events = "userEvents"
 		contract.Event = &compilerir.EventContractIR{
-			PayloadTypeName: "UserEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
+			PayloadTypeName: "UserEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"},
 			DeleteSnapshotFull: true, Schema: shape, SchemaFingerprint: fingerprint,
 		}
 		fixture.contract = *contract

@@ -199,7 +199,9 @@ func (loader *cancelledLoader) ObservePostDisplayCodeLoad(ctx context.Context, _
 func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *social.GraphQLServer, probe *cancelledLoader, transport *subscribeSignalTransport) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		ctx := social.WithPostDisplayCodeLoaderObserver(request.Context(), probe)
+		deadlineCtx, cancel := context.WithTimeout(request.Context(), time.Hour)
+		defer cancel()
+		ctx := social.WithPostDisplayCodeLoaderObserver(deadlineCtx, probe)
 		graph.Handler().ServeHTTP(writer, request.WithContext(ctx))
 	}))
 	defer server.Close()
@@ -209,7 +211,7 @@ func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *socia
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInitPayload()}); err != nil {
 		t.Fatal(err)
 	}
 	var frame map[string]any
@@ -931,8 +933,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		t.Fatalf("external CDC insert: %v", err)
 	}
 	fields := social.GolemGeneratedPostDescriptor.Metadata().ScanFields()
-	if len(fields) != 18 {
-		t.Fatalf("Post scan fields=%d want=18", len(fields))
+	if len(fields) != 19 {
+		t.Fatalf("Post scan fields=%d want=19", len(fields))
 	}
 	cells := []golem.RuntimeReadCell{
 		golem.RuntimePresentReadCell(fields[0], id, nil), golem.RuntimePresentReadCell(fields[1], authorID, nil),
@@ -944,6 +946,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		golem.RuntimePresentReadCell(fields[12], clock, nil), golem.RuntimePresentReadCell(fields[13], metadata, cloneFailureJSON),
 		golem.RuntimePresentReadCell(fields[14], social.VisibilityPublic, nil), golem.RuntimePresentReadCell(fields[15], topics, cloneFailureTopics),
 		golem.RuntimePresentReadCell(fields[16], instant, nil), golem.RuntimePresentReadCell(fields[17], instant, nil),
+		golem.RuntimePresentReadCell(fields[18], int64(0), nil),
 	}
 	row, err := golem.RuntimeCDCModelRow(social.GolemGeneratedPostDescriptor.Metadata().ModelID(), cells...)
 	if err != nil {
@@ -1570,4 +1573,8 @@ func settleFailureGoroutines() {
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func liveInitPayload() map[string]any {
+	return map[string]any{"golem": map[string]any{"protocol": 1, "contract": social.GolemGeneratedSchemaBundle().Contract().Fingerprint().String()}}
 }

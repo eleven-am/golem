@@ -20,6 +20,7 @@ import (
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/observe"
@@ -268,8 +269,9 @@ type Error struct {
 	Extensions map[string]any `json:"extensions"`
 }
 type Response struct {
-	Data   any     `json:"data,omitempty"`
-	Errors []Error `json:"errors,omitempty"`
+	Data       any            `json:"data,omitempty"`
+	Errors     []Error        `json:"errors,omitempty"`
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 type Executor[P any] interface {
@@ -350,6 +352,7 @@ type requestEnvelope struct {
 	Query         string          `json:"query"`
 	OperationName string          `json:"operationName"`
 	Variables     json.RawMessage `json:"variables"`
+	Extensions    json.RawMessage `json:"extensions,omitempty"`
 }
 
 type Request struct {
@@ -375,7 +378,7 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, int64(server.limits.MaxRequestBytes))
-	decoded, failure := decodeHTTPRequest(request.Body, server.limits)
+	decoded, extensions, failure := decodeHTTPRequest(request.Body, server.limits)
 	if failure != nil {
 		writeResponse(writer, Response{Errors: []Error{*failure}})
 		return
@@ -385,10 +388,14 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 		writeResponse(writer, Response{Errors: []Error{publicError("UNAUTHENTICATED", "authentication is required")}})
 		return
 	}
+	if failure := server.handshakeFailure(extensions, false); failure != nil {
+		writeResponse(writer, Response{Errors: []Error{*failure}})
+		return
+	}
 	if negotiated == eventStreamAcceptable {
 		prepared, failure := server.prepareRequest(decoded, true)
 		if failure == nil && prepared.Operation.Definition.Operation == ast.Subscription {
-			server.streamSSE(writer, request, principal, decoded, prepared, refuseJSON)
+			server.streamSSE(writer, request, principal, decoded, extensions, prepared, refuseJSON)
 			return
 		}
 		if failure == nil {
@@ -399,9 +406,9 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 	writeResponse(writer, server.execute(request.Context(), principal, decoded, true, nil))
 }
 
-func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *Error) {
-	fail := func(failure Error) (Request, *Error) {
-		return Request{}, &failure
+func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *requestExtensions, *Error) {
+	fail := func(failure Error) (Request, *requestExtensions, *Error) {
+		return Request{}, nil, &failure
 	}
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
@@ -419,6 +426,15 @@ func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *Error) {
 	if exceedsLexicalTokenLimit(envelope.Query, limits.MaxTokens) {
 		return fail(limitError(limitTokens, limits.MaxTokens, nil))
 	}
+	var extensions *requestExtensions
+	if len(envelope.Extensions) != 0 && string(envelope.Extensions) != "null" {
+		extensionDecoder := json.NewDecoder(bytes.NewReader(envelope.Extensions))
+		extensionDecoder.DisallowUnknownFields()
+		extensions = &requestExtensions{}
+		if err := extensionDecoder.Decode(extensions); err != nil {
+			return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
+		}
+	}
 	variables := map[string]any{}
 	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
 		if len(envelope.Variables) > limits.MaxVariableBytes {
@@ -430,7 +446,7 @@ func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *Error) {
 			return fail(publicError("BAD_USER_INPUT", "invalid GraphQL variables"))
 		}
 	}
-	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, nil
+	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, extensions, nil
 }
 
 // Execute applies the same parse, validation, coercion, limit, isolation, and
@@ -451,11 +467,20 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 	}
 	var operationSpan *observeexec.Span
+	ctx, commits := commitreport.Install(ctx)
 	ctx, operationSpan = observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLRequest, observe.PhaseFinish)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			server.config.ReportInternalError(ctx, fmt.Errorf("GraphQL executor panic: %v\n%s", recovered, debug.Stack()))
 			response = Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
+		}
+		if state, reported := commits.State(); reported && len(response.Errors) != 0 {
+			extensions := make(map[string]any, len(response.Extensions)+1)
+			for name, value := range response.Extensions {
+				extensions[name] = value
+			}
+			extensions["golem"] = map[string]any{"commit": state}
+			response.Extensions = extensions
 		}
 		if operationSpan != nil {
 			outcome, reason := graphQLObservationResult(response)
@@ -714,7 +739,15 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: publicErrorExtensions(failure)}
 	}
 	if code, ok := events.CodeOf(err); ok {
-		return Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
+		presented := Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
+		if reason, reasoned := events.ReasonOf(err); reasoned {
+			presented.Extensions["reason"] = string(reason)
+			var failure *events.Error
+			if errors.As(err, &failure) && failure.Detail() != "" {
+				presented.Message = string(code) + ": " + failure.Detail()
+			}
+		}
+		return presented
 	}
 	if report != nil && err != nil {
 		report(ctx, err)

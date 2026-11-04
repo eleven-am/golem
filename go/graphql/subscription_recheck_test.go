@@ -106,7 +106,7 @@ func newRecheckServerWith(t *testing.T, check func(context.Context, int, Operati
 
 func recheckHost(t *testing.T, server *Server[int]) *httptest.Server {
 	t.Helper()
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	t.Cleanup(host.Close)
 	return host
 }
@@ -124,7 +124,7 @@ func dialRecheckHost(t *testing.T, host *httptest.Server) *websocket.Conn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	writeWS(t, connection, wsMessage{Type: "connection_init"})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit("")})
 	if ack := readWS(t, connection); ack.Type != "connection_ack" {
 		t.Fatalf("ack=%#v", ack)
 	}
@@ -159,7 +159,9 @@ func TestWebSocketSubscriptionRecheckEndsOnlyTheRevokedOperation(t *testing.T) {
 	server, executor, grants := newRecheckServer(t)
 	connection := dialRecheck(t, server)
 	writeWS(t, connection, wsMessage{ID: "revoked", Type: "subscribe", Payload: roomSubscription("1")})
+	readAckWS(t, connection, "revoked")
 	writeWS(t, connection, wsMessage{ID: "kept", Type: "subscribe", Payload: roomSubscription("2")})
+	readAckWS(t, connection, "kept")
 	revokedStream, keptStream := executor.stream(t, "1"), executor.stream(t, "2")
 	grants.revoke("1", errors.New("share revoked"))
 	message := readWSWithin(t, connection, 5*time.Second)
@@ -187,6 +189,7 @@ func TestWebSocketSubscriptionRecheckKeepsAWhitelistedCode(t *testing.T) {
 	connection := dialRecheck(t, server)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: roomSubscription("1")})
 	executor.stream(t, "1")
+	readAckWS(t, connection, "one")
 	grants.revoke("1", events.Failure(events.CodeSubscriptionRevalidation))
 	message := readWSWithin(t, connection, 5*time.Second)
 	if message.ID != "one" || message.Type != "error" || operationErrorCode(t, message) != string(events.CodeSubscriptionRevalidation) {
@@ -196,12 +199,13 @@ func TestWebSocketSubscriptionRecheckKeepsAWhitelistedCode(t *testing.T) {
 
 func TestSSESubscriptionRecheckSendsAFinalErrorThenCompletes(t *testing.T) {
 	server, executor, grants := newRecheckServer(t)
-	host := httptest.NewServer(sseAuthenticated(server.Handler()))
+	host := httptest.NewServer(sseAuthenticated(withCredentialDeadline(server.Handler())))
 	t.Cleanup(host.Close)
-	connection := openSSE(t, context.Background(), host.URL, string(roomSubscription("3")), true)
+	connection := openSSE(t, context.Background(), host.URL, liveExtend(string(roomSubscription("3"))), true)
 	if connection.response.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", connection.response.StatusCode)
 	}
+	connection.expectAck(t)
 	stream := executor.stream(t, "3")
 	stream.values <- Response{Data: map[string]any{"ticks": int32(1)}}
 	connection.expectNext(t, `{"data":{"ticks":1}}`)
@@ -226,6 +230,7 @@ func TestSubscriptionRecheckGoroutineEndsWithTheOperation(t *testing.T) {
 	for _, room := range []string{"1", "2", "3"} {
 		writeWS(t, connection, wsMessage{ID: "op" + room, Type: "subscribe", Payload: roomSubscription(room)})
 		executor.stream(t, room)
+		readAckWS(t, connection, "op"+room)
 	}
 	for _, room := range []string{"1", "2", "3"} {
 		writeWS(t, connection, wsMessage{ID: "op" + room, Type: "complete"})
@@ -265,7 +270,7 @@ func TestSubscriptionRecheckConfigIsComplete(t *testing.T) {
 func TestSSESubscriptionLimitIsTooManyRequests(t *testing.T) {
 	_, executor, host := newSSEServer(t, events.Limits{}, newSSETestStream())
 	executor.refusal = events.Failure(events.CodeSubscriptionLimit)
-	connection := openSSE(t, context.Background(), host.URL, `{"query":"subscription { ticks }"}`, true)
+	connection := openSSE(t, context.Background(), host.URL, sseTicksBody, true)
 	body, err := io.ReadAll(connection.response.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -280,6 +285,7 @@ func TestSubscriptionRecheckPanicIsAnInternalFault(t *testing.T) {
 	connection := dialRecheck(t, server)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: roomSubscription("1")})
 	executor.stream(t, "1")
+	readAckWS(t, connection, "one")
 	message := readWSWithin(t, connection, 5*time.Second)
 	if message.ID != "one" || message.Type != "error" || operationErrorCode(t, message) != string(events.CodeSubscriptionSourceClosed) {
 		t.Fatalf("message=%#v payload=%s", message, message.Payload)

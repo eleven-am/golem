@@ -1,9 +1,9 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "contract_metadata",
   "formatVersion": 1,
-  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "80eec434687445448316107adbad08d03a04a496b9357b835e4ac0fbd7af6a12",
-  "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
+  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -47,6 +47,14 @@
             "fieldId": "428030fabfab54bd4019b44a60a33098",
             "graphqlName": "replies",
             "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "46ad4ceb97459e7eee763f45c7ce6c1e",
+            "graphqlName": "_version",
+            "modes": [
+              "readOnly",
               "visible"
             ]
           },
@@ -131,7 +139,8 @@
             "entity",
             "causationID",
             "transactionOrdinal",
-            "recordedAt"
+            "recordedAt",
+            "version"
           ],
           "deleteSnapshotFull": false,
           "schema": {
@@ -303,6 +312,14 @@
             ]
           },
           {
+            "fieldId": "23b83393b581fa71799badc10f01c4f5",
+            "graphqlName": "_version",
+            "modes": [
+              "readOnly",
+              "visible"
+            ]
+          },
+          {
             "fieldId": "42e3e2bd1988a04db96d90478750a7fb",
             "graphqlName": "expiresAt",
             "modes": [
@@ -368,7 +385,8 @@
             "entity",
             "causationID",
             "transactionOrdinal",
-            "recordedAt"
+            "recordedAt",
+            "version"
           ],
           "deleteSnapshotFull": false,
           "schema": {
@@ -447,6 +465,14 @@
           "events": "postEvents"
         },
         "fields": [
+          {
+            "fieldId": "02c8f72f8bfde01ac027531b75ce9c55",
+            "graphqlName": "_version",
+            "modes": [
+              "readOnly",
+              "visible"
+            ]
+          },
           {
             "fieldId": "11f9c4adff40cc4daa268c6132ad36d8",
             "graphqlName": "metadata",
@@ -631,7 +657,8 @@
             "entity",
             "causationID",
             "transactionOrdinal",
-            "recordedAt"
+            "recordedAt",
+            "version"
           ],
           "deleteSnapshotFull": false,
           "schema": {

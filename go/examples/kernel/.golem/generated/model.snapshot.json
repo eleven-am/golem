@@ -1,9 +1,9 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "model_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-  "contractFingerprint": "1a6f41387c3c65eda076e3e3f3f1944fecea43bc3c9dccfc1837e90045704b2e",
-  "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+  "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+  "contractFingerprint": "d23df1d5186f040385f2b1ad781906c940965e23af092c4d8ba5e17b289c5697",
+  "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -103,6 +103,31 @@
               "nullable": false,
               "updated": false,
               "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "d1fc187edfc65ed3a0c9c1d89ac20150",
+            "canonicalIdentity": "6b95cdd68f1add5c6fc99a2b2cf895c3\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 5,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
             }
           },
           {

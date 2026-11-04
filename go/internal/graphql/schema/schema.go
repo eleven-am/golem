@@ -397,6 +397,12 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			}
 			continue
 		}
+		if ir.IsRowVersionField(field) {
+			if readable {
+				fmt.Fprintf(&output, "  %s: String!\n", fc.GraphQLName)
+			}
+			continue
+		}
 		writableCreate = writableCreate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 		writableUpdate = writableUpdate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 		if view.model.OptimisticConcurrency != nil && field.ID == *view.model.OptimisticConcurrency {
@@ -664,7 +670,7 @@ func renderRoots(views []modelView, compilation ir.CompilationIR) (string, strin
 }
 
 func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) ([]string, error) {
-	sections := []string{"enum GolemEventType {\n  CREATED\n  UPDATED\n  DELETED\n}"}
+	sections := []string{"enum GolemEventType {\n  CREATED\n  UPDATED\n  DELETED\n  EXITED\n}"}
 	for _, view := range views {
 		if !view.contract.Subscriptions {
 			continue
@@ -706,7 +712,7 @@ func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) 
 			sections = append(sections, identity.String())
 			identityType = event.IdentityTypeName
 		}
-		sections = append(sections, fmt.Sprintf("type %s {\n  eventID: UUID!\n  causationID: UUID!\n  transactionOrdinal: Int!\n  recordedAt: DateTime!\n  type: GolemEventType!\n  id: %s!\n  entity: %s\n}", event.PayloadTypeName, identityType, view.contract.GraphQLName))
+		sections = append(sections, fmt.Sprintf("type %s {\n  eventID: UUID!\n  causationID: UUID!\n  transactionOrdinal: Int!\n  recordedAt: DateTime!\n  version: String!\n  type: GolemEventType!\n  id: %s!\n  entity: %s\n}", event.PayloadTypeName, identityType, view.contract.GraphQLName))
 	}
 	return sections, nil
 }

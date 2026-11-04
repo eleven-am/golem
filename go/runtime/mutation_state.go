@@ -10,6 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
@@ -365,7 +366,7 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	var oversized *mutationDeleteSnapshotOversize
 	defer func() {
 		if oversized != nil {
-			events.Observe(oversized.observer, ctx, oversized.model, golem.EventDeleted, events.ObservationDeleteSnapshotOversize, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, oversized.limit, 0, int64(oversized.bytes))
+			events.Observe(oversized.observer, ctx, oversized.model, oversized.action, events.ObservationDeleteSnapshotOversize, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, oversized.limit, 0, int64(oversized.bytes))
 		}
 	}()
 	state.mu.Lock()
@@ -384,12 +385,15 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
-	var envelope mutationfact.Envelope
-	if eventSchema, present := requirement.EventSchema(); present {
-		envelope, err = mutationfact.NewV2(registry, golem.SchemaDigest(eventSchema), event, requirement, state.causation, ordinal, before, after)
-	} else {
-		envelope, err = mutationfact.New(registry, event, requirement, state.causation, ordinal, before, after)
+	eventSchema, present := requirement.EventSchema()
+	if !present {
+		return mutationfact.OutboxRow{}, fmt.Errorf("P7_FACT_INPUT: fact requirement carries no event schema")
 	}
+	version, err := factRowVersion(registry, requirement, before, after)
+	if err != nil {
+		return mutationfact.OutboxRow{}, err
+	}
+	envelope, err := mutationfact.New(registry, golem.SchemaDigest(eventSchema), event, requirement, state.causation, ordinal, version, before, after)
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
@@ -399,7 +403,11 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	}
 	var dropped *mutationDeleteSnapshotOversize
 	if limit := state.deleteSnapshotLimit(); len(row.DeleteSnapshot) > limit {
-		dropped = &mutationDeleteSnapshotOversize{observer: state.observer, model: golem.ModelID(envelope.ModelID()), limit: limit, bytes: len(row.DeleteSnapshot)}
+		action := golem.EventDeleted
+		if envelope.Action() == mutationir.FactUpdated {
+			action = golem.EventUpdated
+		}
+		dropped = &mutationDeleteSnapshotOversize{observer: state.observer, model: golem.ModelID(envelope.ModelID()), action: action, limit: limit, bytes: len(row.DeleteSnapshot)}
 		if envelope, err = envelope.WithUnverifiableDeleteSnapshot(); err != nil {
 			return mutationfact.OutboxRow{}, err
 		}
@@ -420,9 +428,21 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	return cloneOutboxRow(row), nil
 }
 
+func factRowVersion(registry *schema.Registry, requirement mutationir.FactRequirement, before, after *mutationdecode.Row) (int64, error) {
+	image := after
+	if action, _ := requirement.Action(); action == mutationir.FactDeleted {
+		image = before
+	}
+	if image == nil {
+		return 0, fmt.Errorf("P4_FACT_INPUT: fact has no image to read the row version from")
+	}
+	return mutationfact.RowVersionOf(registry, *image)
+}
+
 type mutationDeleteSnapshotOversize struct {
 	observer events.Observer
 	model    golem.ModelID
+	action   golem.EventAction
 	limit    int
 	bytes    int
 }
@@ -635,6 +655,9 @@ func (state *mutationState) committed(ctx context.Context, report func(context.C
 	state.after = nil
 	state.mu.Unlock()
 
+	if dirty {
+		commitreport.From(ctx).Committed()
+	}
 	if dirty && invalidate != nil {
 		invalidate()
 	}

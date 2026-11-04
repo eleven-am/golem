@@ -501,10 +501,13 @@ func (app *App[P, A]) policySet(actor A) (*policyruntime.Set, error) {
 }
 
 func (app *App[P, A]) InvalidatePolicies() {
-	if app == nil || app.policyCache == nil {
+	if app == nil {
 		return
 	}
-	app.policyCache.invalidate()
+	if app.policyCache != nil {
+		app.policyCache.invalidate()
+	}
+	app.endEventStreams(events.Failure(events.CodeSubscriptionResync))
 }
 
 // AuthenticatePrincipal resolves and snapshots the principal exactly as

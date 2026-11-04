@@ -75,7 +75,7 @@ func subscribeActiveFrame(t *testing.T, executable gqlgengraphql.ExecutableSchem
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -83,7 +83,7 @@ func subscribeActiveFrame(t *testing.T, executable gqlgengraphql.ExecutableSchem
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInit("")}); err != nil {
 		t.Fatal(err)
 	}
 	readActiveFrame(t, connection)
@@ -91,6 +91,7 @@ func subscribeActiveFrame(t *testing.T, executable gqlgengraphql.ExecutableSchem
 	if err := connection.WriteJSON(map[string]any{"id": "one", "type": "subscribe", "payload": map[string]any{"query": query, "variables": map[string]any{"show": true}}}); err != nil {
 		t.Fatal(err)
 	}
+	readLiveAck(t, connection, "one")
 	next := readActiveFrame(t, connection)
 	if complete := readActiveFrame(t, connection); complete.Type != "complete" {
 		t.Fatalf("complete frame = %#v", complete)

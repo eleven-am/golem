@@ -438,14 +438,14 @@ func (fixture *fixture) waitSubscriptionMembership(want int) {
 
 func (fixture *fixture) openGraphQLSubscription() (*httptest.Server, *websocket.Conn) {
 	fixture.t.Helper()
-	server := httptest.NewServer(fixture.handler)
+	server := httptest.NewServer(withCredentialDeadline(fixture.handler))
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	if err != nil {
 		server.Close()
 		fixture.t.Fatal(err)
 	}
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInitPayload()}); err != nil {
 		fixture.t.Fatal(err)
 	}
 	readFrame(fixture.t, connection, "connection_ack")
@@ -458,6 +458,9 @@ func (fixture *fixture) openGraphQLSubscription() (*httptest.Server, *websocket.
 }`},
 	}); err != nil {
 		fixture.t.Fatal(err)
+	}
+	if ack := readFrame(fixture.t, connection, "next"); string(ack.Payload) != `{"data":null,"extensions":{"golem":{"live":true}}}` {
+		fixture.t.Fatalf("disclosure subscription ack=%s", ack.Payload)
 	}
 	return server, connection
 }
@@ -940,4 +943,16 @@ func mustJSON(t testing.TB, value string) golem.JSON[any] {
 		t.Fatal(err)
 	}
 	return result
+}
+
+func liveInitPayload() map[string]any {
+	return map[string]any{"golem": map[string]any{"protocol": 1, "contract": social.GolemGeneratedSchemaBundle().Contract().Fingerprint().String()}}
+}
+
+func withCredentialDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), time.Hour)
+		defer cancel()
+		next.ServeHTTP(writer, request.WithContext(ctx))
+	})
 }

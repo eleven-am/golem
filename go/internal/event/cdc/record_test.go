@@ -16,9 +16,9 @@ type orderingRecorder struct {
 	published int
 }
 
-func (recorder *orderingRecorder) RecordCDC(ctx context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *orderingRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []Change, build func([]Stamp) ([]mutationfact.OutboxRow, error)) error {
 	recorder.published = len(recorder.transport.snapshot())
-	return recorder.fakeRecorder.RecordCDC(ctx, rows)
+	return recorder.fakeRecorder.RecordCDC(ctx, causation, changes, build)
 }
 
 func TestCDCRecordsTheCanonicalFactsBeforePublishing(t *testing.T) {
@@ -96,5 +96,21 @@ func TestCDCEmitterRequiresARecorder(t *testing.T) {
 	_, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: &fakeCorrelator{}}, Transport: &captureTransport{}, Encoder: &fakeEncoder{}})
 	if eventCode(t, err) != events.CodeCDCInvalid {
 		t.Fatalf("emitter without a recorder error=%v", err)
+	}
+}
+
+func TestCDCEncodesEveryFactWithTheVersionTheRecorderDrew(t *testing.T) {
+	encoder := &fakeEncoder{}
+	if err := testRecordingEmitter(t, &captureTransport{}, encoder, &fakeCorrelator{}, &fakeRecorder{}).Emit(context.Background(), validBatch(t)); err != nil {
+		t.Fatal(err)
+	}
+	inputs := encoder.snapshot()
+	if len(inputs) != 3 {
+		t.Fatalf("encoded %d changes, want 3", len(inputs))
+	}
+	for index, input := range inputs {
+		if input.Version != int64(100+index) {
+			t.Fatalf("change %d was encoded with version %d, want %d", index+1, input.Version, 100+index)
+		}
 	}
 }

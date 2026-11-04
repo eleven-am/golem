@@ -52,8 +52,8 @@ const (
 	SuppressionEntityAbsent         SuppressionReason = "entity_absent"
 	SuppressionDeleteFiltered       SuppressionReason = "delete_filtered"
 	SuppressionCorrelatedGolemWrite SuppressionReason = "correlated_golem_write"
-	SuppressionPolicyUnavailable    SuppressionReason = "policy_unavailable"
 	SuppressionDeleteOverDelivered  SuppressionReason = "delete_over_delivered"
+	SuppressionCDCSuperseded        SuppressionReason = "cdc_superseded"
 )
 
 type Observation struct{ value internalvalue.Observation }
@@ -123,8 +123,8 @@ func validOutcome(outcome Outcome) bool {
 func validSuppressionReason(reason SuppressionReason) bool {
 	switch reason {
 	case "", SuppressionFiltered, SuppressionUnauthorized, SuppressionDeletionUnverifiable,
-		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite, SuppressionPolicyUnavailable,
-		SuppressionDeleteOverDelivered:
+		SuppressionEntityAbsent, SuppressionDeleteFiltered, SuppressionCorrelatedGolemWrite,
+		SuppressionDeleteOverDelivered, SuppressionCDCSuperseded:
 		return true
 	default:
 		return false
@@ -133,7 +133,7 @@ func validSuppressionReason(reason SuppressionReason) bool {
 
 func validObservationAction(action golem.EventAction) bool {
 	switch action {
-	case "", golem.EventCreated, golem.EventUpdated, golem.EventDeleted:
+	case "", golem.EventCreated, golem.EventUpdated, golem.EventDeleted, golem.EventExited:
 		return true
 	default:
 		return false

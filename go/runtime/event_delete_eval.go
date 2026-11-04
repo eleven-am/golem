@@ -25,32 +25,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/subscription"
 )
 
-type deleteTruth uint8
-
-const (
-	deleteUnknown deleteTruth = iota
-	deleteFalse
-	deleteTrue
-)
-
-func deleteTruthOf(value bool) deleteTruth {
-	if value {
-		return deleteTrue
-	}
-	return deleteFalse
-}
-
-func (truth deleteTruth) not() deleteTruth {
-	switch truth {
-	case deleteTrue:
-		return deleteFalse
-	case deleteFalse:
-		return deleteTrue
-	default:
-		return deleteUnknown
-	}
-}
-
 type deleteProbe struct {
 	target    golem.ModelID
 	condition policyir.Condition
@@ -76,6 +50,7 @@ type deleteEvaluation struct {
 	generation golem.SchemaDigest
 	maxDepth   int
 	providers  policyir.ProviderSet
+	fromRecord bool
 	forward    func(policyir.ModelID, policyir.FieldID, policyir.RelationID) (deleteForwardHop, bool)
 	equality   func(policyir.ModelID, []mutationdecode.IdentityComponent) (policyir.Condition, error)
 	identity   func(policyir.ModelID, []mutationdecode.IdentityComponent) ([]byte, bool)
@@ -108,17 +83,21 @@ type deleteVerdict struct {
 
 func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P], fact mutationfact.Envelope, identity mutationdecode.Identity) (subscription.Evaluation[any], bool, error) {
 	model := policyir.ModelID(state.model)
+	action := golem.EventDeleted
+	if fact.Action() == mutationir.FactUpdated {
+		action = golem.EventExited
+	}
 	policy, present := caller.policies.Policy(model)
 	if !present {
 		return subscription.Suppress[any](events.SuppressionUnauthorized), false, nil
 	}
 	raw, err := policyresolve.RowConstraint(policy, policyir.ActionRead, model)
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	allowed, err := policyresolve.ActionAllowed(raw)
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	if !allowed {
 		return subscription.Suppress[any](events.SuppressionUnauthorized), false, nil
@@ -129,10 +108,10 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	}
 	row, _, err := readplan.CallerReach(caller.policies, model, nil, app.readLimits.plan.MaxRelationDepth)
 	if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
-		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+		return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	verdict := deleteVerdict{policy: evaluator.truth(row)}
 	if verdict.policy == deleteFalse {
@@ -146,7 +125,7 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 	if where != nil {
 		_, filter, err = readplan.CallerReach(caller.policies, model, where, app.readLimits.plan.MaxRelationDepth)
 		if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
-			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), false, nil
+			return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 		}
 		if err != nil {
 			filter = nil
@@ -186,14 +165,17 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 		case deleteFalse:
 			return subscription.Suppress[any](events.SuppressionDeleteFiltered), false, nil
 		default:
-			events.Observe(app.eventObserver, ctx, state.model, golem.EventDeleted, events.ObservationDelivery, events.OutcomeSuccess, events.SuppressionDeleteOverDelivered, 0, 0, 0, 0, 1)
+			if action == golem.EventExited {
+				return app.unverifiableDelete(ctx, state, action)
+			}
+			events.Observe(app.eventObserver, ctx, state.model, action, events.ObservationDelivery, events.OutcomeSuccess, events.SuppressionDeleteOverDelivered, 0, 0, 0, 0, 1)
 			return subscription.Evaluation[any]{}, true, nil
 		}
 	default:
 		if verdict.filter == deleteFalse {
 			return subscription.Suppress[any](events.SuppressionDeleteFiltered), false, nil
 		}
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 }
 
@@ -228,8 +210,8 @@ func (app *App[P, A]) resolveDeleteEvidence(ctx context.Context, caller *Caller[
 	return nil
 }
 
-func (app *App[P, A]) unverifiableDelete(ctx context.Context, state *callerEventSubscription[P]) (subscription.Evaluation[any], bool, error) {
-	events.Observe(app.eventObserver, ctx, state.model, golem.EventDeleted, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, 0, 0, 1)
+func (app *App[P, A]) unverifiableDelete(ctx context.Context, state *callerEventSubscription[P], action golem.EventAction) (subscription.Evaluation[any], bool, error) {
+	events.Observe(app.eventObserver, ctx, state.model, action, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, 0, 0, 1)
 	return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionResync)
 }
 
@@ -272,10 +254,8 @@ func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact mutationfa
 		checks:     make(map[string]*deleteFactCheck),
 	}
 	var snapshot *mutationdecode.Row
-	if fact.DeleteSnapshotState() == mutationir.DeleteSnapshotStoredScalars {
-		if row, present := fact.PrivateDeleteSnapshot(); present && row.ModelID() == model && app.deleteSnapshotDeclared(row) {
-			snapshot = &row
-		}
+	if row, present := app.eventBeforeImage(model, fact); present {
+		snapshot = &row
 	}
 	return newDeleteNode(shared, model, snapshot, identity, 0)
 }
@@ -569,86 +549,10 @@ func deleteProbeKey(probe deleteProbe) (string, error) {
 	return string(probe.target[:]) + string(canonical), nil
 }
 
-func (evaluator *deleteEvaluator) truth(condition policyir.Condition) deleteTruth {
-	return evaluator.truthAt(condition, true)
-}
-
-func (evaluator *deleteEvaluator) truthAt(condition policyir.Condition, positive bool) deleteTruth {
-	if condition.ModelID() != evaluator.model {
-		return deleteUnknown
-	}
-	switch condition.Kind() {
-	case policyir.ConditionConstant:
-		value, ok := condition.Constant()
-		if !ok {
-			return deleteUnknown
-		}
-		return deleteTruthOf(value)
-	case policyir.ConditionLogical:
-		return evaluator.logical(condition, positive)
-	case policyir.ConditionScalar, policyir.ConditionList, policyir.ConditionJSON:
-		return evaluator.leaf(condition)
-	case policyir.ConditionRelation:
-		return evaluator.relation(condition, positive)
-	default:
-		return deleteUnknown
-	}
-}
-
-func (evaluator *deleteEvaluator) logical(condition policyir.Condition, positive bool) deleteTruth {
-	op, children, ok := condition.Logical()
-	if !ok || len(children) == 0 {
-		return deleteUnknown
-	}
-	switch op {
-	case policyir.LogicalNot:
-		if len(children) != 1 {
-			return deleteUnknown
-		}
-		return evaluator.truthAt(children[0], !positive).not()
-	case policyir.LogicalAnd:
-		result := deleteTrue
-		for _, child := range children {
-			switch evaluator.truthAt(child, positive) {
-			case deleteFalse:
-				return deleteFalse
-			case deleteUnknown:
-				result = deleteUnknown
-			}
-		}
-		return result
-	case policyir.LogicalOr:
-		result := deleteFalse
-		for _, child := range children {
-			switch evaluator.truthAt(child, positive) {
-			case deleteTrue:
-				return deleteTrue
-			case deleteUnknown:
-				result = deleteUnknown
-			}
-		}
-		return result
-	default:
-		return deleteUnknown
-	}
-}
-
-func (evaluator *deleteEvaluator) leaf(condition policyir.Condition) deleteTruth {
-	field, ok := condition.Field()
-	if !ok {
-		return deleteUnknown
-	}
-	if _, present := evaluator.cells[field]; !present {
-		return deleteUnknown
-	}
-	value, err := evaluate.Condition(condition, evaluator.record, evaluator.shared.providers)
-	if err != nil {
-		return deleteUnknown
-	}
-	return deleteTruthOf(value)
-}
-
 func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positive bool) deleteTruth {
+	if evaluator.shared.fromRecord {
+		return evaluator.relationFromRecord(condition)
+	}
 	field, _, target, cardinality, child, ok := condition.Relation()
 	if !ok || cardinality != policyir.RelationToOne {
 		return deleteUnknown
@@ -733,27 +637,6 @@ func (evaluator *deleteEvaluator) relation(condition policyir.Condition, positiv
 			matched = !matched
 		}
 		return deleteTruthOf(matched)
-	default:
-		return deleteUnknown
-	}
-}
-
-func (node *deleteEvaluator) fromSnapshot(operator policyir.OperatorID, child *policyir.Condition, positive bool) deleteTruth {
-	switch operator {
-	case policyir.OperatorRelationIsNotNull:
-		return deleteTrue
-	case policyir.OperatorRelationIsNull:
-		return deleteFalse
-	case policyir.OperatorRelationIs:
-		if child == nil {
-			return deleteTrue
-		}
-		return node.truthAt(*child, positive)
-	case policyir.OperatorRelationIsNot:
-		if child == nil {
-			return deleteFalse
-		}
-		return node.truthAt(*child, !positive).not()
 	default:
 		return deleteUnknown
 	}

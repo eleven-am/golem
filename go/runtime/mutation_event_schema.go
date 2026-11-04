@@ -21,15 +21,12 @@ func decodeRuntimeMutationFact(registry *schema.Registry, row mutationfact.Outbo
 	return decodeCurrentMutationFact(registry, model, row.Metadata, row.DeleteSnapshot)
 }
 
-// decodeCurrentMutationFact is the only active-registry inspection seam for
-// runtime-owned V2 facts. It resolves the compiler digest for the exact model;
-// callers cannot make Decode/DecodeOutbox silently accept V2 as V1.
 func decodeCurrentMutationFact(registry *schema.Registry, model policyir.ModelID, metadata, deleteSnapshot []byte) (mutationfact.Envelope, error) {
 	_, digest, _, err := mutationplan.ModelEventSchema(registry, model)
 	if err != nil {
 		return mutationfact.Envelope{}, err
 	}
-	return mutationfact.DecodeOutboxV2(metadata, deleteSnapshot, registry, golem.SchemaDigest(digest))
+	return mutationfact.DecodeOutbox(metadata, deleteSnapshot, registry, golem.SchemaDigest(digest))
 }
 
 func decodeCurrentMutationFactMetadata(registry *schema.Registry, model policyir.ModelID, metadata []byte) (mutationfact.Envelope, error) {
@@ -37,5 +34,5 @@ func decodeCurrentMutationFactMetadata(registry *schema.Registry, model policyir
 	if err != nil {
 		return mutationfact.Envelope{}, err
 	}
-	return mutationfact.DecodeV2(metadata, registry, golem.SchemaDigest(digest))
+	return mutationfact.Decode(metadata, registry, golem.SchemaDigest(digest))
 }

@@ -51,7 +51,7 @@ func runP7HubPanicChild(t *testing.T, scenario string) {
 	stateful := scenario == "evaluate-state" || scenario == "policy-factory"
 	if stateful {
 		config.Evaluate = nil
-		config.EvaluateState = func(context.Context, events.Notice, SubscriberKey, any) (Evaluation[golem.EventID], error) {
+		config.EvaluateState = func(context.Context, events.Notice, SubscriberKey, any, any) (Evaluation[golem.EventID], error) {
 			if scenario == "policy-factory" {
 				invokePanickingGeneratedPolicyFactory(t)
 			}
@@ -71,7 +71,7 @@ func runP7HubPanicChild(t *testing.T, scenario string) {
 	var drops atomic.Int64
 	var stream *Stream[golem.EventID]
 	if stateful {
-		stream, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "member", false), struct{}{}, func(any) {
+		stream, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "member", false), struct{}{}, func(any, error) {
 			drops.Add(1)
 			panic("private cleanup panic")
 		})

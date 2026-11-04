@@ -114,6 +114,9 @@ func renderNormalizedInitial(normalized physical.PhysicalSchema, reviewedReplay 
 		}
 		statements = append(statements, indexStatements...)
 	}
+	if physical.HasRowVersion(normalized) {
+		statements = append(statements, renderRowVersionCounter()...)
+	}
 	for _, table := range normalized.Tables {
 		statement, renderErr := renderTable(table, tables)
 		if renderErr != nil {
@@ -325,6 +328,14 @@ func renderSystemObject(object physical.SystemObject) (string, error) {
 		return "CREATE TABLE " + quote(object.Name) + " (" + quote("guard_token") + " BLOB NOT NULL, PRIMARY KEY (" + quote("guard_token") + ")) STRICT", nil
 	default:
 		return "", fmt.Errorf("sqlite render: unsupported system object kind %q", object.Kind)
+	}
+}
+
+func renderRowVersionCounter() []string {
+	name := quote(physical.RowVersionObject)
+	return []string{
+		"CREATE TABLE IF NOT EXISTS " + name + " (" + quote("value") + " INTEGER NOT NULL CHECK (" + quote("value") + " >= 0)) STRICT",
+		"INSERT INTO " + name + " (" + quote("value") + ") SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM " + name + ")",
 	}
 }
 

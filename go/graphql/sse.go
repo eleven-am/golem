@@ -128,8 +128,12 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, int64(server.limits.MaxRequestBytes))
-	decoded, failure := decodeHTTPRequest(request.Body, server.limits)
+	decoded, extensions, failure := decodeHTTPRequest(request.Body, server.limits)
 	if failure != nil {
+		refuseSSE(writer, *failure)
+		return
+	}
+	if failure := server.handshakeFailure(extensions, false); failure != nil {
 		refuseSSE(writer, *failure)
 		return
 	}
@@ -138,10 +142,10 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		refuseSSE(writer, rejected.Errors...)
 		return
 	}
-	server.streamSSE(writer, request, principal, decoded, prepared, refuseSSE)
+	server.streamSSE(writer, request, principal, decoded, extensions, prepared, refuseSSE)
 }
 
-func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Request, principal P, decoded Request, prepared preparedRequest, refuse func(http.ResponseWriter, ...Error)) {
+func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Request, principal P, decoded Request, extensions *requestExtensions, prepared preparedRequest, refuse func(http.ResponseWriter, ...Error)) {
 	server.lifecycleMu.Lock()
 	if server.shuttingDown {
 		server.lifecycleMu.Unlock()
@@ -163,11 +167,22 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 		}
 		return
 	}
+	if failure := server.handshakeFailure(extensions, true); failure != nil {
+		refuse(writer, *failure)
+		return
+	}
+	deadline, deadlineFailure := server.principalDeadline(request.Context(), time.Now())
+	if deadlineFailure != nil {
+		refuse(writer, *deadlineFailure)
+		return
+	}
 	executor, subscribable := server.executor.(SubscriptionExecutor[P])
 	if !subscribable {
 		refuse(writer, publicError("SUBSCRIPTIONS_UNAVAILABLE", "GraphQL subscriptions are unavailable"))
 		return
 	}
+	ctx, cancelDeadline := context.WithDeadline(ctx, deadline)
+	defer cancelDeadline()
 	opCtx, observation := observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
 	source, err := server.subscribe(executor, opCtx, principal, prepared.Operation)
 	if err != nil {
@@ -178,6 +193,9 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 	defer server.closeResponseStream(opCtx, source)
 	stream := server.openSSE(opCtx, cancel, writer)
 	defer stream.release()
+	if stream.write(sseEventFrame("next", liveAckPayload)) != nil {
+		return
+	}
 	stopKeepAlive := stream.keepAlive()
 	defer stopKeepAlive()
 	finishGraphQLChild(observation, stream.relay(source, decoded, prepared))

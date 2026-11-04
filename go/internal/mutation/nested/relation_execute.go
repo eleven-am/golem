@@ -42,11 +42,6 @@ func ExecuteRelationSQL(ctx context.Context, queryer sqlx.QueryerContext, regist
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_QUERY: %w", err)
 	}
-	if statement.role == ApplyMembershipConnect || statement.role == ApplyMembershipDisconnect {
-		if len(result) != 1 {
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_CARDINALITY: membership write returned %d rows; expected 1", len(result))
-		}
-	}
 	return result, nil
 }
 

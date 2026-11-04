@@ -281,7 +281,7 @@ func TestGeneratedSubscriptionSDLMatchesClosedEventABIGolden(t *testing.T) {
 		if len(shape.IdentityFields) > 1 {
 			identityType = contract.GraphQLName + "EventIdentity"
 		}
-		contract.Event = &compilerir.EventContractIR{PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType, MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}, Schema: shape, SchemaFingerprint: fingerprint}
+		contract.Event = &compilerir.EventContractIR{PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType, MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"}, Schema: shape, SchemaFingerprint: fingerprint}
 	}
 	document, err := Build(*compiled.Compilation)
 	if err != nil {
@@ -296,11 +296,11 @@ func TestGeneratedSubscriptionSDLMatchesClosedEventABIGolden(t *testing.T) {
 	for _, value := range eventType.EnumValues {
 		eventValues = append(eventValues, value.Name)
 	}
-	if strings.Join(eventValues, ",") != "CREATED,UPDATED,DELETED" {
+	if strings.Join(eventValues, ",") != "CREATED,UPDATED,DELETED,EXITED" {
 		t.Fatalf("event enum = %v", eventType.EnumValues)
 	}
 	event := requireDefinition(t, parsed, "PostEvent")
-	requireFieldNames(t, event, "eventID", "causationID", "transactionOrdinal", "recordedAt", "type", "id", "entity")
+	requireFieldNames(t, event, "eventID", "causationID", "transactionOrdinal", "recordedAt", "version", "type", "id", "entity")
 	if event.Fields.ForName("entity").Type.String() != "Post" || event.Fields.ForName("id").Type.String() != "UUID!" {
 		t.Fatalf("event field types = entity %s / id %s", event.Fields.ForName("entity").Type, event.Fields.ForName("id").Type)
 	}

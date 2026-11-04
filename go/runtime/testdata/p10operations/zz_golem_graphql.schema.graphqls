@@ -29,6 +29,7 @@ type Invite {
   status: String
   note: String
   team: Team
+  _version: String!
 }
 
 input InviteWhereInput {
@@ -116,6 +117,7 @@ type Team {
   id: UUID
   owner: String
   invites(where: InviteWhereInput, orderBy: [InviteOrderByInput!], cursor: InviteWhereUniqueInput, distinct: [InviteScalarField!], skip: Int, take: Int = 50): [Invite!]
+  _version: String!
   newestInvite: Invite
   openInvites: [Invite!]!
   pinnedInvite: Invite!
@@ -287,6 +289,7 @@ enum GolemEventType {
   CREATED
   UPDATED
   DELETED
+  EXITED
 }
 
 type InviteEvent {
@@ -294,6 +297,7 @@ type InviteEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Invite
@@ -304,6 +308,7 @@ type TeamEvent {
   causationID: UUID!
   transactionOrdinal: Int!
   recordedAt: DateTime!
+  version: String!
   type: GolemEventType!
   id: UUID!
   entity: Team

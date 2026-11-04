@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -102,9 +103,11 @@ func encodeEventMetadata(name string, metadata golem.EventMetadata) (any, error)
 		return int32(metadata.TransactionOrdinal()), nil
 	case "recordedAt":
 		return metadata.RecordedAt().UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), nil
+	case "version":
+		return strconv.FormatInt(metadata.Version(), 10), nil
 	case "type":
 		value := strings.ToUpper(string(metadata.Action()))
-		if value != "CREATED" && value != "UPDATED" && value != "DELETED" {
+		if value != "CREATED" && value != "UPDATED" && value != "DELETED" && value != "EXITED" {
 			return nil, fmt.Errorf("P7_ENCODE_EVENT: event action is unknown")
 		}
 		return value, nil

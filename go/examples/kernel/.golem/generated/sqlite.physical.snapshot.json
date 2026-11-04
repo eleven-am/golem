@@ -1,12 +1,12 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "physical_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-  "contractFingerprint": "1a6f41387c3c65eda076e3e3f3f1944fecea43bc3c9dccfc1837e90045704b2e",
+  "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+  "contractFingerprint": "d23df1d5186f040385f2b1ad781906c940965e23af092c4d8ba5e17b289c5697",
   "provider": "sqlite",
-  "physicalFingerprint": "4ba5ee3d35d82ec282a0fbde0edd30b140cc53c54cd977970f8b843d06f81cdf",
+  "physicalFingerprint": "3057dad7cd8cf266543db248790daa93f7a639951153a30aecdadce8b02f11b1",
   "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
-  "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+  "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -353,6 +353,30 @@
             "Generated": null,
             "Collation": null,
             "RequiredCapabilities": null
+          },
+          {
+            "ID": "d1fc187edfc65ed3a0c9c1d89ac20150",
+            "Name": "golem_version",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "sqlite.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
           }
         ],
         "PrimaryKey": {
@@ -689,6 +713,10 @@
       {
         "Kind": "table",
         "Name": "golem_queue"
+      },
+      {
+        "Kind": "table",
+        "Name": "golem_row_version"
       }
     ]
   }

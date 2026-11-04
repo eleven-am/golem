@@ -8,10 +8,13 @@ import (
 
 // ValidateStoredRow joins and validates the immutable outbox row, then
 // cross-checks every duplicated column against canonical metadata. RecordedAt
-// is intentionally excluded because the V1/V2 fact metadata never contained
+// is intentionally excluded because the fact metadata never contained
 // it; the provider column remains validated for non-zero/canonical storage by
 // insertion and provider readers.
 func ValidateStoredRow(row OutboxRow, resolver HistoricalSchemaResolver) (Envelope, error) {
+	if row.FactVersion == int64(formatVersionV1) || row.FactVersion == int64(formatVersionV2) {
+		return Envelope{}, FormatRetired(uint16(row.FactVersion))
+	}
 	if err := validateOutboxRow(row); err != nil {
 		return Envelope{}, fmt.Errorf("P7_FACT_STORED_ROW: %w", err)
 	}

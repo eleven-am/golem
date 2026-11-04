@@ -22,7 +22,7 @@ import (
 )
 
 // cdcEventEncoder is the production bridge from one trusted adapter's exact
-// stored-scalar images into the same V2 mutation fact and golem.event.v1 codec
+// stored-scalar images into the same mutation fact and golem.event.v1 codec
 // path used by the transactional outbox publisher. It defines no CDC wire
 // format and accepts no caller-supplied schema, generation, or encoded bytes.
 type cdcEventEncoder struct {
@@ -59,7 +59,7 @@ func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.En
 	}
 
 	modelID := policyir.ModelID(input.Model)
-	requirement, eventSchema, err := cdcFactRequirement(encoder.registry, modelID, input.Action)
+	requirement, eventSchema, err := cdcFactRequirement(encoder.registry, modelID, input.Action, input.Before != nil)
 	if err != nil {
 		return eventcdc.Encoded{}, err
 	}
@@ -72,13 +72,14 @@ func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.En
 		return eventcdc.Encoded{}, fmt.Errorf("P7_CDC_IMAGE: after: %w", err)
 	}
 
-	fact, err := mutationfact.NewV2(
+	fact, err := mutationfact.New(
 		encoder.registry,
 		golem.SchemaDigest(eventSchema),
 		mutationfact.EventID(input.EventID),
 		requirement,
 		mutationfact.CausationID(input.CausationID),
 		input.Ordinal,
+		input.Version,
 		before,
 		after,
 	)
@@ -108,7 +109,7 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 		len(input.SourceTransactionID) == 0 || len(input.SourceTransactionID) > events.MaximumCDCSourceTransactionBytes || !utf8.ValidString(input.SourceTransactionID) ||
 		input.RecordedAt.IsZero() || input.RecordedAt.Location() != time.UTC || input.RecordedAt.Nanosecond()%int(time.Microsecond) != 0 ||
 		len(input.Cursor) > events.MaximumCDCCursorBytes ||
-		input.EventID == (golem.EventID{}) || input.CausationID == (golem.CausationID{}) || input.Ordinal == 0 || input.Model == (golem.ModelID{}) {
+		input.EventID == (golem.EventID{}) || input.CausationID == (golem.CausationID{}) || input.Ordinal == 0 || input.Version < 0 || input.Model == (golem.ModelID{}) {
 		return fmt.Errorf("P7_CDC_ENCODER_INPUT: identity metadata is invalid")
 	}
 	providerEnabled := false
@@ -130,8 +131,8 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 			return fmt.Errorf("P7_CDC_ENCODER_INPUT: create requires only an after image")
 		}
 	case golem.EventUpdated:
-		if input.Before == nil || input.After == nil {
-			return fmt.Errorf("P7_CDC_ENCODER_INPUT: update requires before and after images")
+		if input.After == nil {
+			return fmt.Errorf("P7_CDC_ENCODER_INPUT: update requires an after image")
 		}
 	case golem.EventDeleted:
 		if input.Before == nil || input.After != nil {
@@ -143,7 +144,7 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 	return nil
 }
 
-func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, action golem.EventAction) (mutationir.FactRequirement, [32]byte, error) {
+func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, action golem.EventAction, hasBefore bool) (mutationir.FactRequirement, [32]byte, error) {
 	_, eventSchema, deleteSnapshot, err := mutationplan.ModelEventSchema(registry, modelID)
 	if err != nil {
 		return mutationir.FactRequirement{}, [32]byte{}, err
@@ -161,7 +162,11 @@ func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, act
 	case golem.EventCreated:
 		requirement, err = mutationir.NewFactRequirement(mutationir.FactCreated, nil, identity, nil)
 	case golem.EventUpdated:
-		requirement, err = mutationir.NewFactRequirement(mutationir.FactUpdated, identity, identity, nil)
+		if hasBefore {
+			requirement, err = mutationir.NewUpdateFactRequirement(identity, identity, mutationir.DeleteSnapshotStoredScalars, deleteSnapshot)
+		} else {
+			requirement, err = mutationir.NewUpdateFactRequirement(identity, identity, mutationir.DeleteSnapshotUnverifiable, nil)
+		}
 	case golem.EventDeleted:
 		requirement, err = mutationir.NewDeleteFactRequirement(identity, mutationir.DeleteSnapshotStoredScalars, deleteSnapshot)
 	default:

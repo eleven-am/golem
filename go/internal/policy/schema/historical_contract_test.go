@@ -1,90 +1,40 @@
 package schema
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 )
 
-func TestHistoricalContractV4IsCanonicalFingerprintBoundAndActiveClosed(t *testing.T) {
-	canonical := []byte(`{"formatVersion":4,"graphqlAbiVersion":3,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
-	document := historicalContractDocument(4, canonical, historicalContractDigest(canonical))
-	decoded, err := decodeContract(document, true)
-	if err != nil || decoded.FormatVersion != compilerir.ContractFormatVersion || decoded.GraphQLABIVersion != 3 || len(decoded.Models) != 0 {
-		t.Fatalf("historical decode=%#v err=%v", decoded, err)
-	}
-	if _, err := decodeContract(document, false); err == nil {
-		t.Fatal("active bundle path accepted historical contract v4")
-	}
-	currentCanonical := []byte(`{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
-	currentDocument := historicalContractDocument(7, currentCanonical, historicalContractDigest(currentCanonical))
-	if decoded, err := decodeContract(currentDocument, true); err != nil || decoded.FormatVersion != compilerir.ContractFormatVersion {
-		t.Fatalf("historical path rejected exact current contract: decode=%#v err=%v", decoded, err)
-	}
-
-	mutations := []struct {
-		name    string
+func TestRetiredHistoricalContractFormatsAreRefusedWithTheDrainInstruction(t *testing.T) {
+	const drain = "deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles"
+	for _, test := range []struct {
 		version uint32
-		payload []byte
-		digest  golem.SchemaDigest
+		payload string
 	}{
-		{name: "unknown-field", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":3,"models":[],"enums":[],"methods":[],"customOperations":[],"foreign":true}`)},
-		{name: "duplicate-field", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":3,"models":[],"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
-		{name: "noncanonical-whitespace", version: 4, payload: []byte(" " + string(canonical))},
-		{name: "attempted-hook-owned-synthesis", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":3,"models":[{"modelId":"00000000000000000000000000000001","graphqlName":"Post","graphqlPlural":"Posts","roots":{},"fields":[],"hookOwnedCreateFields":[],"selectors":[],"operations":[],"subscriptions":false,"scopedReads":false,"limits":{},"computed":[],"exposed":true}],"enums":[],"methods":[],"customOperations":[]}`)},
-		{name: "wrong-graphql-abi", version: 4, payload: []byte(`{"formatVersion":4,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
-		{name: "v3-refusal", version: 3, payload: []byte(`{"formatVersion":3,"graphqlAbiVersion":2,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
-		{name: "v8-refusal", version: 8, payload: []byte(`{"formatVersion":8,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)},
-	}
-	for _, mutation := range mutations {
-		t.Run(mutation.name, func(t *testing.T) {
-			digest := historicalContractDigest(mutation.payload)
-			if mutation.digest != (golem.SchemaDigest{}) {
-				digest = mutation.digest
-			}
-			if _, err := decodeContract(historicalContractDocument(mutation.version, mutation.payload, digest), true); err == nil {
-				t.Fatal("historical decoder accepted incompatible contract")
-			}
-		})
-	}
-	wrong := historicalContractDigest(canonical)
-	wrong[0] ^= 0xff
-	if _, err := decodeContract(historicalContractDocument(4, canonical, wrong), true); err == nil {
-		t.Fatal("historical decoder accepted wrong original fingerprint")
+		{4, `{"formatVersion":4,"graphqlAbiVersion":3,"models":[],"enums":[],"methods":[],"customOperations":[]}`},
+		{5, `{"formatVersion":5,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`},
+	} {
+		payload := []byte(test.payload)
+		_, err := decodeContract(historicalContractDocument(test.version, payload, historicalContractDigest(payload)), true)
+		want := fmt.Sprintf("historical contract format %d is not supported by this golem: %s", test.version, drain)
+		if !isSchemaFailure(err, CodeDocument, "contract.formatVersion", want) {
+			t.Fatalf("historical contract v%d error = %v, want %q", test.version, err, want)
+		}
 	}
 }
 
-func TestHistoricalContractV5IsOriginalFingerprintBoundAndActiveClosed(t *testing.T) {
-	const canonical = `{"formatVersion":5,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`
-	payload := []byte(canonical)
-	document := historicalContractDocument(5, payload, historicalContractDigest(payload))
-	decoded, err := decodeContract(document, true)
-	if err != nil {
-		t.Fatal(err)
+func TestHistoricalContractAcceptsOnlyTheExactCurrentFormat(t *testing.T) {
+	canonical := []byte(`{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
+	document := historicalContractDocument(7, canonical, historicalContractDigest(canonical))
+	if decoded, err := decodeContract(document, true); err != nil || decoded.FormatVersion != compilerir.ContractFormatVersion {
+		t.Fatalf("historical path rejected exact current contract: decode=%#v err=%v", decoded, err)
 	}
-	if decoded.FormatVersion != compilerir.ContractFormatVersion || decoded.GraphQLABIVersion != 4 || len(decoded.Models) != 0 {
-		t.Fatalf("historical v5 projection = %#v", decoded)
-	}
-	if _, err := decodeContract(document, false); !isSchemaFailure(err, CodeDocument, "contract.formatVersion", "generated contract format 5 predates this golem (format 7): regenerate with golem generate") {
-		t.Fatalf("active contract path accepted v5: %v", err)
-	}
-
-	wrong := historicalContractDigest(payload)
-	wrong[0] ^= 0xff
-	if _, err := decodeContract(historicalContractDocument(5, payload, wrong), true); !isSchemaFailure(err, CodeFingerprint, "contract", "fingerprint mismatch") {
-		t.Fatalf("historical v5 accepted wrong original fingerprint: %v", err)
-	}
-
-	currentOnly := []byte(`{"formatVersion":6,"graphqlAbiVersion":4,"models":[{"modelId":"10000000000000000000000000000000","graphqlName":"Post","graphqlPlural":"Posts","roots":{},"fields":[{"fieldId":"12000000000000000000000000000000","graphqlName":"version","modes":["visible"]}],"optimisticConcurrency":"12000000000000000000000000000000","hookOwnedCreateFields":[],"selectors":[],"operations":[],"subscriptions":false,"scopedReads":false,"limits":{},"computed":[],"exposed":true}],"enums":[],"methods":[],"customOperations":[]}`)
-	relabelled := bytes.Replace(currentOnly, []byte(`"formatVersion":6`), []byte(`"formatVersion":5`), 1)
-	if _, err := decodeContract(historicalContractDocument(5, relabelled, historicalContractDigest(relabelled)), true); err == nil || !strings.Contains(err.Error(), "optimisticConcurrency") {
-		t.Fatalf("historical v5 accepted relabelled current-only field: %v", err)
-	}
-	if _, err := decodeContract(historicalContractDocument(8, []byte(`{"formatVersion":8,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`), golem.SchemaDigest{}), true); err == nil {
+	future := []byte(`{"formatVersion":8,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
+	if _, err := decodeContract(historicalContractDocument(8, future, historicalContractDigest(future)), true); err == nil {
 		t.Fatal("historical contract path accepted a future version")
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -28,6 +30,21 @@ type p10CommitGate struct {
 	armed   bool
 	entered chan struct{}
 	open    chan struct{}
+	drop    bool
+}
+
+func (gate *p10CommitGate) dropNextCommit() {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	gate.drop = true
+}
+
+func (gate *p10CommitGate) takeDrop() bool {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	dropped := gate.drop
+	gate.drop = false
+	return dropped
 }
 
 func (gate *p10CommitGate) arm() (entered <-chan struct{}, open func()) {
@@ -89,7 +106,13 @@ type p10GateTx struct {
 
 func (transaction p10GateTx) Commit() error {
 	transaction.gate.wait()
-	return transaction.Tx.Commit()
+	if err := transaction.Tx.Commit(); err != nil {
+		return err
+	}
+	if transaction.gate.takeDrop() {
+		return &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	}
+	return nil
 }
 
 func openP10OperationDatabase(t *testing.T, profile p5ExtensionProviderProfile, gate *p10CommitGate) *sqlx.DB {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/commitreport"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
@@ -77,6 +78,7 @@ func (failure *unreadableResult) Error() string {
 
 func presentCommittedResult(ctx context.Context, label string, cause error, path []any, report func(context.Context, error)) Error {
 	message := label + " committed, but its result is unavailable"
+	commitreport.From(ctx).Committed()
 	var unreadable *unreadableResult
 	var failure *golem.Error
 	var committed error

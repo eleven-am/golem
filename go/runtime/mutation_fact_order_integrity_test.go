@@ -87,11 +87,11 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	afterFirst := factOrderPostRow(t, schema, 61, "first-after")
 	beforeSecond := factOrderPostRow(t, schema, 61, "second-before")
 	afterSecond := factOrderPostRow(t, schema, 61, "second-after")
-	first, err := mutationfact.New(schema.Registry, mutationfact.EventID{1}, requirement, causation, 1, &beforeFirst, &afterFirst)
+	first, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{1}, requirement, causation, 1, &beforeFirst, &afterFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := mutationfact.New(schema.Registry, mutationfact.EventID{2}, requirement, causation, 2, &beforeSecond, &afterSecond)
+	second, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{2}, requirement, causation, 2, &beforeSecond, &afterSecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	index, matched, err := nextNestedFactIndex([]mutationfact.Envelope{first, second}, make([]bool, 2), model, mutationir.FactUpdated, expected)
+	index, matched, err := nextNestedFactIndex([]mutationfact.Envelope{first, second}, make([]bool, 2), model, mutationir.FactUpdated, expected, nil)
 	if err != nil || !matched || index != 0 {
 		t.Fatalf("equivalent repeated candidates index=%d matched=%t err=%v", index, matched, err)
 	}
@@ -112,11 +112,11 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	// refuse that ambiguity rather than assigning either event to a graph node.
 	beforeDifferent := factOrderPostRow(t, schema, 62, "different-before")
 	afterShared := factOrderPostRow(t, schema, 63, "shared-after")
-	left, err := mutationfact.New(schema.Registry, mutationfact.EventID{3}, requirement, causation, 3, &beforeFirst, &afterShared)
+	left, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{3}, requirement, causation, 3, &beforeFirst, &afterShared)
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := mutationfact.New(schema.Registry, mutationfact.EventID{4}, requirement, causation, 4, &beforeDifferent, &afterShared)
+	right, err := newRuntimeTestFact(schema.Registry, mutationfact.EventID{4}, requirement, causation, 4, &beforeDifferent, &afterShared)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := nextNestedFactIndex([]mutationfact.Envelope{left, right}, make([]bool, 2), model, mutationir.FactUpdated, sharedIdentity); err == nil || !strings.Contains(err.Error(), "ambiguous non-equivalent") {
+	if _, _, err := nextNestedFactIndex([]mutationfact.Envelope{left, right}, make([]bool, 2), model, mutationir.FactUpdated, sharedIdentity, nil); err == nil || !strings.Contains(err.Error(), "ambiguous non-equivalent") {
 		t.Fatalf("non-equivalent repeated candidates error=%v", err)
 	}
 }

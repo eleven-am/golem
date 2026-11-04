@@ -89,15 +89,10 @@ func (envelope Envelope) Action() golem.EventAction {
 		return ""
 	}
 }
-func (envelope Envelope) EventSchemaDigest() (golem.EventSchemaDigest, bool) {
-	digest, present := envelope.fact.EventSchemaDigest()
-	return golem.EventSchemaDigest(digest), present
+func (envelope Envelope) EventSchemaDigest() golem.EventSchemaDigest {
+	return golem.EventSchemaDigest(envelope.fact.EventSchemaDigest())
 }
 
-// ResolvedEventSchemaDigest is the logical event schema proven by the
-// historical resolver. V1 does not carry this digest on wire, while V2 does;
-// later typed delivery requires a non-zero value and compares it to the
-// generated factory's schema.
 func (envelope Envelope) ResolvedEventSchemaDigest() golem.EventSchemaDigest {
 	return envelope.resolvedEventSchema
 }
@@ -200,7 +195,7 @@ func resolveEventSchema(fact mutationfact.Envelope, resolver mutationfact.Histor
 	if resolver == nil {
 		return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: historical schema resolver is required")
 	}
-	wireSchema, hasWireSchema := fact.EventSchemaDigest()
+	wireSchema := fact.EventSchemaDigest()
 	reference := mutationfact.SchemaReference{
 		FormatVersion: fact.FormatVersion(),
 		CodecIdentity: fact.CodecIdentity(),
@@ -211,23 +206,8 @@ func resolveEventSchema(fact mutationfact.Envelope, resolver mutationfact.Histor
 	if !ok || registry == nil {
 		return golem.EventSchemaDigest{}, mutationfact.SchemaUnavailable(reference)
 	}
-	if hasWireSchema && resolved != wireSchema {
+	if resolved != wireSchema {
 		return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: wire and resolved event schemas differ")
-	}
-	if !hasWireSchema {
-		model, exists := registry.Model(golem.ModelID(fact.ModelID()))
-		if !exists {
-			return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: resolved V1 model is unavailable")
-		}
-		fingerprint, _, enabled := model.EventSchema()
-		if !enabled {
-			return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: resolved V1 model has no event schema")
-		}
-		parsed, parseErr := mutationfact.ParseEventSchemaFingerprint(fingerprint)
-		if parseErr != nil {
-			return golem.EventSchemaDigest{}, fmt.Errorf("GOLEM_EVENT_CODEC: resolved V1 event schema: %w", parseErr)
-		}
-		resolved = parsed
 	}
 	return golem.EventSchemaDigest(resolved), nil
 }

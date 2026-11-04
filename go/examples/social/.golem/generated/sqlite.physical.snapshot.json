@@ -1,12 +1,12 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "physical_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "80eec434687445448316107adbad08d03a04a496b9357b835e4ac0fbd7af6a12",
+  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
   "provider": "sqlite",
-  "physicalFingerprint": "cc6e96025f152b40a54c5ae00c1b480fd1405863c541d9311e2c88dcc235672e",
+  "physicalFingerprint": "60c0c06485c61118e58b52326eb5ed084103916f33234a72d3b7c99facf1ac16",
   "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
-  "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -215,6 +215,30 @@
             "Default": {
               "Kind": "none",
               "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "46ad4ceb97459e7eee763f45c7ce6c1e",
+            "Name": "golem_version",
+            "Ordinal": 6,
+            "Storage": {
+              "Kind": "sqlite.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
               "Expression": null
             },
             "Generated": null,
@@ -1246,6 +1270,30 @@
             "Default": {
               "Kind": "none",
               "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "02c8f72f8bfde01ac027531b75ce9c55",
+            "Name": "golem_version",
+            "Ordinal": 18,
+            "Storage": {
+              "Kind": "sqlite.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
               "Expression": null
             },
             "Generated": null,
@@ -2304,6 +2352,30 @@
             "Generated": null,
             "Collation": null,
             "RequiredCapabilities": null
+          },
+          {
+            "ID": "23b83393b581fa71799badc10f01c4f5",
+            "Name": "golem_version",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "sqlite.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
           }
         ],
         "PrimaryKey": {
@@ -3325,6 +3397,10 @@
       {
         "Kind": "table",
         "Name": "golem_queue"
+      },
+      {
+        "Kind": "table",
+        "Name": "golem_row_version"
       }
     ]
   }

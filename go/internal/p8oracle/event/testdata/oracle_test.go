@@ -158,6 +158,7 @@ type wsFrame struct {
 type cancellationCanaryRouter struct {
 	canaryID                  string
 	cancelledTerminalObserved bool
+	canaryAcked               bool
 }
 
 func (router *cancellationCanaryRouter) route(frame wsFrame) (bool, error) {
@@ -183,6 +184,13 @@ func (router *cancellationCanaryRouter) route(frame wsFrame) (bool, error) {
 	case "connection-canary":
 		if frame.Type != "next" {
 			return false, errors.New("connection canary did not emit next")
+		}
+		if !router.canaryAcked {
+			if string(frame.Payload) != liveAckWire {
+				return false, errors.New("connection canary emitted an event before its ack")
+			}
+			router.canaryAcked = true
+			return false, nil
 		}
 		id, err := decodeGraphQLIDOnlyNext(frame.Payload)
 		if err != nil {
@@ -361,7 +369,8 @@ func newFixture(t *testing.T, limits events.Limits, adapter events.CDCAdapter) *
 		t.Fatal(err)
 	}
 	result.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		ctx := context.WithValue(request.Context(), principalKey{}, result.principal)
+		ctx, cancel := context.WithTimeout(context.WithValue(request.Context(), principalKey{}, result.principal), time.Hour)
+		defer cancel()
 		ctx = social.WithPostDisplayCodeLoaderObserver(ctx, result.display)
 		result.graph.Handler().ServeHTTP(writer, request.WithContext(ctx))
 	}))
@@ -680,7 +689,7 @@ func (f *fixture) overflowCancellationIdentity() {
 	if callerErr == nil || !strings.Contains(callerErr.Error(), "GOLEM_SUBSCRIPTION_INVALID") {
 		f.t.Fatalf("caller invalid subscription error=%v", callerErr)
 	}
-	invalid := f.openGraphQLSubscription("invalid", `subscription Invalid { postEvents { unknownEventField } }`, nil)
+	invalid := f.openRawGraphQLSubscription("invalid", `subscription Invalid { postEvents { unknownEventField } }`, nil)
 	defer invalid.Close()
 	frame := readFrame(f.t, invalid)
 	if frame.Type != "error" || !bytes.Contains(frame.Payload, []byte("GRAPHQL_VALIDATION_FAILED")) || bytes.Contains(frame.Payload, []byte("P8_PRIVATE_EVENT_CANARY")) {
@@ -697,6 +706,9 @@ func assertCancellationCanaryRouterRegression(t *testing.T, canaryID string) {
 	router := cancellationCanaryRouter{canaryID: canaryID}
 	if done, err := router.route(wsFrame{ID: "cancel", Type: "complete"}); err != nil || done {
 		t.Fatalf("route cancelled operation terminal: done=%t error=%v", done, err)
+	}
+	if done, err := router.route(wsFrame{ID: "connection-canary", Type: "next", Payload: json.RawMessage(liveAckWire)}); err != nil || done {
+		t.Fatalf("route connection canary ack: done=%t error=%v", done, err)
 	}
 	if done, err := router.route(wsFrame{ID: "connection-canary", Type: "next", Payload: payload(canaryID)}); err != nil || !done {
 		t.Fatalf("route exact connection canary frame: done=%t error=%v", done, err)
@@ -722,9 +734,13 @@ func assertCancellationCanaryRouterRegression(t *testing.T, canaryID string) {
 		{name: "unknown-operation", frames: []wsFrame{{
 			ID: "unexpected", Type: "next", Payload: payload(priorID),
 		}}},
-		{name: "wrong-canary-identity", frames: []wsFrame{{
-			ID: "connection-canary", Type: "next", Payload: payload(priorID),
+		{name: "canary-event-before-ack", frames: []wsFrame{{
+			ID: "connection-canary", Type: "next", Payload: payload(canaryID),
 		}}},
+		{name: "wrong-canary-identity", frames: []wsFrame{
+			{ID: "connection-canary", Type: "next", Payload: json.RawMessage(liveAckWire)},
+			{ID: "connection-canary", Type: "next", Payload: payload(priorID)},
+		}},
 	}
 	for _, probe := range invalid {
 		router := cancellationCanaryRouter{canaryID: canaryID}
@@ -883,8 +899,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		f.t.Fatalf("external SQL insert: %v", err)
 	}
 	fields := social.GolemGeneratedPostDescriptor.Metadata().ScanFields()
-	if len(fields) != 18 {
-		f.t.Fatalf("Post scan fields=%d want=18", len(fields))
+	if len(fields) != 19 {
+		f.t.Fatalf("Post scan fields=%d want=19", len(fields))
 	}
 	cells := []golem.RuntimeReadCell{
 		golem.RuntimePresentReadCell(fields[0], id, nil),
@@ -905,6 +921,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		golem.RuntimePresentReadCell(fields[15], topics, func(value golem.List[string]) golem.List[string] { return append(golem.List[string](nil), value...) }),
 		golem.RuntimePresentReadCell(fields[16], instant, nil),
 		golem.RuntimePresentReadCell(fields[17], instant, nil),
+		golem.RuntimePresentReadCell(fields[18], int64(0), nil),
 	}
 	row, err := golem.RuntimeCDCModelRow(social.GolemGeneratedPostDescriptor.Metadata().ModelID(), cells...)
 	if err != nil {
@@ -938,6 +955,18 @@ func seedIdentity(t *testing.T, system social.System[social.Principal], userID, 
 
 func (f *fixture) openGraphQLSubscription(id, query string, variables map[string]any) *websocket.Conn {
 	f.t.Helper()
+	connection := f.openRawGraphQLSubscription(id, query, variables)
+	if frame := readFrame(f.t, connection); frame.ID != id || frame.Type != "next" || string(frame.Payload) != liveAckWire {
+		connection.Close()
+		f.t.Fatalf("GraphQL subscription %q ack=%+v", id, frame)
+	}
+	return connection
+}
+
+const liveAckWire = `{"data":null,"extensions":{"golem":{"live":true}}}`
+
+func (f *fixture) openRawGraphQLSubscription(id, query string, variables map[string]any) *websocket.Conn {
+	f.t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
 	connection, response, err := dialer.Dial("ws"+strings.TrimPrefix(f.server.URL, "http"), nil)
 	if err != nil {
@@ -947,7 +976,7 @@ func (f *fixture) openGraphQLSubscription(id, query string, variables map[string
 		}
 		f.t.Fatalf("dial GraphQL WebSocket status=%d: %v", status, err)
 	}
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInitPayload()}); err != nil {
 		connection.Close()
 		f.t.Fatal(err)
 	}
@@ -1096,4 +1125,8 @@ func isCancellation(err error) bool {
 
 func uuidText[T ~[16]byte](value T) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
+}
+
+func liveInitPayload() map[string]any {
+	return map[string]any{"golem": map[string]any{"protocol": 1, "contract": social.GolemGeneratedSchemaBundle().Contract().Fingerprint().String()}}
 }

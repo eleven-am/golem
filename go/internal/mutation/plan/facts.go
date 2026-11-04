@@ -28,7 +28,7 @@ func ModelEventSchema(registry *schema.Registry, model policyir.ModelID) (mutati
 	if err != nil {
 		return mutationir.FactCodecRequirement{}, [32]byte{}, nil, err
 	}
-	codec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersionV2, mutationfact.CodecIdentityV2, [32]byte(registry.GenerationDigest()))
+	codec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(registry.GenerationDigest()))
 	if err != nil {
 		return mutationir.FactCodecRequirement{}, [32]byte{}, nil, err
 	}
@@ -70,14 +70,20 @@ func deriveFactInventory(registry *schema.Registry, model policyir.ModelID) (fac
 	return inventory, nil
 }
 
-// deleteSnapshotFor is the operation-shaped half of the decision. Only the
-// delete families carry a private pre-delete scalar snapshot, and that is
-// mechanically derivable from the node's own operation.
-func (inventory factInventory) deleteSnapshotFor(operation mutationir.Operation) []policyir.FieldID {
-	if !inventory.capture || operation != mutationir.Delete && operation != mutationir.DeleteMany {
+func (inventory factInventory) beforeSnapshotFor(operation mutationir.Operation) []policyir.FieldID {
+	if !inventory.capture || !BeforeSnapshotOperation(operation) {
 		return nil
 	}
 	return inventory.snapshot
+}
+
+func BeforeSnapshotOperation(operation mutationir.Operation) bool {
+	switch operation {
+	case mutationir.Update, mutationir.UpdateMany, mutationir.Connect, mutationir.Disconnect, mutationir.SetRelation, mutationir.Delete, mutationir.DeleteMany:
+		return true
+	default:
+		return false
+	}
 }
 
 func ModelFactRequirement(registry *schema.Registry, model policyir.ModelID, operation mutationir.Operation) (mutationir.FactRequirement, error) {

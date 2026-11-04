@@ -2,7 +2,6 @@ package schema
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -133,23 +132,6 @@ func decodeModel(document golem.SchemaDocument, historical bool) (compilerir.Mod
 }
 
 func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.ContractIR, error) {
-	if historical && document.FormatVersion() == 4 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
-		return decodeHistoricalContractV4(document)
-	}
-	if historical && document.FormatVersion() == 5 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
-		contract, err := compilerir.CanonicalDecodeContractV5(document.Bytes())
-		if err != nil {
-			return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
-		}
-		fingerprint, err := compilerir.ContractFingerprintV5(document.Bytes())
-		if err != nil {
-			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "%v", err)
-		}
-		if fingerprint != compilerir.Fingerprint(document.Fingerprint().String()) {
-			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "fingerprint mismatch")
-		}
-		return contract, nil
-	}
 	if historical && document.FormatVersion() < uint32(compilerir.ContractFormatVersion) {
 		return compilerir.ContractIR{}, fail(CodeDocument, "contract.formatVersion", "historical contract format %d is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles", document.FormatVersion())
 	}
@@ -189,87 +171,6 @@ func requireCurrentFormat(kind string, document golem.SchemaDocument, current ui
 		return fail(CodeDocument, kind+".canonicalVersion", "unsupported canonical version %d; want %d", document.CanonicalVersion(), compilerir.CanonicalFormatVersion)
 	}
 	return nil
-}
-
-type historicalContractV4 struct {
-	FormatVersion     uint16                                 `json:"formatVersion"`
-	GraphQLABIVersion uint16                                 `json:"graphqlAbiVersion"`
-	Models            []historicalModelContractV4            `json:"models"`
-	Enums             []compilerir.EnumContractIR            `json:"enums"`
-	Methods           []compilerir.AttachedMethodIR          `json:"methods"`
-	CustomOperations  []compilerir.CustomOperationContractIR `json:"customOperations"`
-}
-
-type historicalModelContractV4 struct {
-	ModelID       compilerir.ModelID                   `json:"modelId"`
-	GraphQLName   string                               `json:"graphqlName"`
-	GraphQLPlural string                               `json:"graphqlPlural"`
-	Roots         compilerir.GraphQLRootNamesIR        `json:"roots"`
-	Fields        []compilerir.FieldContractIR         `json:"fields"`
-	Selectors     []compilerir.SelectorContractIR      `json:"selectors"`
-	Operations    []compilerir.Operation               `json:"operations"`
-	Subscriptions bool                                 `json:"subscriptions"`
-	Event         *compilerir.EventContractIR          `json:"event,omitempty"`
-	Aggregation   *compilerir.AggregationContractIR    `json:"aggregation,omitempty"`
-	ScopedReads   bool                                 `json:"scopedReads"`
-	Limits        compilerir.LimitContractIR           `json:"limits"`
-	Computed      []compilerir.ComputedFieldContractIR `json:"computed"`
-	Exposed       bool                                 `json:"exposed"`
-}
-
-func decodeHistoricalContractV4(document golem.SchemaDocument) (compilerir.ContractIR, error) {
-	var legacy historicalContractV4
-	if err := decodeCanonicalJSON(document.Bytes(), &legacy); err != nil {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
-	}
-	if legacy.FormatVersion != 4 {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "historical format version changed during decode")
-	}
-	if legacy.GraphQLABIVersion != 3 {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "historical GraphQL ABI version %d is unsupported", legacy.GraphQLABIVersion)
-	}
-	current := contractV4ToCurrent(legacy)
-	canonicalCurrent, err := compilerir.CanonicalContract(current)
-	if err != nil {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
-	}
-	var normalized compilerir.ContractIR
-	if err := json.Unmarshal(canonicalCurrent, &normalized); err != nil {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
-	}
-	canonicalLegacy, err := json.Marshal(contractCurrentToV4(normalized))
-	if err != nil {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
-	}
-	if !bytes.Equal(canonicalLegacy, document.Bytes()) {
-		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "document is not canonical")
-	}
-	hash := sha256.New()
-	_, _ = hash.Write([]byte("golem:contract-fingerprint:v1"))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(canonicalLegacy)
-	if fmt.Sprintf("%x", hash.Sum(nil)) != document.Fingerprint().String() {
-		return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "fingerprint mismatch")
-	}
-	return normalized, nil
-}
-
-func contractV4ToCurrent(input historicalContractV4) compilerir.ContractIR {
-	result := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, GraphQLABIVersion: input.GraphQLABIVersion, Enums: input.Enums, Methods: input.Methods, CustomOperations: input.CustomOperations}
-	result.Models = make([]compilerir.ModelContractIR, len(input.Models))
-	for index, model := range input.Models {
-		result.Models[index] = compilerir.ModelContractIR{ModelID: model.ModelID, GraphQLName: model.GraphQLName, GraphQLPlural: model.GraphQLPlural, Roots: model.Roots, Fields: model.Fields, HookOwnedCreateFields: []compilerir.FieldID{}, Selectors: model.Selectors, Operations: model.Operations, Subscriptions: model.Subscriptions, Event: model.Event, Aggregation: model.Aggregation, ScopedReads: model.ScopedReads, Limits: model.Limits, Computed: model.Computed, Exposed: model.Exposed}
-	}
-	return result
-}
-
-func contractCurrentToV4(input compilerir.ContractIR) historicalContractV4 {
-	result := historicalContractV4{FormatVersion: 4, GraphQLABIVersion: input.GraphQLABIVersion, Enums: input.Enums, Methods: input.Methods, CustomOperations: input.CustomOperations}
-	result.Models = make([]historicalModelContractV4, len(input.Models))
-	for index, model := range input.Models {
-		result.Models[index] = historicalModelContractV4{ModelID: model.ModelID, GraphQLName: model.GraphQLName, GraphQLPlural: model.GraphQLPlural, Roots: model.Roots, Fields: model.Fields, Selectors: model.Selectors, Operations: model.Operations, Subscriptions: model.Subscriptions, Event: model.Event, Aggregation: model.Aggregation, ScopedReads: model.ScopedReads, Limits: model.Limits, Computed: model.Computed, Exposed: model.Exposed}
-	}
-	return result
 }
 
 func decodeCanonicalJSON(payload []byte, target any) error {
@@ -411,6 +312,10 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 					return fail(CodeIdentity, fieldPath+".relationId", "%v", relationErr)
 				}
 				fact.relation, fact.relationRole = rid, logicalField.Relation.Role
+			}
+			if compilerir.IsRowVersionField(logicalField) {
+				version := fid
+				modelFact.rowVersion = &version
 			}
 			builder.registry.fields[mid][fid] = fact
 			modelFact.fields = append(modelFact.fields, fid)

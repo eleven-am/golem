@@ -111,6 +111,54 @@ func RenderRows(request RowsRequest) ([]Statement, error) {
 	return statements, nil
 }
 
+func RenderStampRows(request RowsRequest) ([]Statement, error) {
+	if request.MaxParameters == 0 || len(request.Rows) == 0 {
+		return nil, fail(CodeInput, request.Model, policyir.FieldID{}, "row stamp requires rows and a positive parameter bound", nil)
+	}
+	context, err := standaloneContext(request.Registry, request.Provider, request.Model, "golem_cs")
+	if err != nil {
+		return nil, err
+	}
+	logical, _ := request.Registry.Model(golem.ModelID(request.Model))
+	if err := context.bindRowVersion(logical); err != nil {
+		return nil, err
+	}
+	if context.version == nil {
+		return nil, nil
+	}
+	field, ok := context.resolver.Field(context.provider, context.modelID(), *context.version)
+	if !ok {
+		return nil, fail(CodeSchema, context.modelID(), *context.version, "row version field has no physical descriptor", nil)
+	}
+	returning, columns, err := context.returning()
+	if err != nil {
+		return nil, err
+	}
+	chunk := int(request.MaxParameters) / len(context.primary)
+	if chunk < 1 {
+		return nil, failLimit(golem.LimitStatementParameters, int(request.MaxParameters), request.Model, "parameter bound cannot hold one identity")
+	}
+	identities, err := context.identities(request.Rows)
+	if err != nil {
+		return nil, err
+	}
+	var statements []Statement
+	for start := 0; start < len(identities); start += chunk {
+		end := min(start+chunk, len(identities))
+		where, bindings, whereErr := context.identitiesWhere(identities[start:end], 0)
+		if whereErr != nil {
+			return nil, whereErr
+		}
+		text := "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + context.dialect.Quote(field.Column) + " = " + context.versionNext + " WHERE " + where + " RETURNING " + returning
+		statements = append(statements, Statement{role: ApplyUpdate, text: text, bindings: bindings, columns: columns, cardinality: ExactlyCapturedRows, expected: uint32(end - start)})
+	}
+	advance, err := context.advanceVersion()
+	if err != nil {
+		return nil, err
+	}
+	return append(statements, advance...), nil
+}
+
 func PrimaryKey(registry *schema.Registry, provider policyir.Provider, row mutationdecode.Row) (string, error) {
 	context, err := standaloneContext(registry, provider, row.ModelID(), "golem_ck")
 	if err != nil {

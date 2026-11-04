@@ -24,6 +24,7 @@ func TestQueueStorageIsAllowlistedByEveryLowering(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := append(physical.QueueUnmanagedObjects(), physical.OutboxDeliveryUnmanagedObjects()...)
+	expected = append(expected, physical.RowVersionUnmanagedObjects()...)
 	sort.Slice(expected, func(left, right int) bool {
 		if expected[left].Kind != expected[right].Kind {
 			return expected[left].Kind < expected[right].Kind

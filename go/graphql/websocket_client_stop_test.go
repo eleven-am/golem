@@ -88,7 +88,7 @@ func newClientStopServer(t *testing.T) (*websocket.Conn, *clientStopExecutor, *c
 			if string(payload) != `{"token":"valid"}` {
 				return nil, errors.New("invalid token")
 			}
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		Observer:            observer,
 		ReportInternalError: func(context.Context, error) {},
@@ -96,7 +96,7 @@ func newClientStopServer(t *testing.T) (*websocket.Conn, *clientStopExecutor, *c
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	t.Cleanup(host.Close)
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -104,7 +104,7 @@ func newClientStopServer(t *testing.T) (*websocket.Conn, *clientStopExecutor, *c
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	if ack := readWS(t, connection); ack.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", ack)
 	}
@@ -126,6 +126,7 @@ func TestWebSocketClientCompletedOperationSendsNoFurtherFrame(t *testing.T) {
 	connection, executor, observer := newClientStopServer(t)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	stopped := <-executor.created
+	readAckWS(t, connection, "one")
 
 	writeWS(t, connection, wsMessage{ID: "one", Type: "complete"})
 	finished := awaitFinishedSubscription(t, observer)
@@ -140,6 +141,7 @@ func TestWebSocketClientCompletedOperationSendsNoFurtherFrame(t *testing.T) {
 
 	writeWS(t, connection, wsMessage{ID: "canary", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	canary := <-executor.created
+	readAckWS(t, connection, "canary")
 	canary.values <- Response{Data: map[string]any{"ticks": int32(7)}}
 	if frame := readWS(t, connection); frame.ID != "canary" || frame.Type != "next" {
 		t.Fatalf("frame after a client-completed operation = %#v", frame)
@@ -157,6 +159,7 @@ func TestWebSocketGenuineSubscriptionFailuresStillTerminateTheOperation(t *testi
 			connection, executor, observer := newClientStopServer(t)
 			writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 			stream := <-executor.created
+			readAckWS(t, connection, "one")
 			stream.failure <- events.Failure(code)
 			frame := readWS(t, connection)
 			if frame.ID != "one" || frame.Type != "error" || !bytes.Contains(frame.Payload, []byte(`"code":"`+string(code)+`"`)) {
@@ -173,6 +176,7 @@ func TestWebSocketServerCompletedOperationStillSendsComplete(t *testing.T) {
 	connection, executor, observer := newClientStopServer(t)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	stream := <-executor.created
+	readAckWS(t, connection, "one")
 	close(stream.values)
 	if frame := readWS(t, connection); frame.ID != "one" || frame.Type != "complete" {
 		t.Fatalf("server-completed terminal frame = %#v", frame)
@@ -249,33 +253,35 @@ func TestWebSocketStoppedOperationWritesNoFrameIssuedAfterTheStopWasProcessed(t 
 				return value, ok
 			},
 			WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
-				return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+				return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 			},
 			ReportInternalError: func(context.Context, error) {},
 		}, executor)
 		if err != nil {
 			t.Fatal(err)
 		}
-		host := httptest.NewServer(server.Handler())
+		host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 		dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 		connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 		if err != nil {
 			host.Close()
 			t.Fatal(err)
 		}
-		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+		writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 		if ack := readWS(t, connection); ack.Type != "connection_ack" {
 			t.Fatalf("ack = %#v", ack)
 		}
 		writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 		stopped := (<-executor.created).(*stopRaceStream)
 		<-stopped.value.entered
+		readAckWS(t, connection, "one")
 
 		writeWS(t, connection, wsMessage{ID: "one", Type: "complete"})
 		<-stopped.closed
 
 		writeWS(t, connection, wsMessage{ID: "canary", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 		canary := (<-executor.created).(*clientStopStream)
+		readAckWS(t, connection, "canary")
 		canary.values <- Response{Data: map[string]any{"ticks": int32(99)}}
 		if frame := readWS(t, connection); frame.ID != "canary" || frame.Type != "next" {
 			t.Fatalf("attempt %d: canary frame = %#v", attempt, frame)
@@ -309,14 +315,14 @@ func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T
 			return value, ok
 		},
 		WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		ReportInternalError: func(context.Context, error) {},
 	}, executor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -324,7 +330,7 @@ func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	if ack := readWS(t, connection); ack.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", ack)
 	}
@@ -332,12 +338,14 @@ func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	first := (<-executor.created).(*stopRaceStream)
 	<-first.value.entered
+	readAckWS(t, connection, "one")
 
 	writeWS(t, connection, wsMessage{ID: "one", Type: "complete"})
 	<-first.closed
 
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	second := (<-executor.created).(*clientStopStream)
+	readAckWS(t, connection, "one")
 	close(first.value.release)
 
 	select {
@@ -361,6 +369,7 @@ func TestWebSocketTerminalCancellationWithoutCauseSendsErrorFrame(t *testing.T) 
 	connection, executor, observer := newClientStopServer(t)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	stream := <-executor.created
+	readAckWS(t, connection, "one")
 	stream.failure <- events.Failure(events.CodeSubscriptionCancelled)
 	frame := readWS(t, connection)
 	if frame.ID != "one" || frame.Type != "error" || !bytes.Contains(frame.Payload, []byte(`"code":"`+string(events.CodeSubscriptionCancelled)+`"`)) {
@@ -375,12 +384,14 @@ func TestWebSocketContextCancelledRecvEndsOperationWithoutFrame(t *testing.T) {
 	connection, executor, observer := newClientStopServer(t)
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	stream := <-executor.created
+	readAckWS(t, connection, "one")
 	stream.failure <- events.Cancelled(context.Canceled)
 	if finished := awaitFinishedSubscription(t, observer); finished.Outcome() != observe.OutcomeCancelled {
 		t.Fatalf("context-cancelled Recv recorded outcome=%s reason=%s", finished.Outcome(), finished.Reason())
 	}
 	writeWS(t, connection, wsMessage{ID: "canary", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
 	canary := <-executor.created
+	readAckWS(t, connection, "canary")
 	canary.values <- Response{Data: map[string]any{"ticks": int32(7)}}
 	if frame := readWS(t, connection); frame.ID != "canary" || frame.Type != "next" {
 		t.Fatalf("frame after a context-cancelled Recv = %#v", frame)

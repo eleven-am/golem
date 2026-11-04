@@ -88,7 +88,7 @@ func runGraphQLResponseOrder(t *testing.T, database *provider.Database) {
 	}
 	t.Cleanup(func() { _ = graph.Shutdown(context.Background()) })
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		graph.Handler().ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		graph.Handler().ServeHTTP(writer, request.WithContext(testPrincipalContext(request.Context(), principal)))
 	})
 	createHiddenBodyPost := func(t *testing.T) {
 		other, err := application.ForPrincipal(ctx, social.Principal{Development: true, DevUserID: otherID})
@@ -184,7 +184,7 @@ func assertResponseOrderSubscription(t *testing.T, application *social.App[socia
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveExtensions()}); err != nil {
 		t.Fatal(err)
 	}
 	readWSFrame(t, connection, "connection_ack")

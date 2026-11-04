@@ -111,6 +111,7 @@ type callerEventSubscription[P any] struct {
 	originalWhere  *policyir.Condition
 	metadata       golem.EventModelMetadata
 	entitySelected bool
+	judge          *eventJudgeSpec
 }
 
 type callerEventStream[E any] struct{ stream *subscription.Stream[any] }
@@ -242,21 +243,33 @@ func callerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 	state := &callerEventSubscription[P]{
 		context: ctx, principal: principal, model: model, readRequest: readRequest,
 		originalWhere: originalWhere, metadata: metadata, entitySelected: entitySelected,
+		judge: caller.app.newEventJudgeSpec(initial, model, metadata, originalWhere),
+	}
+	dependents, err := caller.app.openEventDependencies(ctx, initial, state)
+	if err != nil {
+		return nil, err
 	}
 	release, err := caller.app.reserveSubscription(principal)
 	if err != nil {
+		dependents.closeAll()
 		return nil, err
 	}
 	hub, err := caller.app.eventHub(model)
 	if err != nil {
 		release()
+		dependents.closeAll()
 		return nil, err
 	}
-	stream, err := hub.SubscribeWithState(ctx, key, state, func(any) { release() })
+	stream, err := hub.SubscribeWithState(ctx, key, state, func(any, error) {
+		release()
+		dependents.closeAll()
+	})
 	if err != nil {
 		release()
+		dependents.closeAll()
 		return nil, err
 	}
+	dependents.attach(stream)
 	caller.app.startEventRecheck(stream, state, recheck)
 	caller.app.reportSubscriberWithoutPublisher(ctx)
 	return &callerEventStream[E]{stream: stream}, nil
@@ -437,12 +450,18 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 		Source: func(ctx context.Context, request events.Subscription) (events.Stream, error) {
 			return app.eventTransport.Subscribe(ctx, request)
 		},
-		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any) (subscription.Evaluation[any], error) {
+		PrepareNotice: func(ctx context.Context, notice events.Notice, retained []any) any {
+			return app.prepareEventNotice(ctx, notice, metadata, retained)
+		},
+		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any, shared any) (subscription.Evaluation[any], error) {
+			if member, isDependency := retained.(*eventDependencyMember); isDependency && member != nil {
+				return app.evaluateDependency(member, shared)
+			}
 			state, ok := retained.(*callerEventSubscription[P])
 			if !ok || state == nil {
 				return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 			}
-			return app.evaluateEvent(ctx, notice, state)
+			return app.evaluateEvent(ctx, state, shared)
 		},
 		Clone:    func(value any) (any, error) { return value, nil },
 		Observer: app.eventObserver,
@@ -454,7 +473,7 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 	return hub, nil
 }
 
-func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, state *callerEventSubscription[P]) (subscription.Evaluation[any], error) {
+func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubscription[P], sharedValue any) (subscription.Evaluation[any], error) {
 	if ctx == nil || state == nil || state.context == nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
@@ -467,19 +486,36 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 	if state.context.Err() != nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionCancelled)
 	}
-	envelope, err := eventcodec.Decode(notice.Encoded(), app.eventSchemas, eventcodec.Limits{MaxEncodedBytes: app.eventLimits.MaxEncodedEventBytes})
-	if err != nil || !eventNoticeMatchesEnvelope(notice, envelope) {
+	shared, ok := sharedValue.(*eventNoticeShared)
+	if !ok || shared == nil || shared.failed {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
+	envelope := shared.envelope
 	if envelope.ResolvedEventSchemaDigest() != state.metadata.EventSchemaDigest() || envelope.ModelID() != state.metadata.ModelID() {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
+	}
+	exited := false
+	if state.judge != nil && (envelope.Action() == golem.EventCreated || envelope.Action() == golem.EventUpdated) {
+		verdict, verdictErr := shared.verdict(state.judge)
+		if verdictErr != nil {
+			return subscription.Evaluation[any]{}, verdictErr
+		}
+		if verdict == deleteFalse {
+			if envelope.Action() != golem.EventUpdated {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
+			if app.exitUnseen(shared, state) {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
+			exited = true
+		}
 	}
 	fresh, err := app.ForPrincipal(eventContext, state.principal)
 	if err != nil {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if fresh.policies.PolicyError(policyir.ModelID(state.model)) != nil {
-		return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	fact := envelope.Fact()
 	identity, ok := fact.AfterIdentity()
@@ -494,20 +530,35 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
 	var entity *golem.RuntimeModelRow
+	version := fact.RowVersion()
+	action := envelope.Action()
 	switch envelope.Action() {
 	case golem.EventCreated, golem.EventUpdated:
-		row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
-		if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
-			return subscription.Suppress[any](events.SuppressionPolicyUnavailable), nil
+		if !exited {
+			row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
+			if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
+				return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
+			}
+			if readErr != nil {
+				return subscription.Evaluation[any]{}, readErr
+			}
+			if delivered && state.entitySelected {
+				entity = &row
+			}
+			exited = !delivered && envelope.Action() == golem.EventUpdated
+			if !delivered && !exited {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
 		}
-		if readErr != nil {
-			return subscription.Evaluation[any]{}, readErr
-		}
-		if !delivered {
-			return subscription.Suppress[any](events.SuppressionFiltered), nil
-		}
-		if state.entitySelected {
-			entity = &row
+		if exited {
+			action = golem.EventExited
+			_, delivered, exitErr := app.evaluateDeletedEvent(eventContext, fresh, state, fact, identity)
+			if exitErr != nil {
+				return subscription.Evaluation[any]{}, exitErr
+			}
+			if !delivered {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
 		}
 	case golem.EventDeleted:
 		suppressed, delivered, deleteErr := app.evaluateDeletedEvent(eventContext, fresh, state, fact, identity)
@@ -520,11 +571,11 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, notice events.Notice, s
 	default:
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
-	wireSchema, hasWireSchema := envelope.EventSchemaDigest()
+	wireSchema := envelope.EventSchemaDigest()
 	validated, err := typedvalue.New(typedvalue.Metadata{
-		EventID: envelope.EventID(), Action: envelope.Action(), CausationID: envelope.CausationID(),
+		EventID: envelope.EventID(), Action: action, CausationID: envelope.CausationID(),
 		Ordinal: envelope.TransactionOrdinal(), RecordedAt: envelope.RecordedAt(),
-		Generation: envelope.GenerationDigest(), EventSchema: wireSchema, HasEventSchema: hasWireSchema,
+		Generation: envelope.GenerationDigest(), EventSchema: wireSchema, HasEventSchema: true, Version: version,
 		ResolvedEventSchema: envelope.ResolvedEventSchemaDigest(), ModelID: envelope.ModelID(),
 	}, identityValues, entity)
 	if err != nil {
@@ -593,6 +644,9 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	if errors.Is(err, policyruntime.ErrPolicyUnavailable) {
+		return golem.RuntimeModelRow{}, false, err
+	}
 	if err != nil {
 		return golem.RuntimeModelRow{}, false, nil
 	}
@@ -875,4 +929,16 @@ func validateImmutablePrincipal(value reflect.Value, path string) error {
 		}
 		return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has unsupported kind %s; configure SnapshotPrincipal", path, kind)
 	})
+}
+
+func (app *App[P, A]) endEventStreams(failure error) {
+	app.eventMu.Lock()
+	hubs := make([]*subscription.ModelHub[any], 0, len(app.eventHubs))
+	for _, hub := range app.eventHubs {
+		hubs = append(hubs, hub)
+	}
+	app.eventMu.Unlock()
+	for _, hub := range hubs {
+		hub.EndAll(failure)
+	}
 }

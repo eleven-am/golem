@@ -591,8 +591,9 @@ type Rule struct {
 	rowOnly   bool
 }
 type Policy struct {
-	model ModelID
-	rules []Rule
+	model      ModelID
+	rules      []Rule
+	rowVersion FieldID
 }
 
 func NewModelRule(action Action, effect Effect, model ModelID, condition *Condition, position uint32) (Rule, error) {
@@ -673,6 +674,15 @@ func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
 }
 
 func (policy Policy) ModelID() ModelID { return policy.model }
+
+func (policy Policy) WithRowVersion(field FieldID) Policy {
+	policy.rowVersion = field
+	return policy
+}
+
+func (policy Policy) RowVersion() (FieldID, bool) {
+	return policy.rowVersion, policy.rowVersion != (FieldID{})
+}
 func (policy Policy) Rules() []Rule {
 	output := make([]Rule, len(policy.rules))
 	copy(output, policy.rules)

@@ -139,7 +139,7 @@ func assertBatchMutationOrderedFacts(t testing.TB, fixture mutationResultFixture
 			t.Fatal(err)
 		}
 		ordinal++
-		if version != int64(mutationfact.FormatVersionV2) || codec != mutationfact.CodecIdentityV2 || action != "updated" || currentOrdinal != ordinal || causation != "" && currentCausation != causation {
+		if version != int64(mutationfact.FormatVersion) || codec != mutationfact.CodecIdentity || action != "updated" || currentOrdinal != ordinal || causation != "" && currentCausation != causation {
 			t.Fatalf("fact version=%d codec=%q action=%q causation=%q ordinal=%d want=%d", version, codec, action, currentCausation, currentOrdinal, ordinal)
 		}
 		causation = currentCausation

@@ -112,6 +112,11 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	if len(initPayload) == 0 {
 		initPayload = json.RawMessage("null")
 	}
+	block, initPayload := splitInitPayload(initPayload)
+	if refusal := server.checkHandshake(block); refusal != "" {
+		state.close(closeHandshakeRefused, refusal.closeReason())
+		return
+	}
 	derived := ctx
 	if server.config.WebSocketInit != nil {
 		derived, err = server.config.WebSocketInit(ctx, append(json.RawMessage(nil), initPayload...))
@@ -125,6 +130,11 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 		state.close(4401, "authentication is required")
 		return
 	}
+	deadline, deadlineFailure := server.principalDeadline(derived, time.Now())
+	if deadlineFailure != nil {
+		state.close(closeHandshakeRefused, refusedDeadline.closeReason())
+		return
+	}
 	state.ctx, state.principal = derived, principal
 	_ = conn.SetReadDeadline(time.Time{})
 	conn.SetReadLimit(int64(server.limits.MaxRequestBytes))
@@ -133,6 +143,12 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	}
 	stopLiveness := state.startLiveness()
 	defer stopLiveness()
+	expiry := time.AfterFunc(time.Until(deadline), func() {
+		state.close(closeCredentialExpired, "credential expired")
+		state.cancel()
+		_ = state.conn.Close()
+	})
+	defer expiry.Stop()
 	for {
 		message, err = state.read()
 		if err != nil {
@@ -249,6 +265,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		}
 		finishGraphQLChild(observation, operationErr)
 	}()
+	if err := state.writeOperation(stopped, wsMessage{ID: id, Type: "next", Payload: liveAckPayload}); err != nil {
+		operationErr = err
+		return
+	}
 	for {
 		response, err := stream.Recv(ctx)
 		if err != nil {
@@ -506,7 +526,12 @@ func (state *wsConnection[P]) closeStream(stream ResponseStream) {
 }
 
 func decodeWSRequest(payload json.RawMessage, limits Limits) (Request, *Error) {
-	return decodeHTTPRequest(bytes.NewReader(payload), limits)
+	request, extensions, failure := decodeHTTPRequest(bytes.NewReader(payload), limits)
+	if failure == nil && extensions != nil {
+		invalid := publicError("BAD_REQUEST", "invalid GraphQL request")
+		return Request{}, &invalid
+	}
+	return request, failure
 }
 
 func containsProtocol(protocols []string, expected string) bool {

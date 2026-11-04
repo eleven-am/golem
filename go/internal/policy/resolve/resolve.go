@@ -106,6 +106,14 @@ func fieldCondition(policy ir.Policy, action ir.Action, model ir.ModelID, field 
 		return ir.Condition{}, nil, fmt.Errorf("resolve field condition: zero field ID")
 	}
 
+	if version, owned := policy.RowVersion(); owned && field == version {
+		if action != ir.ActionRead {
+			refused, err := constant(model, false)
+			return refused, nil, err
+		}
+		return rowConstraint(policy, action, model)
+	}
+
 	chain := chainForField(policy, action, model, field)
 	branches := make([]ir.Condition, 0, len(chain))
 	unmatchedEarlier := make([]ir.Condition, 0, len(chain))

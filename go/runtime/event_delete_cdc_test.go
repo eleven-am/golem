@@ -25,14 +25,19 @@ type deleteEvalCDCRecorder struct {
 	causations []string
 }
 
-func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []eventcdc.Change, build func([]eventcdc.Stamp) ([]mutationfact.OutboxRow, error)) error {
 	recorder.mu.Lock()
-	recorder.causations = append(recorder.causations, rows[0].CausationID)
+	recorder.causations = append(recorder.causations, golem.UUID(causation).String())
 	recorder.mu.Unlock()
 	if recorder.discard {
-		return nil
+		stamps := make([]eventcdc.Stamp, len(changes))
+		for index := range stamps {
+			stamps[index] = eventcdc.Stamp{Version: 1}
+		}
+		_, err := build(stamps)
+		return err
 	}
-	if err := recorder.inner.RecordCDC(ctx, rows); err != nil {
+	if err := recorder.inner.RecordCDC(ctx, causation, changes, build); err != nil {
 		return err
 	}
 	if recorder.after != nil {
@@ -91,7 +96,7 @@ func (fixture deleteEvalFixture) cdcEmitter(t *testing.T, transport events.Event
 	if err != nil {
 		t.Fatal(err)
 	}
-	emitter, err := eventcdc.NewEmitter(eventcdc.Config{Adapter: p7AuthorizationCDCAdapter{}, Transport: transport, Encoder: encoder, Recorder: recorder})
+	emitter, err := eventcdc.NewEmitter(eventcdc.Config{Adapter: p7AuthorizationCDCAdapter{}, Transport: transport, Encoder: encoder, Recorder: recorder, Observer: fixture.observed})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +109,7 @@ func (fixture deleteEvalFixture) cdcCommentRow(t *testing.T, comment, post byte,
 		golem.RuntimePresentReadCell(fixture.schema.CommentID, deleteEvalUUID(comment), nil),
 		golem.RuntimePresentReadCell(fixture.schema.CommentPostID, deleteEvalUUID(post), nil),
 		golem.RuntimePresentReadCell(fixture.schema.CommentBody, body, nil),
+		golem.RuntimePresentReadCell(fixture.schema.CommentRowVersion, int64(1), nil),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +123,7 @@ func (fixture deleteEvalFixture) cdcPostRow(t *testing.T, post, author byte, tit
 		golem.RuntimePresentReadCell(fixture.schema.PostID, deleteEvalUUID(post), nil),
 		golem.RuntimePresentReadCell(fixture.schema.AuthorID, deleteEvalUUID(author), nil),
 		golem.RuntimePresentReadCell(fixture.schema.PostTitle, title, nil),
+		golem.RuntimePresentReadCell(fixture.schema.PostRowVersion, int64(1), nil),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +219,7 @@ func expectCDCDeleteDelivered(t *testing.T, stream golem.EventStream[p7EventOrac
 }
 
 func TestCDCDeleteNegatedPolicyOverParentUpdatedInSourceTransactionResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return golem.Not(fields.commentPost.Is(fields.postTitle.Eq("published"))), true
 		},
@@ -270,7 +277,7 @@ func TestCDCDeleteOverUnchangedParentIsDecidedExactly(t *testing.T) {
 }
 
 func TestCDCDeleteJudgesParentDeletedInSourceTransactionFromItsSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		fixture.emitCDC(t, "cdc-cascade-allowed",

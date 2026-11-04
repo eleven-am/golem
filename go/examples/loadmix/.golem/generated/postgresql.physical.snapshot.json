@@ -1,0 +1,3636 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "physical_snapshot",
+  "formatVersion": 1,
+  "modelFingerprint": "27b9a195558f3d51748349b62fcd6bbd4effd9f1115ada56c5fc0673b00853b1",
+  "contractFingerprint": "c864dddb189375f757768a90beade20c49f111b6df25e888b9eff13b6a6e46b8",
+  "provider": "postgresql",
+  "physicalFingerprint": "627ff0fdeb2b70ca7cb2a2cb2439c70b52b78936fe9b3174103c2a94db21f2b3",
+  "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
+  "generationDigest": "037f0c9e23f2c0b3f10f8eb703a8fda848c33f3318f097c5dc75949685953fde",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p8-go-abi-v7",
+  "payload": {
+    "Version": 3,
+    "CanonicalVersion": 3,
+    "Provider": {
+      "Provider": "postgresql",
+      "Driver": {
+        "Module": "github.com/jackc/pgx/v5/stdlib",
+        "Adapter": "sqlx"
+      },
+      "MinimumVersion": {
+        "Major": 15,
+        "Minor": 0,
+        "Patch": 0
+      },
+      "Capabilities": [
+        {
+          "ID": "analytics.exact-arithmetic.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.ascii-insensitive-text.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.binary-text.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.exact-json.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.relation-correlation.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "postgresql.advanced_indexes",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "postgresql.advisory_xact_lock",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "postgresql.generated_columns",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "postgresql.jsonb",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "scalar-list.json-array.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        }
+      ]
+    },
+    "Namespace": {
+      "Name": "public"
+    },
+    "Tables": [
+      {
+        "ID": "8ad574a1a5899feca086712f5a69f7cb",
+        "Name": "article_audio",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "8088cf1ddba0cd4579554a34560003a4",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "c1f787e5bcbc64f179a4ceb4066eade2",
+            "Name": "generation_status",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "PENDING"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "10306059701c35b592f06282f13761d2",
+            "Name": "source_content_hash",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b334072140f1c73df075e0744e54e5fe",
+            "Name": "voice",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "83ef1aba97be8d5cb8e435ba685f59cb",
+            "Name": "tts_model",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "9fee3a15c105b9b96c7d679b0c000157",
+            "Name": "content_type",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "audio/mpeg"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "2dd6562816c9537e214b1f530709e33a",
+            "Name": "storage_path",
+            "Ordinal": 6,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "3829582e695a8d0deb4cea4fcc8ccd50",
+            "Name": "specification_version",
+            "Ordinal": 7,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "readable-audio-v1"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "e5d4f2c03d7272f74523082f6dc5eb2c",
+            "Name": "generation_error",
+            "Ordinal": 8,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "a38c27dfe44718cc5ad1ad737992b1f2",
+            "Name": "generated_at",
+            "Ordinal": 9,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "5b06d85a649abbc162651ddc653d0578",
+            "Name": "created_at",
+            "Ordinal": 10,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "466de09acd491bb90a03b05a6b49600e",
+            "Name": "updated_at",
+            "Ordinal": 11,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "172e236fe24cfac2eefd10af3ad8cbe4",
+            "Name": "user_id",
+            "Ordinal": 12,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "496c6517070b70d4c0ff83e8bd8d5c1e",
+            "Name": "article_id",
+            "Ordinal": 13,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "06190ff471d0ac3be37caa66d2298a44",
+            "Name": "golem_version",
+            "Ordinal": 14,
+            "Storage": {
+              "Kind": "postgresql.bigint",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "dc3179748b2bedcb1d4ca65236e2e740",
+          "Name": "pk_article_audio",
+          "Columns": [
+            "8088cf1ddba0cd4579554a34560003a4"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "2ceef42993c1e658650fd54ca3634e42",
+            "Name": "uq_article_audio_article",
+            "Columns": [
+              "496c6517070b70d4c0ff83e8bd8d5c1e"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [
+          {
+            "ID": "a320ad3d066720ca19c88afc3c63c3d5",
+            "Name": "fk_article_audio_article_id",
+            "Columns": [
+              "496c6517070b70d4c0ff83e8bd8d5c1e"
+            ],
+            "ReferencedTable": "59d3db36ba8528d7e1640abce40014ba",
+            "ReferencedColumns": [
+              "502795e3548952111ae1e31de341166b"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f8f903e58bacc9dca74c73588f33167c",
+            "Name": "fk_article_audio_user_id",
+            "Columns": [
+              "172e236fe24cfac2eefd10af3ad8cbe4"
+            ],
+            "ReferencedTable": "430d11bbacc9e3032d6ba6130b2f877c",
+            "ReferencedColumns": [
+              "3abec05884e4126c253fcd366d9f24e3"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [
+          {
+            "ID": "8e6f86cdb8ab532c6689ffdbe98bcfab",
+            "Name": "ck_enum_8e6f86cdb8ab",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "c1f787e5bcbc64f179a4ceb4066eade2",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [
+          {
+            "ID": "a21e5eeda489fd5a10a5fcc1da6f8361",
+            "Name": "idx_article_audio_user_status",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "172e236fe24cfac2eefd10af3ad8cbe4",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "c1f787e5bcbc64f179a4ceb4066eade2",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "59d3db36ba8528d7e1640abce40014ba",
+        "Name": "articles",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "502795e3548952111ae1e31de341166b",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "116e10534dde82bcce7403c5f1c93416",
+            "Name": "source_type",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "URL"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "79eb7ef0e98150205af17b98c4daafc5",
+            "Name": "url",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ea6f9415858c95572cfb744931582362",
+            "Name": "title",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "927e6d39135b65614405de492bfe9438",
+            "Name": "author",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b4e442f4b74820854eafa0fbe7fc90bf",
+            "Name": "site_name",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "3f6a483030d3f0a34ad2587dae9389dc",
+            "Name": "published_date",
+            "Ordinal": 6,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "e098f31dcfd87754476ad3bd4fff17c9",
+            "Name": "markdown_content",
+            "Ordinal": 7,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "d6c41ecbe3e2fc20b5d1a1721a3168f4",
+            "Name": "plain_text_content",
+            "Ordinal": 8,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "161ecd6f9a3f58a53084510af9556c2d",
+            "Name": "screenshot_path",
+            "Ordinal": 9,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "9776aecc7134130b98f25287c5a487f4",
+            "Name": "cover_image_path",
+            "Ordinal": 10,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "73dcb9b88f324c411c3503278905aabe",
+            "Name": "hero_image_url",
+            "Ordinal": 11,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "1f1ecf3c99db97580feebfbe520dd587",
+            "Name": "original_language",
+            "Ordinal": 12,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "d87cdaaeb265a903f69ff613119f1e72",
+            "Name": "summary",
+            "Ordinal": 13,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7d5e0a69e7b460b95402d757ce6f119f",
+            "Name": "suggested_preamble",
+            "Ordinal": 14,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "082959e8366fc3180e669871c2a77000",
+            "Name": "roleplay_character",
+            "Ordinal": 15,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "31e675266d3c09e715426de7a72a962d",
+            "Name": "roleplay_user_character",
+            "Ordinal": 16,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "44050da040920b9f9e666832553d4dd5",
+            "Name": "roleplay_scene",
+            "Ordinal": 17,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "1e02457fd4ca51431c00e449011686fb",
+            "Name": "word_count",
+            "Ordinal": 18,
+            "Storage": {
+              "Kind": "postgresql.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "8087c754748d826d928a2b85eb313c03",
+            "Name": "reading_time_minutes",
+            "Ordinal": 19,
+            "Storage": {
+              "Kind": "postgresql.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f76a287cf0232449277b899ef9a30758",
+            "Name": "content_hash",
+            "Ordinal": 20,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "07b72293316a9817cb5b8b1978f4e463",
+            "Name": "status",
+            "Ordinal": 21,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "PENDING"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "453d6437deb4751894b15de34a63b684",
+            "Name": "extract_error",
+            "Ordinal": 22,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "08fe07f6d82d44734cd85f1f43833cf6",
+            "Name": "screenshot_status",
+            "Ordinal": 23,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "IDLE"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "96c3a6204fd937279abc7d8c99483057",
+            "Name": "analysis_status",
+            "Ordinal": 24,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "IDLE"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "703b08cfd9d16e5bfe18126dc6396386",
+            "Name": "preamble_status",
+            "Ordinal": 25,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "IDLE"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "170321fd0f2b57b42c9112424e25c915",
+            "Name": "embedding_status",
+            "Ordinal": 26,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "IDLE"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "e720b30ed567702fc61ecb18170a291a",
+            "Name": "audio_status",
+            "Ordinal": 27,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "IDLE"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f76b318584215e6f58470c6827da63f6",
+            "Name": "audio_file_path",
+            "Ordinal": 28,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ab6605487a43aaa119fe0e40614c8866",
+            "Name": "audio_voice_used",
+            "Ordinal": 29,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "1dffbe30bd5667050e080985cfa8085f",
+            "Name": "audio_error",
+            "Ordinal": 30,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "0a0a51cc807ad5c38a6b52914537fb75",
+            "Name": "audio_progress",
+            "Ordinal": 31,
+            "Storage": {
+              "Kind": "postgresql.double_precision",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "float",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "54157442d212d34d00a342b21ac798fe",
+            "Name": "last_read_at",
+            "Ordinal": 32,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "2a4b5982516ba7d3dc4a8f9e183b266a",
+            "Name": "reading_progress",
+            "Ordinal": 33,
+            "Storage": {
+              "Kind": "postgresql.double_precision",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "float",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ef035dcb0da620d6e85a5f4418766013",
+            "Name": "is_archived",
+            "Ordinal": 34,
+            "Storage": {
+              "Kind": "postgresql.boolean",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "bool",
+                "canonical": "false"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b9458fb876dc1c355a537f036f1fac66",
+            "Name": "preference",
+            "Ordinal": 35,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "NEUTRAL"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "cd87e070d573120690e7848614676c85",
+            "Name": "created_at",
+            "Ordinal": 36,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "438d53c1e0b61d58ed04fd2932c9fc3e",
+            "Name": "updated_at",
+            "Ordinal": 37,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "097b2851347b07ab9246854fdb50b2b9",
+            "Name": "user_id",
+            "Ordinal": 38,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "57694ed4d7f875b8e4e04f5b800a2fbb",
+            "Name": "golem_version",
+            "Ordinal": 39,
+            "Storage": {
+              "Kind": "postgresql.bigint",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "66240978d422ed32ea9c2fea1b3d9ebe",
+          "Name": "pk_articles",
+          "Columns": [
+            "502795e3548952111ae1e31de341166b"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "19adf122c3b0347cf3b2548feb68f5ff",
+            "Name": "uq_articles_user_url",
+            "Columns": [
+              "097b2851347b07ab9246854fdb50b2b9",
+              "79eb7ef0e98150205af17b98c4daafc5"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [
+          {
+            "ID": "face9ecaed36f1e9bff921887764d662",
+            "Name": "fk_articles_user_id",
+            "Columns": [
+              "097b2851347b07ab9246854fdb50b2b9"
+            ],
+            "ReferencedTable": "430d11bbacc9e3032d6ba6130b2f877c",
+            "ReferencedColumns": [
+              "3abec05884e4126c253fcd366d9f24e3"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [
+          {
+            "ID": "509f5e2d6aed6c50267aab18ae90f2bc",
+            "Name": "ck_enum_509f5e2d6aed",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "170321fd0f2b57b42c9112424e25c915",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7aad611a0cb02b6cb8d8bcb1bc38380e",
+            "Name": "ck_enum_7aad611a0cb0",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "96c3a6204fd937279abc7d8c99483057",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "825dc954d6d8e0fe95ad5affd208d6f4",
+            "Name": "ck_enum_825dc954d6d8",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "703b08cfd9d16e5bfe18126dc6396386",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "8836b064f3ba13f3d32aab5bcae38079",
+            "Name": "ck_enum_8836b064f3ba",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "07b72293316a9817cb5b8b1978f4e463",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "EXTRACTING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "99e5ee321adc303f768b9833cbdf129b",
+            "Name": "ck_enum_99e5ee321adc",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "08fe07f6d82d44734cd85f1f43833cf6",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "9dc0e105e23635d454c432bb7bee6e02",
+            "Name": "ck_enum_9dc0e105e236",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "116e10534dde82bcce7403c5f1c93416",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "URL"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "YOUTUBE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PDF"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "EPUB"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b91c23c42accabf6d1195a6b50442f64",
+            "Name": "ck_enum_b91c23c42acc",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "b9458fb876dc1c355a537f036f1fac66",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "NEUTRAL"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "LIKE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "DISLIKE"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "c789503365ebdc195662916d35047c3d",
+            "Name": "ck_enum_c789503365eb",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "e720b30ed567702fc61ecb18170a291a",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "IDLE"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "RUNNING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "READY"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [
+          {
+            "ID": "1247c4b0e62bbaeb940684f0ca1f6b88",
+            "Name": "idx_articles_user_archived",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "097b2851347b07ab9246854fdb50b2b9",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "ef035dcb0da620d6e85a5f4418766013",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "20a0d7f2b84cbcb461d6ba08acc9b4e6",
+            "Name": "idx_articles_user_last_read",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "097b2851347b07ab9246854fdb50b2b9",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "54157442d212d34d00a342b21ac798fe",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "6b444bee2a0be95f3d2e1c7294ba77ee",
+            "Name": "idx_articles_user_status",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "097b2851347b07ab9246854fdb50b2b9",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "07b72293316a9817cb5b8b1978f4e463",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "afc8afd343a7c5ddbd0705765ce90164",
+            "Name": "idx_articles_user_preference",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "097b2851347b07ab9246854fdb50b2b9",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "b9458fb876dc1c355a537f036f1fac66",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "5ab2a2505a9baa8aff88758325e9ccbc",
+        "Name": "chat_messages",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "09d66737df748cf101df239703fbcf6a",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "2094525c344c28821064e1efe3c470da",
+            "Name": "role",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7b36eeaa6de1becb309b159b565c50a3",
+            "Name": "content",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "a6c65a8428b902070726cd9409a26bbc",
+            "Name": "status",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "COMPLETED"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "cab833b4a5786b40705d1e0f834526bb",
+            "Name": "error",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ecdc026da1671b63480a15a5a5050ee9",
+            "Name": "completed_at",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "52a7fa59ddf4adf4e2ae3a848f10154a",
+            "Name": "thread_id",
+            "Ordinal": 6,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "80a06f848e7851739e6924aa907671f4",
+            "Name": "created_at",
+            "Ordinal": 7,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "35795a8e5c05414e956ec550a8b5977f",
+            "Name": "golem_version",
+            "Ordinal": 8,
+            "Storage": {
+              "Kind": "postgresql.bigint",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "a3c57529449280633061da976e8cdedb",
+          "Name": "pk_chat_messages",
+          "Columns": [
+            "09d66737df748cf101df239703fbcf6a"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [
+          {
+            "ID": "4bdc2ed6f07525ffc43828659ebcc7a2",
+            "Name": "fk_chat_messages_thread_id",
+            "Columns": [
+              "52a7fa59ddf4adf4e2ae3a848f10154a"
+            ],
+            "ReferencedTable": "9d17e6136a5709d5a83bb0cd4f12638f",
+            "ReferencedColumns": [
+              "4deb79eafe9e5a204dcdafe84fab1860"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [
+          {
+            "ID": "5985450f72ed7f9792887cb9efd975bd",
+            "Name": "ck_enum_5985450f72ed",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.in.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "a6c65a8428b902070726cd9409a26bbc",
+                  "Literal": null,
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PENDING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "STREAMING"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "COMPLETED"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "FAILED"
+                  },
+                  "Operands": []
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "CANCELLED"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [
+          {
+            "ID": "98aa2b23cd4d30b5e87f982d843e23b4",
+            "Name": "idx_chat_messages_thread_created",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "52a7fa59ddf4adf4e2ae3a848f10154a",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "80a06f848e7851739e6924aa907671f4",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "9d17e6136a5709d5a83bb0cd4f12638f",
+        "Name": "chat_threads",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "4deb79eafe9e5a204dcdafe84fab1860",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "c81a4b3fee847f8af9219296110eb894",
+            "Name": "preamble",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "02863ab9c6bedc7e423ba183ee1a3ec6",
+            "Name": "article_id",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "3ab845433e2944c2012090b3f417aeb1",
+            "Name": "user_id",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "5fdc4bef2689605a6438e1e051676b02",
+            "Name": "created_at",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "bc4e65af4cce9950a4ee3fa8d7362ff0",
+            "Name": "golem_version",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.bigint",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "3aaab3c6d2b478f46e5fd04f32731921",
+          "Name": "pk_chat_threads",
+          "Columns": [
+            "4deb79eafe9e5a204dcdafe84fab1860"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "2fc3d549ba5deddd3bc973a41ef37606",
+            "Name": "uq_chat_threads_article",
+            "Columns": [
+              "02863ab9c6bedc7e423ba183ee1a3ec6"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [
+          {
+            "ID": "21dc60e267b5b1ed3ebb136d4f5e3354",
+            "Name": "fk_chat_threads_article_id",
+            "Columns": [
+              "02863ab9c6bedc7e423ba183ee1a3ec6"
+            ],
+            "ReferencedTable": "59d3db36ba8528d7e1640abce40014ba",
+            "ReferencedColumns": [
+              "502795e3548952111ae1e31de341166b"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "74a29dba75f004fc8b5345326c7eda43",
+            "Name": "fk_chat_threads_user_id",
+            "Columns": [
+              "3ab845433e2944c2012090b3f417aeb1"
+            ],
+            "ReferencedTable": "430d11bbacc9e3032d6ba6130b2f877c",
+            "ReferencedColumns": [
+              "3abec05884e4126c253fcd366d9f24e3"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [],
+        "Indexes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "1d29ec78f3084897a1e868ab1b6604d0",
+        "Name": "reading_sessions",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "61b0a7caa4a88e9ab556cdc59dbb175d",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "9eee4a5effa92d9086011f7fc33f020c",
+            "Name": "article_id",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ef1ad4ce3e749c8ce154340d0fc987a5",
+            "Name": "started_at",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "de3b6779cb77452ca75124507c49d2db",
+            "Name": "ended_at",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "d149806fe15d3ee32ce7e2f5bfd35dfd",
+            "Name": "duration_sec",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7735fccdae2812cb3d5dea76bc6cab8b",
+            "Name": "progress_start",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.double_precision",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "float",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "525486e081df9d1135817b59ab301fd0",
+            "Name": "progress_end",
+            "Ordinal": 6,
+            "Storage": {
+              "Kind": "postgresql.double_precision",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "float",
+                "canonical": "0"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "183c9ec18b73fdb3a21dc702187ad5cd",
+            "Name": "session_type",
+            "Ordinal": 7,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": "reading"
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "224ddcd62a5ff2164a72231ea41d3f4a",
+          "Name": "pk_reading_sessions",
+          "Columns": [
+            "61b0a7caa4a88e9ab556cdc59dbb175d"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [
+          {
+            "ID": "c77ba79518981a82cd2396e632429b07",
+            "Name": "fk_reading_sessions_article_id",
+            "Columns": [
+              "9eee4a5effa92d9086011f7fc33f020c"
+            ],
+            "ReferencedTable": "59d3db36ba8528d7e1640abce40014ba",
+            "ReferencedColumns": [
+              "502795e3548952111ae1e31de341166b"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [],
+        "Indexes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "430d11bbacc9e3032d6ba6130b2f877c",
+        "Name": "users",
+        "OptimisticConcurrency": null,
+        "Columns": [
+          {
+            "ID": "3abec05884e4126c253fcd366d9f24e3",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7d9341839cb05e6815b10136fd3ee5d6",
+            "Name": "email",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "2601a50b10536d9947b484d20fe7440f",
+            "Name": "name",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "string",
+                "canonical": ""
+              },
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b6d8c32672c2aba7fd514d88aff0e11c",
+            "Name": "created_at",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "c2e1a06ac321409905958f0ad8970630",
+          "Name": "pk_users",
+          "Columns": [
+            "3abec05884e4126c253fcd366d9f24e3"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [],
+        "Checks": [],
+        "Indexes": [],
+        "RequiredCapabilities": null
+      }
+    ],
+    "Extensions": [],
+    "System": {
+      "Version": 1,
+      "Namespace": {
+        "Name": "_golem"
+      },
+      "Objects": [
+        {
+          "ID": "076704f0bfb30b5fed47137811a6dd18",
+          "Kind": "upsert_guard",
+          "Version": 1,
+          "Name": "_golem_upsert_guard",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "14b2d0b9de583fe675fa72de1d1c78c8",
+          "Kind": "outbox",
+          "Version": 1,
+          "Name": "_golem_outbox",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "51aa5c96fd5d24e27e182ed85f7bcbf2",
+          "Kind": "outbox_delivery",
+          "Version": 1,
+          "Name": "_golem_outbox_delivery",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "cb3020cd708be72c384f431749769c98",
+          "Kind": "migration_ledger",
+          "Version": 1,
+          "Name": "_golem_migrations",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "e28aeab0927ce864e8d65a1e1dc62fc9",
+          "Kind": "migration_lock",
+          "Version": 1,
+          "Name": "_golem_migration_lock",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        }
+      ]
+    },
+    "Unmanaged": [
+      {
+        "Kind": "index",
+        "Name": "golem_outbox_delivery_claim"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_claim"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_dedupe"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_enqueued"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_exclusive"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_history"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_terminal"
+      },
+      {
+        "Kind": "table",
+        "Name": "golem_queue"
+      },
+      {
+        "Kind": "table",
+        "Name": "golem_row_version"
+      }
+    ]
+  }
+}

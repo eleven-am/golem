@@ -233,7 +233,7 @@ func socialPostContract() ir.ModelContractIR {
 		Operations:    []ir.Operation{"findOne", "findMany", "create", "update", "delete", "updateMany", "deleteMany"},
 		Subscriptions: true,
 		Event: &ir.EventContractIR{
-			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
+			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt", "version"},
 			DeleteSnapshotFull: ir.DeleteSnapshotIsFull(model, snapshot), Schema: shape, SchemaFingerprint: fingerprint,
 		},
 		Limits:  ir.LimitContractIR{MaxTake: 100},

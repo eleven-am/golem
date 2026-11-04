@@ -9,6 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
+	"github.com/eleven-am/golem/go/internal/mutation/rowversion"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -75,6 +76,9 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		}
 	}
 	context := renderContext{plan: plan, node: node, registry: registry, provider: provider, capabilities: capabilities, dialect: dialect, resolver: resolver, model: model, alias: "golem_b0", primary: primary}
+	if err := context.bindRowVersion(logical); err != nil {
+		return Program{}, err
+	}
 	authored := make(map[policyir.FieldID]struct{}, len(node.ScalarOperations()))
 	for _, operation := range node.ScalarOperations() {
 		if !operation.RuntimeOwned() {
@@ -138,6 +142,36 @@ type renderContext struct {
 	alias        physical.PhysicalName
 	primary      []policyir.FieldID
 	logical      policyir.ModelID
+	version      *policyir.FieldID
+	versionNext  string
+}
+
+func (context *renderContext) bindRowVersion(model schema.Model) error {
+	field, enabled := model.RowVersion()
+	if !enabled {
+		return nil
+	}
+	value := policyir.FieldID(field)
+	namespace, _ := context.registry.PhysicalSystemNamespace(golem.PostgreSQL)
+	next, err := rowversion.Next(context.provider, namespace)
+	if err != nil {
+		return fail(CodeSchema, context.modelID(), value, "row version expression is unavailable", err)
+	}
+	context.version, context.versionNext = &value, next
+	return nil
+}
+
+func (context renderContext) advanceVersion() ([]Statement, error) {
+	if context.version == nil || !rowversion.Advances(context.provider) {
+		return nil, nil
+	}
+	field, ok := context.resolver.Field(context.provider, context.modelID(), *context.version)
+	if !ok {
+		return nil, fail(CodeSchema, context.modelID(), *context.version, "row version field has no physical descriptor", nil)
+	}
+	projected := policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(rowversion.AdvanceColumn()))
+	text := rowversion.Advance(projected + " AS " + context.dialect.Quote("golem_c0"))
+	return []Statement{{role: StampVersion, text: text, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyCapturedRows, expected: 1}}, nil
 }
 
 func (context renderContext) modelID() policyir.ModelID {

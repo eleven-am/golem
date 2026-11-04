@@ -1,0 +1,300 @@
+{
+  "formatVersion": 2,
+  "schema": {
+    "id": "43c123cd9b4b80efb4fb24ccacace219",
+    "stableName": "golem_kernel_example",
+    "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+    "rootFunction": "DefineSchema",
+    "actor": {
+      "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+      "name": "Actor"
+    }
+  },
+  "providers": [
+    "sqlite",
+    "postgresql"
+  ],
+  "enums": [],
+  "models": [
+    {
+      "id": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+      "canonicalIdentity": "example.kernel.Note",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+        "name": "Note"
+      },
+      "logicalName": "Note",
+      "table": {
+        "physicalName": "notes"
+      },
+      "fields": [
+        {
+          "id": "29ca7a935e081bc0ffb37cb55f461790",
+          "canonicalIdentity": "example.kernel.Note.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "453f9dc4caf460b7013c30a3e1951fba",
+          "canonicalIdentity": "6b95cdd68f1add5c6fc99a2b2cf895c3\u0000Owner",
+          "goName": "Owner",
+          "logicalName": "Owner",
+          "declarationOrder": 4,
+          "kind": "relation",
+          "relation": {
+            "relationId": "202738bea32f6e067ef4812cbb7f052b",
+            "role": "source",
+            "kind": "belongsTo"
+          }
+        },
+        {
+          "id": "6601b6edc07e62e50e4d54d24a755789",
+          "canonicalIdentity": "6b95cdd68f1add5c6fc99a2b2cf895c3\u0000Title",
+          "goName": "Title",
+          "logicalName": "Title",
+          "declarationOrder": 2,
+          "kind": "scalar",
+          "scalar": {
+            "column": "title",
+            "type": {
+              "kind": "string",
+              "maxLength": 160
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "d1b9dd5c5237112d3aa957ea6959c717",
+          "canonicalIdentity": "6b95cdd68f1add5c6fc99a2b2cf895c3\u0000OwnerID",
+          "goName": "OwnerID",
+          "logicalName": "OwnerID",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "owner_id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e44637b1c1a39c8e4cf2bbacbe18cb8c",
+          "canonicalIdentity": "6b95cdd68f1add5c6fc99a2b2cf895c3\u0000Archived",
+          "goName": "Archived",
+          "logicalName": "Archived",
+          "declarationOrder": 3,
+          "kind": "scalar",
+          "scalar": {
+            "column": "archived",
+            "type": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "literal",
+              "producer": "database",
+              "literal": {
+                "kind": "bool",
+                "canonical": "false"
+              }
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "1ad97cdbc0a22433c437cc20c1f241ea",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_notes",
+        "fields": [
+          "29ca7a935e081bc0ffb37cb55f461790"
+        ]
+      },
+      "uniques": [],
+      "indexes": [
+        {
+          "id": "5eeb5a88df78256d261709969bfab51c",
+          "modelId": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+          "physicalName": "idx_notes_owner",
+          "unique": false,
+          "method": "btree",
+          "keys": [
+            {
+              "column": "d1b9dd5c5237112d3aa957ea6959c717",
+              "direction": "asc",
+              "nulls": "default"
+            },
+            {
+              "column": "29ca7a935e081bc0ffb37cb55f461790",
+              "direction": "asc",
+              "nulls": "default"
+            }
+          ],
+          "include": [],
+          "provider": "portable"
+        }
+      ],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "29ca7a935e081bc0ffb37cb55f461790",
+          "kind": "key",
+          "keyId": "1ad97cdbc0a22433c437cc20c1f241ea"
+        },
+        {
+          "fieldId": "d1b9dd5c5237112d3aa957ea6959c717",
+          "kind": "index",
+          "indexId": "5eeb5a88df78256d261709969bfab51c"
+        }
+      ]
+    },
+    {
+      "id": "c9781b5c8d81c16f653fcd74ae1a9a32",
+      "canonicalIdentity": "example.kernel.Account",
+      "go": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/kernel/kernel",
+        "name": "Account"
+      },
+      "logicalName": "Account",
+      "table": {
+        "physicalName": "accounts"
+      },
+      "fields": [
+        {
+          "id": "11fe87f589ca008f430b3e9e8f247c56",
+          "canonicalIdentity": "c9781b5c8d81c16f653fcd74ae1a9a32\u0000Handle",
+          "goName": "Handle",
+          "logicalName": "Handle",
+          "declarationOrder": 1,
+          "kind": "scalar",
+          "scalar": {
+            "column": "handle",
+            "type": {
+              "kind": "string",
+              "maxLength": 40
+            },
+            "nullable": false,
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "944e8156e5f699b0a741216340f849f7",
+          "canonicalIdentity": "example.kernel.Account.ID",
+          "goName": "ID",
+          "logicalName": "ID",
+          "declarationOrder": 0,
+          "kind": "scalar",
+          "scalar": {
+            "column": "id",
+            "type": {
+              "kind": "uuid"
+            },
+            "nullable": false,
+            "default": {
+              "kind": "uuid",
+              "producer": "application"
+            },
+            "updated": false,
+            "databaseReadOnly": false
+          }
+        },
+        {
+          "id": "e55cd473d372a793e65242fa0e5eecc1",
+          "canonicalIdentity": "c9781b5c8d81c16f653fcd74ae1a9a32\u0000Notes",
+          "goName": "Notes",
+          "logicalName": "Notes",
+          "declarationOrder": 2,
+          "kind": "relation",
+          "relation": {
+            "relationId": "202738bea32f6e067ef4812cbb7f052b",
+            "role": "inverse",
+            "kind": "hasMany"
+          }
+        }
+      ],
+      "primaryKey": {
+        "id": "3587a9b6d7b217ce0c72a68985287ba1",
+        "kind": "primary",
+        "logicalName": "primary",
+        "physicalName": "pk_accounts",
+        "fields": [
+          "944e8156e5f699b0a741216340f849f7"
+        ]
+      },
+      "uniques": [
+        {
+          "id": "e87d64db77a27dacac2b0f6cf3990ad3",
+          "kind": "unique",
+          "logicalName": "Handle",
+          "physicalName": "uq_accounts_handle",
+          "fields": [
+            "11fe87f589ca008f430b3e9e8f247c56"
+          ]
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "equalityIndexes": [
+        {
+          "fieldId": "11fe87f589ca008f430b3e9e8f247c56",
+          "kind": "key",
+          "keyId": "e87d64db77a27dacac2b0f6cf3990ad3"
+        },
+        {
+          "fieldId": "944e8156e5f699b0a741216340f849f7",
+          "kind": "key",
+          "keyId": "3587a9b6d7b217ce0c72a68985287ba1"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "202738bea32f6e067ef4812cbb7f052b",
+      "name": "Owner",
+      "sourceModel": "6b95cdd68f1add5c6fc99a2b2cf895c3",
+      "targetModel": "c9781b5c8d81c16f653fcd74ae1a9a32",
+      "sourceField": "453f9dc4caf460b7013c30a3e1951fba",
+      "inverseField": "e55cd473d372a793e65242fa0e5eecc1",
+      "cardinality": "many",
+      "localFields": [
+        "d1b9dd5c5237112d3aa957ea6959c717"
+      ],
+      "remoteFields": [
+        "944e8156e5f699b0a741216340f849f7"
+      ],
+      "foreignKey": {
+        "id": "f40cbb776c44d01e06fc228fe2e73975",
+        "physicalName": "fk_notes_owner_id",
+        "onUpdate": "noAction",
+        "onDelete": "cascade",
+        "match": "simple",
+        "deferrable": "notDeferrable"
+      }
+    }
+  ],
+  "extensions": []
+}

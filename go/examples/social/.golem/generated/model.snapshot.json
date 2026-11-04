@@ -1,9 +1,9 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "model_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
-  "contractFingerprint": "80eec434687445448316107adbad08d03a04a496b9357b835e4ac0fbd7af6a12",
-  "generationDigest": "921e82c5d9b44f80f95448644ba5727e382ae5d0305d4a85690da9e5f7ae38af",
+  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
+  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
+  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -103,6 +103,31 @@
               "relationId": "cb9d58c74e6d92be1b32fb50a3690c04",
               "role": "inverse",
               "kind": "hasMany"
+            }
+          },
+          {
+            "id": "46ad4ceb97459e7eee763f45c7ce6c1e",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 10,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
             }
           },
           {
@@ -417,6 +442,31 @@
             }
           },
           {
+            "id": "23b83393b581fa71799badc10f01c4f5",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 6,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
+            }
+          },
+          {
             "id": "42e3e2bd1988a04db96d90478750a7fb",
             "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000ExpiresAt",
             "goName": "ExpiresAt",
@@ -578,6 +628,31 @@
           "physicalName": "posts"
         },
         "fields": [
+          {
+            "id": "02c8f72f8bfde01ac027531b75ce9c55",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000GolemVersion",
+            "goName": "GolemVersion",
+            "logicalName": "GolemVersion",
+            "declarationOrder": 21,
+            "kind": "scalar",
+            "scalar": {
+              "column": "golem_version",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": true
+            }
+          },
           {
             "id": "11f9c4adff40cc4daa268c6132ad36d8",
             "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Metadata",

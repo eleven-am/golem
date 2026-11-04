@@ -50,3 +50,31 @@ func TestRecordAndFieldConstructionCopyCallerSlices(t *testing.T) {
 		t.Fatal("value field changed after caller byte mutation")
 	}
 }
+
+func TestWithRelationsTakesOnlyTheKeptRelationsAndNoScalars(t *testing.T) {
+	model, target := modelID(1), modelID(2)
+	scalar, kept, dropped := fieldID(1), fieldID(2), fieldID(3)
+	base := record(t, model, valueField(t, scalar, stringValue(t, "before")))
+	source := record(t, model,
+		valueField(t, scalar, stringValue(t, "after")),
+		toOne(t, kept, target, record(t, target)),
+		toOne(t, dropped, target, record(t, target)),
+	)
+	merged := base.WithRelations(source, map[ir.FieldID]struct{}{kept: {}})
+	if got, _ := merged.fields[scalar].value.Text(); got != "before" {
+		t.Fatalf("scalar = %q, want the base record's value", got)
+	}
+	if merged.fields[kept].kind != fieldRelation || len(merged.fields[kept].rows) != 1 {
+		t.Fatal("the kept relation was not copied")
+	}
+	if _, present := merged.fields[dropped]; present {
+		t.Fatal("a relation outside the keep set was copied")
+	}
+	if _, present := base.fields[kept]; present {
+		t.Fatal("WithRelations changed the receiver")
+	}
+	scalarOnly := base.WithRelations(source, map[ir.FieldID]struct{}{scalar: {}})
+	if got, _ := scalarOnly.fields[scalar].value.Text(); got != "before" {
+		t.Fatalf("a scalar named in the keep set replaced the base value: %q", got)
+	}
+}

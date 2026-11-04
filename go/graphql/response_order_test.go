@@ -285,20 +285,21 @@ func TestSubscriptionFramesFollowSelectionOrder(t *testing.T) {
 
 func orderSubscriptionFrame(t *testing.T, server *graphql.Server[int], query string) string {
 	t.Helper()
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	connection, _, err := (&websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}).Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if err := connection.WriteJSON(map[string]any{"type": "connection_init"}); err != nil {
+	if err := connection.WriteJSON(map[string]any{"type": "connection_init", "payload": liveInit("")}); err != nil {
 		t.Fatal(err)
 	}
 	readOrderFrame(t, connection)
 	if err := connection.WriteJSON(map[string]any{"id": "one", "type": "subscribe", "payload": map[string]any{"query": query}}); err != nil {
 		t.Fatal(err)
 	}
+	readLiveAck(t, connection, "one")
 	return readOrderFrame(t, connection)
 }
 

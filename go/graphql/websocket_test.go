@@ -68,7 +68,7 @@ func newProtocolServer(t *testing.T, limits events.Limits) (*Server[int], *proto
 			}
 			// Deliberately discard the supplied parent: the server must still bind
 			// every operation to its own connection/lifecycle cancellation.
-			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+			return withTestDeadline(context.WithValue(context.Background(), wsAuthKey{}, 41)), nil
 		},
 		EventLimits: limits, ReportInternalError: func(context.Context, error) {},
 	}, &protocolExecutor{stream: stream})
@@ -80,7 +80,7 @@ func newProtocolServer(t *testing.T, limits events.Limits) (*Server[int], *proto
 
 func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 	server, stream := newProtocolServer(t, events.Limits{})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -88,7 +88,7 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	if message := readWS(t, connection); message.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", message)
 	}
@@ -97,6 +97,7 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 		t.Fatalf("pong = %#v", message)
 	}
 	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	readAckWS(t, connection, "one")
 	stream.values <- Response{Data: map[string]any{"ticks": int32(7)}}
 	next := readWS(t, connection)
 	if next.ID != "one" || next.Type != "next" || !strings.Contains(string(next.Payload), `"ticks":7`) {
@@ -110,7 +111,7 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 
 func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 200 * time.Millisecond, WebSocketPongTimeout: 20 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -118,7 +119,7 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	if message := readWS(t, connection); message.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", message)
 	}
@@ -156,7 +157,7 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 
 func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{ConnectionInitTimeout: 25 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	url := "ws" + strings.TrimPrefix(host.URL, "http")
 	legacy := websocket.Dialer{Subprotocols: []string{"graphql-ws"}}
@@ -179,7 +180,7 @@ func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 		t.Fatalf("malformed close = %d", code)
 	}
 	duplicate, _, _ := valid.Dial(url, nil)
-	writeWS(t, duplicate, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, duplicate, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	_ = readWS(t, duplicate)
 	payload := json.RawMessage(`{"query":"subscription { ticks }"}`)
 	writeWS(t, duplicate, wsMessage{ID: "same", Type: "subscribe", Payload: payload})
@@ -195,16 +196,17 @@ func TestHTTPRefusesSubscriptionsAndShutdownClosesActiveWebSockets(t *testing.T)
 	if len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "SUBSCRIPTION_TRANSPORT_REQUIRED" {
 		t.Fatalf("HTTP subscription response = %#v", response)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	_ = readWS(t, connection)
 	writeWS(t, connection, wsMessage{ID: "active", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	readAckWS(t, connection, "active")
 	writeWS(t, connection, wsMessage{Type: "ping"})
 	if pong := readWS(t, connection); pong.Type != "pong" {
 		t.Fatalf("active-subscription barrier = %#v", pong)
@@ -236,7 +238,7 @@ func TestWebSocketOperationPanicIsSanitizedAndConnectionSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -244,9 +246,10 @@ func TestWebSocketOperationPanicIsSanitizedAndConnectionSurvives(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init"})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit("")})
 	_ = readWS(t, connection)
 	writeWS(t, connection, wsMessage{ID: "panic", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	readAckWS(t, connection, "panic")
 	failure := readWS(t, connection)
 	if failure.Type != "error" || strings.Contains(string(failure.Payload), "private") || !strings.Contains(string(failure.Payload), "INTERNAL_SERVER_ERROR") {
 		t.Fatalf("panic failure = %#v", failure)
@@ -283,12 +286,18 @@ func readWS(t *testing.T, connection *websocket.Conn) wsMessage {
 
 func readCloseCode(t *testing.T, connection *websocket.Conn) int {
 	t.Helper()
+	code, _ := readClose(t, connection)
+	return code
+}
+
+func readClose(t *testing.T, connection *websocket.Conn) (int, string) {
+	t.Helper()
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		if _, _, err := connection.ReadMessage(); err != nil {
 			var closeError *websocket.CloseError
 			if errors.As(err, &closeError) {
-				return closeError.Code
+				return closeError.Code, closeError.Text
 			}
 			t.Fatal(err)
 		}
@@ -314,7 +323,7 @@ func maskedPongFrame(t *testing.T, payload []byte) []byte {
 
 func TestWebSocketKeepsClientThatSendsUnsolicitedPongsBeforeItsAnswer(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 100 * time.Millisecond, WebSocketPongTimeout: 30 * time.Millisecond})
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
 	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
@@ -322,7 +331,7 @@ func TestWebSocketKeepsClientThatSendsUnsolicitedPongsBeforeItsAnswer(t *testing
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
 	if message := readWS(t, connection); message.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", message)
 	}
@@ -393,7 +402,7 @@ func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(server.Handler())
+	host := httptest.NewServer(withCredentialDeadline(server.Handler()))
 	defer host.Close()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(executor.release) }) }
@@ -404,7 +413,7 @@ func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	writeWS(t, connection, wsMessage{Type: "connection_init"})
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit("")})
 	if ack := readWS(t, connection); ack.Type != "connection_ack" {
 		t.Fatalf("ack = %#v", ack)
 	}
@@ -427,3 +436,30 @@ func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
 func (protocolExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
 
 func (slowSubscribeExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func liveInit(fields string) json.RawMessage {
+	block := `"golem":{"protocol":1,"contract":"` + strings.Repeat("0", 64) + `"}`
+	if fields == "" {
+		return json.RawMessage(`{` + block + `}`)
+	}
+	return json.RawMessage(`{` + block + `,` + fields + `}`)
+}
+
+func readAckWS(t *testing.T, connection *websocket.Conn, id string) {
+	t.Helper()
+	message := readWS(t, connection)
+	if message.ID != id || message.Type != "next" || string(message.Payload) != string(liveAckPayload) {
+		t.Fatalf("operation %q ack = %#v", id, message)
+	}
+}
+
+func liveBody(query string) []byte {
+	body, _ := json.Marshal(map[string]any{"query": query, "extensions": map[string]any{"golem": map[string]any{"protocol": 1, "contract": strings.Repeat("0", 64)}}})
+	return body
+}
+
+var liveAckFrame = "event: next\ndata: " + string(liveAckPayload) + "\n\n"
+
+func liveExtend(body string) string {
+	return strings.TrimSuffix(body, "}") + `,"extensions":{"golem":{"protocol":1,"contract":"` + strings.Repeat("0", 64) + `"}}}`
+}

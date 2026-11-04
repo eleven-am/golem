@@ -229,10 +229,8 @@ func validateOutboxRow(row OutboxRow) error {
 	if row.EventID == "" || row.CausationID == "" || row.GenerationFingerprint == "" || row.ModelID == "" || row.CodecIdentity == "" {
 		return fmt.Errorf("required identity is empty")
 	}
-	validCodec := row.FactVersion == int64(FormatVersionV1) && row.CodecIdentity == CodecIdentityV1 ||
-		row.FactVersion == int64(FormatVersionV2) && row.CodecIdentity == CodecIdentityV2
-	if !validCodec {
-		return fmt.Errorf("unsupported fact codec %q version %d", row.CodecIdentity, row.FactVersion)
+	if row.FactVersion <= 0 {
+		return fmt.Errorf("fact version must be positive")
 	}
 	if row.Action != "created" && row.Action != "updated" && row.Action != "deleted" {
 		return fmt.Errorf("invalid action %q", row.Action)

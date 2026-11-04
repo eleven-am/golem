@@ -9,12 +9,29 @@ import (
 type p5SQLTrace struct {
 	lock       sync.Mutex
 	statements []string
+	fault      func(statement string) error
 }
 
 func (trace *p5SQLTrace) record(statement string) {
 	trace.lock.Lock()
 	trace.statements = append(trace.statements, statement)
 	trace.lock.Unlock()
+}
+
+func (trace *p5SQLTrace) setFault(fault func(statement string) error) {
+	trace.lock.Lock()
+	trace.fault = fault
+	trace.lock.Unlock()
+}
+
+func (trace *p5SQLTrace) faultFor(statement string) error {
+	trace.lock.Lock()
+	fault := trace.fault
+	trace.lock.Unlock()
+	if fault == nil {
+		return nil
+	}
+	return fault(statement)
 }
 
 func (trace *p5SQLTrace) reset() {
@@ -94,6 +111,9 @@ func (connection *p5TraceConn) QueryContext(ctx context.Context, query string, a
 		return nil, driver.ErrSkip
 	}
 	connection.trace.record(query)
+	if err := connection.trace.faultFor(query); err != nil {
+		return nil, err
+	}
 	return queryer.QueryContext(ctx, query, arguments)
 }
 
@@ -152,6 +172,9 @@ func (statement *p5TraceStmt) Exec(arguments []driver.Value) (driver.Result, err
 
 func (statement *p5TraceStmt) Query(arguments []driver.Value) (driver.Rows, error) {
 	statement.trace.record(statement.query)
+	if err := statement.trace.faultFor(statement.query); err != nil {
+		return nil, err
+	}
 	return statement.Stmt.Query(arguments)
 }
 
@@ -166,6 +189,9 @@ func (statement *p5TraceStmt) ExecContext(ctx context.Context, arguments []drive
 func (statement *p5TraceStmt) QueryContext(ctx context.Context, arguments []driver.NamedValue) (driver.Rows, error) {
 	if contextual, ok := statement.Stmt.(driver.StmtQueryContext); ok {
 		statement.trace.record(statement.query)
+		if err := statement.trace.faultFor(statement.query); err != nil {
+			return nil, err
+		}
 		return contextual.QueryContext(ctx, arguments)
 	}
 	return nil, driver.ErrSkip

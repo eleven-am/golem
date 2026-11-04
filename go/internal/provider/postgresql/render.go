@@ -88,6 +88,9 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 				return Script{}, fmt.Errorf("postgresql render: unsupported system object kind=%s version=%d", object.Kind, object.Version)
 			}
 		}
+		if physical.HasRowVersion(normalized) {
+			statements = append(statements, renderRowVersion(normalized.System.Namespace.Name))
+		}
 	}
 	for _, table := range normalized.Tables {
 		statement, renderErr := renderer.table(table)
@@ -635,6 +638,10 @@ func cast(values []string, target string) (string, error) {
 
 func renderLedger(namespace, name physical.PhysicalName) string {
 	return fmt.Sprintf("CREATE TABLE %s (\n  %s text PRIMARY KEY,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s jsonb NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s jsonb NOT NULL,\n  %s timestamptz(6) NOT NULL\n)", qualified(namespace, name), quote("migration_id"), quote("parent_chain_hash"), quote("chain_hash"), quote("file_checksums"), quote("before_physical_fingerprint"), quote("after_physical_fingerprint"), quote("phases"), quote("applied_at"))
+}
+
+func renderRowVersion(namespace physical.PhysicalName) string {
+	return "CREATE SEQUENCE IF NOT EXISTS " + qualified(namespace, physical.RowVersionObject) + " AS bigint INCREMENT BY 1 MINVALUE 1 START WITH 1 CACHE 1 NO CYCLE"
 }
 
 func renderOutbox(namespace, name physical.PhysicalName) []string {

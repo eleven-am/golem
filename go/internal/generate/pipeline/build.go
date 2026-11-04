@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
+	"github.com/eleven-am/golem/go/internal/codegen/clientmanifest"
 	eventcodegen "github.com/eleven-am/golem/go/internal/codegen/event"
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
@@ -474,7 +475,7 @@ func emitGraphQLArtifacts(compiled compile.Result, request Request, compilation 
 	if err != nil {
 		return nil, fmt.Errorf("emit GraphQL Go adapter: %w", err)
 	}
-	artifacts := make([]manifest.Artifact, 0, 2+len(graphqlAdapter.Files))
+	artifacts := make([]manifest.Artifact, 0, 3+len(graphqlAdapter.Files))
 	graphqlGoPath := filepath.Join(request.AppPackage.Directory, graphqlAdapter.Filename)
 	graphqlGoArtifact, err := goArtifact(compiled.ModuleDir, graphqlGoPath, manifest.ArtifactGraphQLGo, graphqlAdapter.Source)
 	if err != nil {
@@ -497,6 +498,15 @@ func emitGraphQLArtifacts(compiled compile.Result, request Request, compilation 
 		Path: graphqlSDLPath, Kind: manifest.ArtifactGraphQLSDL,
 		Content: append([]byte(graphqlGeneratedHeader+"\n"), []byte(graphqlDocument.SDL)...), GeneratedHeader: graphqlGeneratedHeader,
 	})
+	clientSource, err := clientmanifest.Emit(compilation, contractFingerprint, graphqlDocument.SDL)
+	if err != nil {
+		return nil, fmt.Errorf("emit client manifest: %w", err)
+	}
+	clientPath, err := moduleRelative(compiled.ModuleDir, filepath.Join(request.AppPackage.Directory, clientmanifest.Filename))
+	if err != nil {
+		return nil, err
+	}
+	artifacts = append(artifacts, manifest.Artifact{Path: clientPath, Kind: manifest.ArtifactClientTS, Content: clientSource, GeneratedHeader: clientmanifest.Header})
 	return artifacts, nil
 }
 

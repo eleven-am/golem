@@ -5,12 +5,205 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.0
+go get github.com/eleven-am/golem/go@v0.8.1
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.1
+
+**Relation-only updates write the version.** A relation-only update of a row in a model with `Subscriptions` now writes that row's version column, so database `UPDATE` triggers on that table fire for it.
+
+**CDC changes whose live row is gone are superseded.** A CDC create or update whose row no longer exists when the recorder stamps it (an external update followed by a delete, or an insert and a delete in one source transaction) is no longer a failed batch. It is neither stamped nor published, and the observer receives a suppression with the new reason `events.SuppressionCDCSuperseded` (`cdc_superseded`, mapped to `observe.ReasonCDCSuperseded`). The delete that follows, in the same or a later batch, is recorded and published as usual, and so are the batch's other changes. A replay of the batch gives the same result. The batch's recorded events are numbered contiguously from 1; event identities still derive from the source ordinals.
+
+**The live protocol.** WebSocket and SSE subscriptions now require the `golem`
+block `{"protocol": 1, "contract": "<hex>"}`: in `connection_init.payload.golem`
+on WebSocket, in `extensions.golem` on SSE. There is no live path for a client
+without it. A mismatch closes the WebSocket with `4426` (`golem:protocol` or
+`golem:contract`) and is refused on HTTP and SSE as `GOLEM_PROTOCOL_MISMATCH`
+or `GOLEM_CONTRACT_MISMATCH`. The `golem` key is removed from the payload before
+`WebSocketInit` sees it. Plain HTTP queries and mutations are unchanged; a block
+sent with one is checked. After a subscription is registered the server sends
+exactly one `next` frame, `{"data":null,"extensions":{"golem":{"live":true}}}`,
+before any event; a refused subscription gets no ack. `graphql.Response` gains
+an optional `Extensions` field. A client that subscribes without the block must
+add it before upgrading to this version; see the GUIDE section "The live
+handshake and the subscription ack".
+
+**The client manifest.** `golem generate` now also writes `zz_golem_client.gen.ts`
+beside the SDL: the contract fingerprint, each model's primary key, cursor
+selector, events root and relations, the models behind computed fields and
+custom roots, and which roots are generated or opaque. It is listed in the
+generated manifest and checked by `golem check`; regenerate your application to
+add it. Kernel mode (`WithoutGraphQL`) does not write it. See the GUIDE section
+"The client manifest".
+
+**Event streams end when a policy is unavailable.** An event for a model or a relation target whose policy cannot be built used to be dropped silently, so a stream stayed open and quiet. The stream now ends with `GOLEM_SUBSCRIPTION_REVALIDATION`, for created, updated and deleted events alike. Reopen it once the policy builds. The suppression reason `policy_unavailable` (`events.SuppressionPolicyUnavailable`) is gone because the stream now ends instead.
+
+**Streams end when access they depend on changes, and on `InvalidatePolicies()`.** A stream whose read rule or `where` reaches another model, such as `Comments.Post.Is(...)`, now watches that model. When a row it reads changes in a field the rule or filter uses, and the subscriber could read that row before or can read it now, the stream ends with `GOLEM_SUBSCRIPTION_RESYNC` and `extensions.reason` `DEPENDENCY_CHANGED` (Go: `events.ReasonOf`), so a client that reloads no longer sees rows it lost access to. Updates to other fields, and rows the subscriber could never read, do not end it. Creates and deletes end it only for a to-many relation. `application.InvalidatePolicies()` now also ends every open event stream with `GOLEM_SUBSCRIPTION_RESYNC` (no reason), whether or not the policy cache is enabled. A stream whose rule or filter reaches a model without `golem.Subscriptions` is refused when opened with `GOLEM_SUBSCRIPTION_INVALID` and reason `DEPENDENCY_UNOBSERVABLE`, naming the model: add `Subscriptions` to it or change the rule. New public API: `events.Reason`, `events.ReasonDependencyChanged`, `events.ReasonDependencyUnobservable`, `events.ReasonOf`, `events.FailureWithReason` and `(*events.Error).Reason` and `.Detail`. See the GUIDE section "A stream that reads another model".
+
+**Sockets close at their credential's deadline.** A WebSocket or SSE
+subscription now needs a deadline derived from its principal's context: the
+context's own deadline (the credential expiry), or, for a context marked with
+the new `golem.WithoutCredentialExpiry` and with `EventLimits.RevalidateEvery`
+set, the open time plus `RevalidateEvery`. A principal with neither is refused
+at the handshake with `GOLEM_PRINCIPAL_DEADLINE_REQUIRED` (WebSocket close
+`4426`; SSE status 400); HTTP queries and mutations are unaffected. At the
+deadline the server closes the WebSocket with `4401` and a client reconnects;
+the principal is resolved fresh on the new socket. The marker is read only from
+the Go context, never from a client. Set the credential expiry as the context
+deadline where you resolve the principal, or mark API-key principals and set
+`RevalidateEvery`; see the GUIDE section "The socket deadline". New public API:
+`golem.WithoutCredentialExpiry` and `golem.HasNoCredentialExpiry`.
+
+**Partial commits are never reported as clean failures.** A GraphQL response
+that has errors after the operation committed at least one write now carries
+`extensions.golem.commit`: `"PARTIAL"` when a write was committed, or
+`"UNKNOWN"` when a `COMMIT` failed without saying whether the database applied
+it. A failure that committed nothing, a no-op update and a response without
+errors carry no extension, and their bytes are unchanged. The report is one
+request-scoped record, shared with `COMMITTED_RESULT_UNAVAILABLE`: a response
+whose error says `committed: true` is always `PARTIAL`. A client that retried
+every errored mutation must stop retrying a response that carries the
+extension; see the GUIDE section "Partial commits are never reported as clean
+failures".
+
+**Created and updated events no longer read the row once per subscriber.**
+Each event now reads the changed row once, with the to-one relations your
+policies and filters reference, and judges every subscriber against that read.
+A subscriber it proves cannot see the row costs nothing further. Before, every
+subscriber of a model ran its own principal resolution, read hooks and read for
+every event, so the work grew with subscribers times events and streams ended
+under load. Subscribers that can see the row, or that the shared read cannot
+decide (to-many relations and conditions the evaluator refuses), run exactly the
+path they ran before, with a fresh principal resolution per delivery, so what is
+delivered and what a payload holds is unchanged.
+
+Two behaviours differ from v0.8.0:
+
+- **The exclusion decision uses the policy as it was when the stream opened.**
+  A stream whose rule was false on a row when it opened does not receive events
+  for that row after the policy broadens, until the stream is reopened (at its
+  deadline, or when `InvalidatePolicies` ends it). Access
+  that is revoked takes effect on the next event as before.
+- **Read hooks do not run for subscribers the shared read excludes.** A
+  read-before or read-after hook now runs once per candidate subscriber of an
+  event instead of once per subscriber. Hooks used for audit or counting see
+  fewer calls.
+
+If the shared read fails, the streams that needed it end with
+`GOLEM_SUBSCRIPTION_REVALIDATION`.
+
+Measured with the `examples/loadmix` tool (one Article and one ChatMessage
+subscription per user, an owner rule, PostgreSQL, 180 s steady windows). On
+v0.8.0, every event ran a full principal resolution, hook pass and read for each
+of about 96 subscribers at 100 users and about 240 at 250 users. At 100 users
+delivery lag p99 was 13.8 s. At 250 users the stream fell 41,729 of 50,306
+events behind, with a lag p99 of 186.8 s. Now an event costs one shared read
+plus one full path for the one subscriber that owns the row (0.96 per event).
+Measured on this release, with row versions, update before-snapshots, exits
+and dependency streams included:
+
+| Load | Delivered / expected | Delivery lag p99 | Article commit p99 |
+|---|---|---|---|
+| 100 users, steady | 20,192 / 20,192 | 261 ms | 10.0 ms |
+| 250 users, steady | 50,306 / 50,306 | 259 ms | 6.4 ms |
+| 100 users, burst | 25,989 / 25,989 | 255 ms | 5.5 ms |
+
+No delivery was foreign or duplicated and no stream ended. At 500 users every
+event still arrives, but the Article hub saturates (lag p99 about 9.6 s in the
+development measurement), so about 250 to 400 subscribers per model hub is the
+comfortable range.
+
+**Rows of models with `Subscriptions` carry a version.** Every write golem
+issues gives the row a version higher than any version that key has committed;
+a recreated key starts above its deleted row. GraphQL exposes it as
+`_version: String!` and Go as the read-only `GolemVersion` handle. See
+"Row versions" in the guide.
+
+**The migration that adds `golem_version` and the version source.** After you
+regenerate, `golem migration new` produces one migration that:
+
+- adds `golem_version bigint NOT NULL DEFAULT 0` (SQLite: `INTEGER NOT NULL
+  DEFAULT 0`) to the table of every model with `Subscriptions`; existing rows
+  keep version 0 until their next write;
+- creates the version source first. PostgreSQL: the sequence
+  `"<system schema>"."golem_row_version"` with `CACHE 1`, `NO CYCLE`. SQLite: the
+  one-row table `golem_row_version`.
+
+Nothing else is renamed or rewritten. The change needs no approval. Apply it
+before you start the new build: at startup the new build refuses a database
+that has versioned tables but no version source, a PostgreSQL sequence whose
+cache setting is not 1, and a SQLite counter that does not hold exactly one row.
+
+**Names reserved.** A field or column named `GolemVersion`, `_version`,
+`golem_version` or `_golem_version` is now refused at generation. Rename yours
+before regenerating. A GraphQL field called `version` is unaffected.
+
+**Regenerate, and drain undelivered events on go/v0.8.0 first.** This release
+reads only the new event fact format (fact codec V3, which stores the row
+version with every fact). Facts written by go/v0.8.0 or earlier (format V1 or V2)
+cannot be read, and nothing converts them. Run the drain steps of the go/v0.8.0
+notes on go/v0.8.0, regenerate, and only then deploy this version. If you skip
+the drain, the publisher blocks each such delivery with
+`last_failure_code = 'format-retired'` (visible through `EventOperator().Inspect`)
+and its decode error is `GOLEM_EVENT_FORMAT_RETIRED: stored event fact (format
+V1) is no longer readable: drain undelivered events on go/v0.8.0 before
+upgrading` (`V2` for a V2 fact). Under this version such a delivery can only be
+retired with `EventOperator().Retire(ctx, causation)`; its events are lost.
+Bundles of contract format 4 and 5 are no longer accepted in
+`HistoricalEventBundles` either: startup stops with "historical contract format
+N is not supported by this golem: deliver or drain undelivered events before
+upgrading, then remove this bundle from HistoricalEventBundles".
+
+**Events carry `version`.** Every event type has `version: String!`, a decimal
+string. It is always the version of the write that produced the event, from the
+stored fact; for a deleted event, the row's last version. If a later write lands
+before delivery, the event keeps its own version and the selected entity carries
+the `_version` it was read at. `golem.EventMetadata` gains `Version() int64`. Use it to ignore an event
+older than a row you already hold.
+
+**Rows that leave a list are delivered as `EXITED`.** An update that moves a row
+out of a stream's `EventWhere` filter or read rule used to be silent. A
+subscriber that held the row now receives an event with action
+`golem.EventExited` (`type: EXITED` over GraphQL), the row's key, the version of
+the update and a null entity; a subscriber that never held the row still
+receives nothing. Every update fact stores a before snapshot, the row as it was
+before the update, with the delete snapshot's field set and size limit, and
+golem judges the subscriber's rule and filter against it. When it cannot decide
+(a filter or read hook outside the snapshot, a to-many relation, a before
+snapshot over `MutationLimits.MaxDeleteSnapshotBytes`, or a CDC update recorded
+without a `Before` image) the stream ends with `GOLEM_SUBSCRIPTION_RESYNC`.
+A client that switches on `Metadata().Action()` must handle the new action;
+treat it like a delete for the list you hold. `golem generate` adds `EXITED` to
+the GraphQL `GolemEventType` enum: regenerate your application. Update facts in
+the outbox grow by the snapshot, which for most models is the primary key,
+foreign keys and bounded scalars of the row. See "Rows that leave a list" in the
+guide.
+
+**For CDC adapter authors: an update's `Before` image is optional.** With it, the
+fact stores the before snapshot and the subscribers that held the row receive
+`EXITED`. Without it, every subscriber that cannot be ruled out from the new row
+ends with `RESYNC`, so give the `Before` image whenever your source log has it.
+`events.CDCChangeInput.Before` is still required for deletes.
+
+**For CDC adapter authors: row images carry `golem_version`.** The exact images
+an adapter hands to `Emit` hold every stored scalar of the model, and that now
+includes `golem_version` (the value your source database holds). When the
+emitter records a created or updated change it writes a new version into that
+row, in the same database transaction that stores the fact, and the event
+carries it, so your adapter must treat the transaction as a golem write through
+`CorrelatesGolemTransaction`, as it does for the fact inserts. A delete takes the
+version from its `Before` image; version 0 (a row never stamped) is published as
+0, and an image without the `golem_version` column fails with
+`GOLEM_CDC_INVALID`, as does a replay whose stored facts disagree with the
+rebuilt ones. `CorrelatesGolemTransaction` must be true for the stamp's own
+source transaction, or the stamp is captured as a new change and stamped again. A replay of a recorded batch
+reuses the versions it recorded.
 
 ---
 

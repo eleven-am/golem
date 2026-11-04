@@ -133,6 +133,29 @@ func TestCDCValidatesOrdinalsActionsModelsAndImagesBeforeEncoding(t *testing.T) 
 	}
 }
 
+func TestCDCAcceptsAnUpdateWithoutABeforeImage(t *testing.T) {
+	input := clonePublicBatch(validBatch(t))
+	input.Changes[1].Before = nil
+	encoder := &fakeEncoder{}
+	transport := &captureTransport{}
+	if err := testEmitter(t, transport, encoder, &fakeCorrelator{}).Emit(context.Background(), input); err != nil {
+		t.Fatalf("an update without a before image was refused: %v", err)
+	}
+	updates := 0
+	for _, encoded := range encoder.snapshot() {
+		if encoded.Action != golem.EventUpdated {
+			continue
+		}
+		updates++
+		if encoded.Before != nil {
+			t.Fatal("the encoder was handed a before image the adapter never supplied")
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("the encoder saw %d updates, want 1", updates)
+	}
+}
+
 func TestCDCEmitterOwnsCursorAndChangeSlices(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	correlator := &fakeCorrelator{entered: entered, release: release}
@@ -284,7 +307,15 @@ type fakeRecorder struct {
 	failure error
 }
 
-func (recorder *fakeRecorder) RecordCDC(_ context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *fakeRecorder) RecordCDC(_ context.Context, _ golem.CausationID, changes []Change, build func([]Stamp) ([]mutationfact.OutboxRow, error)) error {
+	stamps := make([]Stamp, len(changes))
+	for index := range stamps {
+		stamps[index] = Stamp{Version: int64(100 + index)}
+	}
+	rows, err := build(stamps)
+	if err != nil {
+		return err
+	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	recorder.batches = append(recorder.batches, append([]mutationfact.OutboxRow(nil), rows...))

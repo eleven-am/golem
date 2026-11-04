@@ -54,6 +54,9 @@ type deleteEvalPolicies struct {
 	hook    func(deleteEvalFields) golem.Predicate[deleteEvalComment]
 
 	postUnavailable *atomic.Bool
+	postTitleRule   func(deleteEvalFields, deleteEvalActor) golem.Predicate[deleteEvalPost]
+	resolveFails    *atomic.Bool
+	hookFails       *atomic.Bool
 }
 
 type deleteEvalFixture struct {
@@ -124,6 +127,14 @@ func runDeleteEvalProfiles(t *testing.T, policies deleteEvalPolicies, run func(*
 	}
 }
 
+func runDeleteEvalWithoutDependencyNotices(t *testing.T, policies deleteEvalPolicies, run func(*testing.T, deleteEvalFixture)) {
+	t.Helper()
+	runDeleteEvalProfiles(t, policies, func(t *testing.T, fixture deleteEvalFixture) {
+		fixture.transport.silence(fixture.schema.User, fixture.schema.Post)
+		run(t, fixture)
+	})
+}
+
 func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provider, schemaFixture schematest.GraphFixture, policies deleteEvalPolicies) deleteEvalFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -156,7 +167,7 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		},
 	))
 	commentDescriptor := golem.GeneratedModelDescriptor[deleteEvalComment](schemaFixture.Comment, golem.GeneratedDescriptorShape(
-		[]golem.FieldID{schemaFixture.CommentID, schemaFixture.CommentPostID, schemaFixture.CommentBody}, nil, []golem.IdentityMetadata{commentIdentity},
+		[]golem.FieldID{schemaFixture.CommentID, schemaFixture.CommentPostID, schemaFixture.CommentBody, schemaFixture.CommentRowVersion}, nil, []golem.IdentityMetadata{commentIdentity},
 		[]golem.RelationMetadata{golem.GeneratedRelationMetadata(schemaFixture.Comment, schemaFixture.Post, schemaFixture.CommentPost, schemaFixture.Commenting, golem.RelationSource, golem.RelationToOne)},
 	))
 	generation := schemaFixture.Bundle.GenerationDigest()
@@ -183,6 +194,10 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		} else if predicate, ok := policies.post(fields, actor); ok {
 			rules.CanRead(predicate)
 		}
+		if policies.postTitleRule != nil {
+			rules.CannotReadFields(golem.All[deleteEvalPost](), fields.postTitle)
+			rules.CanReadFields(policies.postTitleRule(fields, actor), fields.postTitle)
+		}
 		return rules.Freeze(schemaFixture.Post)
 	})
 	commentBinding := golem.GeneratedPolicyBinding[deleteEvalActor, deleteEvalComment](schemaFixture.Comment, func(actor deleteEvalActor) (golem.FrozenPolicy, error) {
@@ -197,6 +212,9 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 	var hooks []golem.HookBinding[deleteEvalActor]
 	if policies.hook != nil {
 		hooks = append(hooks, golem.GeneratedBeforeHookBinding[deleteEvalActor, deleteEvalComment, golem.FindManyHookRequest[deleteEvalComment]](schemaFixture.Comment, golem.HookFindMany, func(_ context.Context, request *golem.FindManyHookRequest[deleteEvalComment]) error {
+			if policies.hookFails != nil && policies.hookFails.Load() {
+				return errors.New("read hook refused")
+			}
 			request.AppendOptions(golem.Where(policies.hook(fields)))
 			return nil
 		}))
@@ -241,6 +259,9 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 		EventRegistry: eventRegistry, EventFactories: factoryRegistry, EventTransport: transport,
 		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 		ResolvePrincipal: func(_ context.Context, principal deleteEvalPrincipal) (deleteEvalActor, error) {
+			if policies.resolveFails != nil && policies.resolveFails.Load() {
+				return deleteEvalActor{}, errors.New("principal could not be resolved")
+			}
 			return deleteEvalActor(principal), nil
 		},
 	})
@@ -339,7 +360,7 @@ func (fixture deleteEvalFixture) deleteComment(t *testing.T, eventID uint16, com
 
 func (fixture deleteEvalFixture) publishDelete(t *testing.T, model golem.ModelID, identity golem.FieldID, eventID uint16, cells []mutationdecode.Cell) {
 	t.Helper()
-	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), cells)
+	row, err := mutationdecode.NewCompleteRow(fixture.schema.Registry, policyir.ModelID(model), withTestRowVersion(fixture.schema.Registry, model, cells))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +380,7 @@ func (fixture deleteEvalFixture) publishDelete(t *testing.T, model golem.ModelID
 		t.Fatal(err)
 	}
 	id := p7OracleID(eventID)
-	fact, err := mutationfact.NewV2(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, &row, nil)
+	fact, err := mutationfact.New(fixture.schema.Registry, golem.SchemaDigest(digest), mutationfact.EventID(id), requirement, mutationfact.CausationID(golem.CausationID(id)), 1, 7, &row, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

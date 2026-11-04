@@ -89,7 +89,7 @@ func TestStatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing.T
 		Generation: golem.SchemaDigest{1}, Model: golem.ModelID{2},
 		Limits: events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond},
 		Source: sourceFactory(source),
-		EvaluateState: func(_ context.Context, notice events.Notice, _ SubscriberKey, retained any) (Evaluation[golem.EventID], error) {
+		EvaluateState: func(_ context.Context, notice events.Notice, _ SubscriberKey, retained any, _ any) (Evaluation[golem.EventID], error) {
 			seen <- retained
 			return Deliver(notice.EventID()), nil
 		},
@@ -99,7 +99,7 @@ func TestStatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing.T
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := hub.SubscribeWithState(ctx, testKey(t, "p", "v", "f", "s", "d", "e", "member", false), state, func(retained any) {
+	stream, err := hub.SubscribeWithState(ctx, testKey(t, "p", "v", "f", "s", "d", "e", "member", false), state, func(retained any, _ error) {
 		if retained != state {
 			t.Errorf("dropped state = %p, want %p", retained, state)
 		}
@@ -143,7 +143,7 @@ func TestStatefulSubscriptionRefusesShareableKeyBeforeSourceStart(t *testing.T) 
 			starts.Add(1)
 			return nil, events.Failure(events.CodeSubscriptionSourceClosed)
 		},
-		EvaluateState: func(context.Context, events.Notice, SubscriberKey, any) (Evaluation[golem.EventID], error) {
+		EvaluateState: func(context.Context, events.Notice, SubscriberKey, any, any) (Evaluation[golem.EventID], error) {
 			return Evaluation[golem.EventID]{}, nil
 		},
 		Clone: func(value golem.EventID) (golem.EventID, error) { return value, nil },
@@ -212,7 +212,7 @@ func TestStateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) 
 		Generation: golem.SchemaDigest{1}, Model: golem.ModelID{2},
 		Limits: events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond},
 		Source: sequentialFactory(source, newFakeSource()),
-		EvaluateState: func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any) (Evaluation[golem.EventID], error) {
+		EvaluateState: func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any, _ any) (Evaluation[golem.EventID], error) {
 			return Deliver(notice.EventID()), nil
 		},
 		Clone: func(value golem.EventID) (golem.EventID, error) { return value, nil },
@@ -222,7 +222,7 @@ func TestStateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) 
 	}
 	entered, release, reentered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var first *Stream[golem.EventID]
-	first, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), struct{}{}, func(any) {
+	first, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), struct{}{}, func(any, error) {
 		close(entered)
 		<-release
 		_ = first.Close()
@@ -779,11 +779,14 @@ func TestModelHubConfigErrorsNameTheViolatedField(t *testing.T) {
 		"absent clone":      {func(config *Config[golem.EventID]) { config.Clone = nil }, "Clone"},
 		"absent evaluator":  {func(config *Config[golem.EventID]) { config.Evaluate = nil }, "Evaluate"},
 		"both evaluators": {func(config *Config[golem.EventID]) {
-			config.EvaluateState = func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any) (Evaluation[golem.EventID], error) {
+			config.EvaluateState = func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any, _ any) (Evaluation[golem.EventID], error) {
 				return Deliver(notice.EventID()), nil
 			}
 		}, "Evaluate"},
 		"invalid limits": {func(config *Config[golem.EventID]) { config.Limits = events.Limits{SubscriberQueue: -1} }, "SubscriberQueue"},
+		"prepare without state evaluator": {func(config *Config[golem.EventID]) {
+			config.PrepareNotice = func(context.Context, events.Notice, []any) any { return nil }
+		}, "PrepareNotice"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := valid()

@@ -129,19 +129,18 @@ func withNullableScalar(t testing.TB, fixture schematest.Fixture, target golem.F
 		t.Fatal(err)
 	}
 	modelDocument := golem.GeneratedSchemaDocument(fixture.Bundle.Model().FormatVersion(), fixture.Bundle.Model().CanonicalVersion(), nestedSchemaDigest(t, string(fingerprint)), payload)
-	nullable := func(schema physical.PhysicalSchema) physical.PhysicalSchema {
-		schema.Tables = append([]physical.PhysicalTable(nil), schema.Tables...)
-		for tableIndex := range schema.Tables {
-			schema.Tables[tableIndex].Columns = append([]physical.PhysicalColumn(nil), schema.Tables[tableIndex].Columns...)
-			for columnIndex := range schema.Tables[tableIndex].Columns {
-				if schema.Tables[tableIndex].Columns[columnIndex].ID == field {
-					schema.Tables[tableIndex].Columns[columnIndex].Nullable = true
-				}
-			}
-		}
-		return schema
+	namespace, systemNamespace := fixture.PostgreSQL.Namespace.Name, fixture.PostgreSQL.System.Namespace.Name
+	var lowerErr error
+	fixture.SQLite, lowerErr = sqliteprovider.New().Lower(context.Background(), model, physical.LowerOptions{})
+	if lowerErr != nil {
+		t.Fatal(lowerErr)
 	}
-	fixture.SQLite, fixture.PostgreSQL = nullable(fixture.SQLite), nullable(fixture.PostgreSQL)
+	fixture.PostgreSQL, lowerErr = postgresprovider.New().Lower(context.Background(), model, physical.LowerOptions{})
+	if lowerErr != nil {
+		t.Fatal(lowerErr)
+	}
+	fixture.PostgreSQL.Namespace.Name = namespace
+	fixture.PostgreSQL.System.Namespace.Name = systemNamespace
 	providers := []golem.ProviderSchemaDocument{nestedProviderDocument(t, golem.SQLite, fixture.SQLite), nestedProviderDocument(t, golem.PostgreSQL, fixture.PostgreSQL)}
 	var contract compilerir.ContractIR
 	if err := json.Unmarshal(fixture.Bundle.Contract().Bytes(), &contract); err != nil {

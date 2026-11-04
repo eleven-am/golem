@@ -309,7 +309,7 @@ func (world *referenceWorld) assertGraphQL(t *testing.T) {
 	defer graph.Shutdown(context.Background())
 	principal := social.Principal{Development: true, DevUserID: world.aliceID}
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		graph.Handler().ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		graph.Handler().ServeHTTP(writer, request.WithContext(testPrincipalContext(request.Context(), principal)))
 	})
 	outcome := func(response graphResponse) string {
 		if len(response.Errors) == 0 {

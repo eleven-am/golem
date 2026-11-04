@@ -73,7 +73,8 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 		return ir.Policy{}, value.failure(CodeVersion, "policy", "frozen policy has no canonical evidence")
 	}
 	model := modelID(view.ModelID())
-	if _, ok := registry.Model(golem.ModelID(model)); !ok {
+	logical, ok := registry.Model(golem.ModelID(model))
+	if !ok {
 		return ir.Policy{}, value.failureFor(CodeModel, "policy.model", model, ir.FieldID{}, ir.RelationID{}, 0, "unknown policy model")
 	}
 
@@ -130,6 +131,9 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 			if _, exists := registry.Field(golem.ModelID(model), golem.FieldID(field)); !exists {
 				return ir.Policy{}, value.failureFor(CodeField, fmt.Sprintf("%s.fields[%d]", path, fieldIndex), model, field, ir.RelationID{}, 0, "unknown or cross-model rule field")
 			}
+			if version, owned := logical.RowVersion(); owned && golem.FieldID(field) == version {
+				return ir.Policy{}, value.failureFor(CodeField, fmt.Sprintf("%s.fields[%d]", path, fieldIndex), model, field, ir.RelationID{}, 0, "the golem row version is readable whenever its row is readable and cannot be named by a rule")
+			}
 			fields[fieldIndex] = field
 		}
 
@@ -150,6 +154,9 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 	bound, err := ir.NewPolicy(model, rules)
 	if err != nil {
 		return ir.Policy{}, value.wrap(CodeInternal, "policy", model, ir.FieldID{}, ir.RelationID{}, 0, err)
+	}
+	if version, owned := logical.RowVersion(); owned {
+		bound = bound.WithRowVersion(fieldID(version))
 	}
 	return bound, nil
 }

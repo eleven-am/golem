@@ -246,6 +246,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled, formatUpgrade: reviewedPostgreSQLV1RepresentationTransition(before, after), renamedKeys: referencedKeyRenames(beforeTables, afterTables, owners, semantic.Operations)}
 	plan := IncrementalPlan{MigrationID: entry.ID}
+	if physical.HasRowVersion(after) && !physical.HasRowVersion(before) {
+		plan.steps = append(plan.steps, incrementalStep{statement: renderRowVersion(after.System.Namespace.Name)})
+	}
 	refreshFullTextOwners, err := postgresqlChangedFullTextProjectionOwners(before, after, beforeTables, afterTables)
 	if err != nil {
 		return IncrementalPlan{}, err

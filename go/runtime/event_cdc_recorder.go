@@ -8,9 +8,12 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/events"
+	"github.com/eleven-am/golem/go/golem"
 	eventcdc "github.com/eleven-am/golem/go/internal/event/cdc"
+	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -20,6 +23,8 @@ type cdcOutboxExecer interface {
 }
 
 type cdcOutboxRecorder struct {
+	registry  *schema.Registry
+	history   mutationfact.HistoricalSchemaResolver
 	database  *sqlx.DB
 	provider  policyir.Provider
 	namespace string
@@ -35,13 +40,109 @@ func (app *App[P, A]) cdcOutboxRecorder() (*cdcOutboxRecorder, error) {
 	if app.provider != policyir.ProviderSQLite && app.provider != policyir.ProviderPostgreSQL {
 		return nil, fmt.Errorf("P7_CDC_RECORD_CONFIG: provider is unsupported")
 	}
-	return &cdcOutboxRecorder{database: app.database, provider: app.provider, namespace: string(namespace), limits: app.mutationLimits, scan: app.scanDeleteFact}, nil
+	return &cdcOutboxRecorder{registry: app.registry, history: app.eventSchemas, database: app.database, provider: app.provider, namespace: string(namespace), limits: app.mutationLimits, scan: app.scanDeleteFact}, nil
 }
 
-func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, rows []mutationfact.OutboxRow) error {
+func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []eventcdc.Change, build func([]eventcdc.Stamp) ([]mutationfact.OutboxRow, error)) error {
 	if recorder == nil || recorder.database == nil || ctx == nil {
 		return fmt.Errorf("P7_CDC_RECORD: recorder is incomplete")
 	}
+	if len(changes) == 0 || len(changes) > recorder.limits.facts {
+		return events.Failure(events.CodeCDCInvalid)
+	}
+	return recorder.within(ctx, func(execer cdcOutboxExecer) error {
+		stored, err := recorder.stored(ctx, execer, golem.UUID(causation).String())
+		if err != nil {
+			return err
+		}
+		var stamps []eventcdc.Stamp
+		if len(stored) != 0 {
+			stamps, err = recorder.storedStamps(stored, changes)
+		} else {
+			stamps, err = recorder.stampVersions(ctx, execer, changes)
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := build(stamps)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		return recorder.insert(ctx, execer, rows)
+	})
+}
+
+func (recorder *cdcOutboxRecorder) storedStamps(stored []mutationfact.OutboxRow, changes []eventcdc.Change) ([]eventcdc.Stamp, error) {
+	versions := make(map[string]int64, len(stored))
+	for _, row := range stored {
+		envelope, err := mutationfact.ValidateStoredRow(row, recorder.history)
+		if err != nil {
+			return nil, events.Failure(events.CodeCDCInvalid)
+		}
+		versions[row.EventID] = envelope.RowVersion()
+	}
+	stamps := make([]eventcdc.Stamp, len(changes))
+	matched := 0
+	for index, change := range changes {
+		version, recorded := versions[golem.UUID(change.EventID).String()]
+		if !recorded {
+			stamps[index] = eventcdc.Stamp{Superseded: true}
+			continue
+		}
+		stamps[index] = eventcdc.Stamp{Version: version}
+		matched++
+	}
+	if matched != len(stored) {
+		return nil, events.Failure(events.CodeCDCInvalid)
+	}
+	return stamps, nil
+}
+
+func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sqlx.QueryerContext, changes []eventcdc.Change) ([]eventcdc.Stamp, error) {
+	stamps := make([]eventcdc.Stamp, len(changes))
+	for index, change := range changes {
+		model := policyir.ModelID(change.Model)
+		if change.Action == golem.EventDeleted {
+			before, err := decodeCDCExactImage(recorder.registry, model, change.Before)
+			if err != nil || before == nil {
+				return nil, events.Failure(events.CodeCDCInvalid)
+			}
+			version, err := mutationfact.RowVersionOf(recorder.registry, *before)
+			if err != nil {
+				return nil, events.Failure(events.CodeCDCInvalid)
+			}
+			stamps[index] = eventcdc.Stamp{Version: version}
+			continue
+		}
+		after, err := decodeCDCExactImage(recorder.registry, model, change.After)
+		if err != nil || after == nil {
+			return nil, events.Failure(events.CodeCDCInvalid)
+		}
+		stamped, err := stampCascadeRows(ctx, queryer, recorder.registry, recorder.provider, recorder.limits, model, []mutationdecode.Row{*after})
+		var absent *batchCardinalityError
+		if errors.As(err, &absent) && absent.got == 0 {
+			stamps[index] = eventcdc.Stamp{Superseded: true}
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("P7_CDC_RECORD: stamp: %w", err)
+		}
+		if len(stamped) != 1 {
+			return nil, fmt.Errorf("P7_CDC_RECORD: stamp: %d rows stamped for one change", len(stamped))
+		}
+		version, err := mutationfact.RowVersionOf(recorder.registry, stamped[0])
+		if err != nil {
+			return nil, fmt.Errorf("P7_CDC_RECORD: stamp: %w", err)
+		}
+		stamps[index] = eventcdc.Stamp{Version: version}
+	}
+	return stamps, nil
+}
+
+func (recorder *cdcOutboxRecorder) insert(ctx context.Context, execer cdcOutboxExecer, rows []mutationfact.OutboxRow) error {
 	if len(rows) == 0 || len(rows) > recorder.limits.facts {
 		return events.Failure(events.CodeCDCInvalid)
 	}
@@ -64,21 +165,19 @@ func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, rows []mutatio
 	if err != nil {
 		return events.Failure(events.CodeCDCInvalid)
 	}
-	return recorder.within(ctx, func(execer cdcOutboxExecer) error {
-		for _, statement := range append(inserts, delivered) {
-			if _, err := execer.ExecContext(ctx, statement.SQL(), statement.Args()...); err != nil {
-				return fmt.Errorf("P7_CDC_RECORD: insert: %w", err)
-			}
+	for _, statement := range append(inserts, delivered) {
+		if _, err := execer.ExecContext(ctx, statement.SQL(), statement.Args()...); err != nil {
+			return fmt.Errorf("P7_CDC_RECORD: insert: %w", err)
 		}
-		stored, err := recorder.stored(ctx, execer, causation)
-		if err != nil {
-			return err
-		}
-		if !sameCDCOutboxRows(stored, rows) {
-			return events.Failure(events.CodeCDCInvalid)
-		}
-		return nil
-	})
+	}
+	stored, err := recorder.stored(ctx, execer, causation)
+	if err != nil {
+		return err
+	}
+	if !sameCDCOutboxRows(stored, rows) {
+		return events.Failure(events.CodeCDCInvalid)
+	}
+	return nil
 }
 
 func (recorder *cdcOutboxRecorder) stored(ctx context.Context, queryer sqlx.QueryerContext, causation string) ([]mutationfact.OutboxRow, error) {

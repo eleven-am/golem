@@ -1,94 +1,94 @@
 {
   "formatVersion": 2,
-  "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-  "contractFingerprint": "1a6f41387c3c65eda076e3e3f3f1944fecea43bc3c9dccfc1837e90045704b2e",
+  "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+  "contractFingerprint": "d23df1d5186f040385f2b1ad781906c940965e23af092c4d8ba5e17b289c5697",
   "providerFingerprints": [
     {
       "provider": "postgresql",
-      "fingerprint": "e4061b7ed4b2c1e3014e45ee287afcf58cdd0467eb0521f49e1778587733412a",
+      "fingerprint": "9d65026cda79fb087a098278276153b4f90e22ac31a51c3f6beedc05dc07e03b",
       "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-      "migrationFingerprint": "f3c093d76194740fcba86c75ee70189bedd17baa6e34600f9e875fc5cce18a11"
+      "migrationFingerprint": "a2d099ecd66a31fd96926ed874075e3875a8567931dcd9ae570ddc070460a51a"
     },
     {
       "provider": "sqlite",
-      "fingerprint": "4ba5ee3d35d82ec282a0fbde0edd30b140cc53c54cd977970f8b843d06f81cdf",
+      "fingerprint": "3057dad7cd8cf266543db248790daa93f7a639951153a30aecdadce8b02f11b1",
       "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
-      "migrationFingerprint": "c6864c5c05c3c846edbe03ccf14ec9bad16d130cb43bf10d581191e21952be10"
+      "migrationFingerprint": "6ee84fed72e4a5ec416cffd8b1bd54537c727e620a08f05ededfad3c107b4d6b"
     }
   ],
-  "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+  "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "artifacts": [
     {
       "path": ".golem/generated/contract.metadata.json",
       "kind": "metadata",
-      "contentSha256": "2b3fa29826724ed1f7db7c6d87100c1c27a2e3e5eba2a0b16ab8db73c1f38e61",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "68d69da6749976828b0ec4c62e85b78927e1314a1d69ef86ab7b78b57b716c79",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/model.snapshot.json",
       "kind": "snapshot",
-      "contentSha256": "c8ba4fe58026890b1961b0827492046c119c35699171195db11b119b613b7fdc",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "a91fa727c77d8fc2368544deea975e8840fef5c5fe972b6e72c75fb31c704b5e",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/postgresql.physical.snapshot.json",
       "kind": "provider",
-      "contentSha256": "a7e4d7762a6cc5a782551588dffa80757da457ca9d573114a008c64a04fc8d87",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "800cee93236f7399ed244563d4f7dcf8c0b505cb701b52949666e2816c760288",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": ".golem/generated/sqlite.physical.snapshot.json",
       "kind": "provider",
-      "contentSha256": "71e9cd83cdced5c00aecb66a20ec1428bf533c941db308f6e28517c3d091ce85",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "a8713f6a3f42c1caf73b3a95d64353faa18903ab7c4344cc2aa447944cb0e6e4",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "{\"_golemGenerated\":\"golem:p1:artifact:v1\","
     },
     {
       "path": "kernel/zz_golem_bindings.gen.go",
       "kind": "bindings_go",
-      "contentSha256": "87652f2292c502a8eb8b3dbaaa956eb01dcd19af2dac828f78e919c6ae4fb542",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "369163a7e61528afaf263ba9d7cda366ac32c50938131648d964e682e5380b36",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "kernel/zz_golem_events.gen.go",
       "kind": "event_go",
-      "contentSha256": "1255a97d2577966c790dac374b3ad2386b8cdaae8c94263e212739e5f0c28174",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "65e9b978a19295f2b16992d5d9bf0dab0513b22f18e0af4240d99df2a33a4f92",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "kernel/zz_golem_models.gen.go",
       "kind": "model_go",
-      "contentSha256": "c5902abc04675c0245ae388ebae7add6743fb749c0c2b51a34e66f92b4fe4075",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "0b8569584010e7c8a51e2372f5355e128a9c58dccbe1322cba4410115e255756",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     },
     {
       "path": "kernel/zz_golem_registry.gen.go",
       "kind": "registry_go",
-      "contentSha256": "1dca6d7706ab5f824256533f114fe500f83da9431aea30f65097e4924ad8a4fb",
-      "modelFingerprint": "dc1b29ca2e65fc92f27d1a03b2c38812e5d99f35c88068c1aa5a3d2e28c003a3",
-      "generationDigest": "d4c61bc56edd8ad8484a2d8ce4129f76b13a9a8230f8d7a726d9c9fe3fff87e2",
+      "contentSha256": "99002be231cdb6a8da97d03ffdb2e53f0d7fba191adb997629c2fda08dcbfd39",
+      "modelFingerprint": "44df6dc3236d8771643fd1a3a99f3f59af429a07e0464cc8d3e1df0078a480d6",
+      "generationDigest": "8fc7ef831717fe3735c2320d2373ee5c6469d6fd3f7216cd37e06bc2c27fee23",
       "generatorVersion": "p1-v1",
       "generatedHeader": "// Code generated by golem. DO NOT EDIT."
     }

@@ -233,10 +233,10 @@ func NewFactRequirement(action FactAction, beforeIdentity, afterIdentity, privat
 	if action == FactCreated && len(value.afterIdentity) == 0 || action == FactDeleted && len(value.beforeIdentity) == 0 || action == FactUpdated && (len(value.beforeIdentity) == 0 || len(value.afterIdentity) == 0) {
 		return FactRequirement{}, fmt.Errorf("P4_MUTATION_IR_FACT: required identity image is absent")
 	}
-	if action != FactDeleted && len(value.privateDeleteSnapshot) != 0 {
-		return FactRequirement{}, fmt.Errorf("P4_MUTATION_IR_FACT: private delete snapshot is valid only for delete")
+	if action == FactCreated && len(value.privateDeleteSnapshot) != 0 {
+		return FactRequirement{}, fmt.Errorf("P4_MUTATION_IR_FACT: private before snapshot is valid only for update and delete")
 	}
-	if action == FactDeleted {
+	if action == FactDeleted || action == FactUpdated {
 		value.deleteSnapshotState = DeleteSnapshotUnverifiable
 		if privateDeleteSnapshot != nil {
 			value.deleteSnapshotState = DeleteSnapshotStoredScalars
@@ -249,6 +249,14 @@ func NewFactRequirement(action FactAction, beforeIdentity, afterIdentity, privat
 // The inventory must contain only compiler-selected stored scalar fields; the
 // registry-backed planner validates that invariant before SQL is rendered.
 func NewDeleteFactRequirement(beforeIdentity []policyir.FieldID, state DeleteSnapshotState, storedScalars []policyir.FieldID) (FactRequirement, error) {
+	return newBeforeSnapshotFactRequirement(FactDeleted, beforeIdentity, nil, state, storedScalars)
+}
+
+func NewUpdateFactRequirement(beforeIdentity, afterIdentity []policyir.FieldID, state DeleteSnapshotState, storedScalars []policyir.FieldID) (FactRequirement, error) {
+	return newBeforeSnapshotFactRequirement(FactUpdated, beforeIdentity, afterIdentity, state, storedScalars)
+}
+
+func newBeforeSnapshotFactRequirement(action FactAction, beforeIdentity, afterIdentity []policyir.FieldID, state DeleteSnapshotState, storedScalars []policyir.FieldID) (FactRequirement, error) {
 	if state != DeleteSnapshotUnverifiable && state != DeleteSnapshotStoredScalars {
 		return FactRequirement{}, fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: invalid verification state")
 	}
@@ -261,7 +269,7 @@ func NewDeleteFactRequirement(beforeIdentity []policyir.FieldID, state DeleteSna
 	} else if input == nil {
 		input = []policyir.FieldID{}
 	}
-	value, err := NewFactRequirement(FactDeleted, beforeIdentity, nil, input)
+	value, err := NewFactRequirement(action, beforeIdentity, afterIdentity, input)
 	if err != nil {
 		return FactRequirement{}, err
 	}
