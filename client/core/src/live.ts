@@ -90,7 +90,7 @@ interface EventFrame {
   readonly entity: Record<string, unknown> | null
 }
 
-function readMeta(query: Query): GolemQueryMeta | undefined {
+export function readMeta(query: Query): GolemQueryMeta | undefined {
   const meta = query.meta?.golem
   if (typeof meta !== 'object' || meta === null) {
     return undefined
