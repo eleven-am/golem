@@ -33,6 +33,7 @@ export interface StreamPlan {
   readonly slot: boolean
   readonly rankedBy: Ranking
   readonly scope: 'exact' | 'policy-only'
+  readonly paths: ReadonlyArray<string>
   readonly query: string
   readonly variableNames: ReadonlyArray<string>
 }
@@ -72,6 +73,7 @@ interface StreamDraft {
   readonly scope: Scope | null
   readonly order: number
   readonly fields: Map<string, FieldNode>
+  readonly paths: Set<string>
 }
 
 interface Sink {
@@ -98,6 +100,8 @@ const nameNode = (value: string) => ({ kind: Kind.NAME as const, value })
 const bareField = (name: string): FieldNode => ({ kind: Kind.FIELD, name: nameNode(name) })
 
 const responseKey = (field: FieldNode): string => (field.alias ?? field.name).value
+
+const childPath = (path: string, field: FieldNode): string => (path === '' ? responseKey(field) : `${path}.${responseKey(field)}`)
 
 const objectValue = (fields: Record<string, ValueNode>): ObjectValueNode => ({
   kind: Kind.OBJECT,
@@ -192,14 +196,14 @@ function ensure(selections: ReadonlyArray<SelectionNode>, names: ReadonlyArray<s
   return result
 }
 
-function visitSet(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, state: RowState, walk: Walk): SelectionNode[] {
+function visitSet(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, path: string, state: RowState, walk: Walk): SelectionNode[] {
   const out: SelectionNode[] = []
   for (const selection of set.selections) {
     if (selection.kind === Kind.FIELD) {
-      out.push(visitField(selection, models, scope, state, walk))
+      out.push(visitField(selection, models, scope, path, state, walk))
     } else if (selection.kind === Kind.INLINE_FRAGMENT) {
       const narrowed = applicableTo(selection, models, walk.manifest)
-      let inner = visitSet(selection.selectionSet, narrowed, scope, state, walk)
+      let inner = visitSet(selection.selectionSet, narrowed, scope, path, state, walk)
       const only = narrowed[0]
       if (models.length > 1 && narrowed.length === 1 && only !== undefined) {
         const model = walk.manifest.models[only]
@@ -214,7 +218,7 @@ function visitSet(set: SelectionSetNode, models: ReadonlyArray<string>, scope: S
         throw new GolemDocumentError(`fragment ${selection.name.value} is not defined in the document`)
       }
       if (walk.sink !== null) {
-        visitSet(definition.selectionSet, applicableTo(definition, models, walk.manifest), scope, state, walk)
+        visitSet(definition.selectionSet, applicableTo(definition, models, walk.manifest), scope, path, state, walk)
       }
       out.push(selection)
     }
@@ -222,7 +226,7 @@ function visitSet(set: SelectionSetNode, models: ReadonlyArray<string>, scope: S
   return out
 }
 
-function visitField(field: FieldNode, models: ReadonlyArray<string>, scope: Scope | null, state: RowState, walk: Walk): FieldNode {
+function visitField(field: FieldNode, models: ReadonlyArray<string>, scope: Scope | null, path: string, state: RowState, walk: Walk): FieldNode {
   const name = field.name.value
   if (name.startsWith('__')) {
     return field
@@ -241,20 +245,20 @@ function visitField(field: FieldNode, models: ReadonlyArray<string>, scope: Scop
   }
   const relation = model.relations[name]
   if (relation !== undefined) {
-    return visitRelation(field, only, relation, scope, walk)
+    return visitRelation(field, only, relation, scope, path, walk)
   }
   const computed = model.computed[name]
   if (computed !== undefined && computed.length > 0) {
     if (field.selectionSet === undefined) {
       return field
     }
-    return { ...field, selectionSet: rows(field.selectionSet, computed, null, true, NO_RANKING, walk) }
+    return { ...field, selectionSet: rows(field.selectionSet, computed, null, true, NO_RANKING, childPath(path, field), walk) }
   }
   fields.set(responseKey(field), field)
   return field
 }
 
-function visitRelation(field: FieldNode, owner: string, relation: { readonly target: string; readonly inverse: string | null }, scope: Scope | null, walk: Walk): FieldNode {
+function visitRelation(field: FieldNode, owner: string, relation: { readonly target: string; readonly inverse: string | null }, scope: Scope | null, path: string, walk: Walk): FieldNode {
   const target = walk.manifest.models[relation.target]
   if (target === undefined) {
     throw new GolemDocumentError(`the manifest has no model ${relation.target}`)
@@ -280,7 +284,7 @@ function visitRelation(field: FieldNode, owner: string, relation: { readonly tar
     inverseFilter = objectValue({ [relation.inverse]: objectValue({ [inverse.list ? 'some' : 'is']: scope }) })
   }
   const childScope = conjunction(filterScope(argument(field, 'where')?.value), inverseFilter)
-  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, rankingOf(field, target), walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, rankingOf(field, target), childPath(path, field), walk) }
 }
 
 function rankingOf(field: FieldNode, model: ManifestModel): Ranking {
@@ -313,10 +317,10 @@ function mergeRanking(left: Ranking, right: Ranking): Ranking {
   return [...new Set([...left, ...right])]
 }
 
-function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, walk: Walk): SelectionSetNode {
+function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, path: string, walk: Walk): SelectionSetNode {
   const order = walk.sink === null ? 0 : walk.sink.sequence++
   const state: RowState = new Map(models.map((model) => [model, new Map<string, FieldNode>()]))
-  let selections = visitSet(set, models, scope, state, walk)
+  let selections = visitSet(set, models, scope, path, state, walk)
   const single = models.length === 1 ? walk.manifest.models[models[0] ?? ''] : undefined
   if (single !== undefined) {
     const ranked = ranking === 'any' ? [] : ranking
@@ -330,11 +334,11 @@ function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope
   } else {
     selections = ensure(selections, [TYPENAME_FIELD])
   }
-  register(models, scope, slot, ranking, order, state, walk)
+  register(models, scope, slot, ranking, order, path, state, walk)
   return { ...set, selections }
 }
 
-function register(models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, order: number, state: RowState, walk: Walk): void {
+function register(models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, order: number, path: string, state: RowState, walk: Walk): void {
   const sink = walk.sink
   if (sink === null) {
     return
@@ -356,12 +360,13 @@ function register(models: ReadonlyArray<string>, scope: Scope | null, slot: bool
     const key = `${model.events}|${scope === null ? '' : print(scope)}`
     let draft = sink.streams.get(key)
     if (draft === undefined) {
-      draft = { key, model: name, eventsRoot: model.events, slot, ranking, scope, order, fields: new Map() }
+      draft = { key, model: name, eventsRoot: model.events, slot, ranking, scope, order, fields: new Map(), paths: new Set() }
       sink.streams.set(key, draft)
     } else {
       draft.slot ||= slot
       draft.ranking = mergeRanking(draft.ranking, ranking)
     }
+    draft.paths.add(path)
     for (const [responseName, field] of fields) {
       draft.fields.set(responseName, field)
     }
@@ -420,6 +425,7 @@ function finish(draft: StreamDraft, manifest: ClientManifest, operation: Operati
     slot: draft.slot,
     rankedBy: draft.ranking,
     scope: draft.scope === null ? 'policy-only' : 'exact',
+    paths: [...draft.paths].sort(),
     query: print(document),
     variableNames: [...used].sort(),
   }
@@ -475,7 +481,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     const where = argument(field, 'where')?.value
     const scope = root.shape === 'rows' ? filterScope(where) : uniqueScope(model, where)
     markNullable(field, root, walk)
-    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, rankingOf(field, model), walk) }
+    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, rankingOf(field, model), responseKey(field), walk) }
   }
   if (root.models.length === 0 || field.selectionSet === undefined) {
     record(
@@ -486,7 +492,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     return field
   }
   markNullable(field, root, walk)
-  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, true, NO_RANKING, walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, true, NO_RANKING, responseKey(field), walk) }
 }
 
 function markNullable(field: FieldNode, root: ManifestRoot, walk: Walk): void {
@@ -503,7 +509,7 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   if (walk.manifest.models[condition] === undefined) {
     return definition
   }
-  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, walk) }
+  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, '', walk) }
 }
 
 export function operationOf(document: DocumentNode, kind: OperationTypeNode): OperationDefinitionNode {
@@ -623,7 +629,7 @@ function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode
   }
   const effect = described.kind === 'generated' && described.shape === 'deletedRow' ? 'delete' : 'merge'
   return {
-    field: { ...field, selectionSet: rows(field.selectionSet, described.models, null, false, NO_RANKING, walk) },
+    field: { ...field, selectionSet: rows(field.selectionSet, described.models, null, false, NO_RANKING, responseKey(field), walk) },
     root: { key, name, effect, models: described.models },
   }
 }

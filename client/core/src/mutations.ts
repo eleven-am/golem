@@ -101,6 +101,12 @@ export class Mutations {
       if (next !== data) {
         this.client.setQueryData(query.queryKey, next)
       }
+      for (const [key, version] of returned.versions) {
+        if (this.patcher.lags(next, key, version) && cached.has(key)) {
+          void this.client.invalidateQueries({ queryKey: query.queryKey, exact: true })
+          break
+        }
+      }
     }
   }
 

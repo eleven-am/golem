@@ -520,7 +520,8 @@ export class LiveSync {
     const version = parseVersion(frame.version)
     const receivedAt = this.clock()
     const data = entry.query.state.data
-    const held = this.patcher.versions(data).get(key)
+    const within = entry.meta.pagination === undefined ? stream.plan.paths : stream.plan.paths.map((path) => `pages.${path}`)
+    const held = this.patcher.versions(data, frame.type === 'DELETED' ? undefined : within).get(key)
     const recording = entry.inFlight > 0
     switch (frame.type) {
       case 'CREATED':
@@ -540,8 +541,8 @@ export class LiveSync {
           if (frame.entity === null) {
             throw new GolemProtocolError(`an UPDATED event for the held row ${key} carried no entity`)
           }
-          const reorders = stream.plan.slot || stream.plan.rankedBy === 'any' || this.patcher.differs(data, key, frame.entity, stream.plan.rankedBy)
-          this.write(entry, this.patcher.patch(data, key, frame.entity))
+          const reorders = stream.plan.slot || stream.plan.rankedBy === 'any' || this.patcher.differs(data, key, frame.entity, stream.plan.rankedBy, within)
+          this.write(entry, this.patcher.patch(data, key, frame.entity, within))
           if (reorders) {
             entry.coalescer.request()
           }
@@ -555,7 +556,7 @@ export class LiveSync {
           entry.merge = outcome.state
         }
         if (outcome.remove) {
-          const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots)
+          const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots, frame.type === 'EXITED' ? within : undefined)
           this.write(entry, removal.data)
           if (entry.meta.pagination !== undefined && lastPageOf(removal.data) !== lastPageOf(data)) {
             entry.coalescer.request()

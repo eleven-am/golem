@@ -1,6 +1,6 @@
 import { QueryClient, QueryObserver, type Query } from '@tanstack/query-core'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DocumentAnalyzer, GolemNotFoundError, LiveSync, type ClientManifest, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../src/index.js'
+import { DocumentAnalyzer, GolemNotFoundError, LiveSync, Mutations, type ClientManifest, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../src/index.js'
 import { sleep, until } from './harness/live.js'
 import { socialManifest, socialStrictCommentPost, socialWithPostTagEvents } from './fixtures/manifests.js'
 
@@ -57,6 +57,7 @@ async function mount(manifest: ClientManifest, document: string, answer: () => u
     transport,
     live,
     query,
+    queryClient,
     emit(root: string, frame: Record<string, unknown>, index = 0) {
       transport.streams[index]?.onEvent({ data: { [root]: frame } })
     },
@@ -166,5 +167,53 @@ describe('events that also refetch', () => {
     view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: post('a', '2', { title: 'old' }) })
     await sleep(250)
     expect(view.transport.executes).toBe(1)
+  })
+})
+
+describe('patches scoped to the emitting stream', () => {
+  const row = (version: string, fields: Record<string, unknown>) => ({ __typename: 'Post', id: 'a', _version: version, ...fields })
+  type Lists = Record<string, Array<Record<string, unknown>>>
+
+  it('an EXITED on one stream evicts only that stream occurrences', async () => {
+    const view = await mount(
+      socialManifest,
+      '{ all: posts { title } published: posts(where: { published: { equals: true } }) { title } }',
+      () => ({ all: [row('1', { title: 't' })], published: [row('1', { title: 't' })] }),
+    )
+    view.emit('postEvents', { version: '2', type: 'EXITED', id: 'a', entity: null }, 1)
+    const data = view.query.state.data as Lists
+    expect(data.all).toHaveLength(1)
+    expect(data.published).toHaveLength(0)
+  })
+
+  it('each stream advances only its own projection of a row', async () => {
+    const view = await mount(
+      socialManifest,
+      '{ all: posts { title } published: posts(where: { published: { equals: true } }) { body } }',
+      () => ({ all: [row('1', { title: 'old' })], published: [row('1', { body: 'old' })] }),
+    )
+    view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: row('2', { title: 'new' }) }, 0)
+    view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: row('2', { body: 'new' }) }, 1)
+    const data = view.query.state.data as Lists
+    expect(data.all?.[0]).toMatchObject({ title: 'new', _version: '2' })
+    expect(data.published?.[0]).toMatchObject({ body: 'new', _version: '2' })
+  })
+})
+
+describe('mutation overlays and aliases', () => {
+  it('does not advance the version of an occurrence whose aliased field the mutation did not return, and refetches', async () => {
+    let title = 'old'
+    const view = await mount(socialManifest, '{ posts { heading: title } }', () => ({ posts: [{ __typename: 'Post', id: 'a', _version: '1', heading: title }] }))
+    const mutations = new Mutations({
+      queryClient: view.queryClient,
+      transport: { execute: <T>() => Promise.resolve({ updatePost: { __typename: 'Post', id: 'a', _version: '2', title: 'new' } } as T) },
+      manifest: socialManifest,
+    })
+    title = 'new'
+    await mutations.execute('mutation { updatePost(where: { ID: "a" }, data: { title: { set: "new" } }) { title } }')
+    expect((view.query.state.data as { posts: Array<{ _version: string }> }).posts[0]?._version).not.toBe('2')
+    view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: { __typename: 'Post', id: 'a', _version: '2', heading: 'new' } })
+    await until(() => view.transport.executes === 2)
+    await until(() => (view.query.state.data as { posts: Array<{ heading: string }> }).posts[0]?.heading === 'new')
   })
 })

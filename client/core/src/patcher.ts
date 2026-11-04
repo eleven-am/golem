@@ -19,6 +19,10 @@ function isPlainObject(value: unknown): value is Row {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+export type Occurrences = ReadonlyArray<string>
+
+const childPath = (path: string, name: string): string => (path === '' ? name : `${path}.${name}`)
+
 export type EventIdentity = string | Readonly<Record<string, unknown>>
 
 export interface Eviction {
@@ -69,9 +73,9 @@ export class Patcher {
     return key
   }
 
-  versions(data: unknown): Map<RowKey, Version> {
+  versions(data: unknown, within?: Occurrences): Map<RowKey, Version> {
     const found = new Map<RowKey, Version>()
-    this.each(data, (key, row) => {
+    this.each(data, within, (key, row) => {
       const raw = row._version
       if (typeof raw !== 'string') {
         return
@@ -87,14 +91,14 @@ export class Patcher {
 
   rows(data: unknown): Map<RowKey, Row> {
     const found = new Map<RowKey, Row>()
-    this.each(data, (key, row) => {
+    this.each(data, undefined, (key, row) => {
       found.set(key, row)
     })
     return found
   }
 
-  patch(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>): unknown {
-    return this.rewrite(data, (candidate, candidateKey) => {
+  patch(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, within?: Occurrences): unknown {
+    return this.rewrite(data, within, (candidate, candidateKey) => {
       if (candidateKey !== key) {
         return candidate
       }
@@ -102,9 +106,19 @@ export class Patcher {
     })
   }
 
-  differs(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, names: ReadonlyArray<string>): boolean {
+  lags(data: unknown, key: RowKey, version: Version): boolean {
     let found = false
-    this.each(data, (candidateKey, row) => {
+    this.each(data, undefined, (candidateKey, row) => {
+      if (candidateKey === key && (typeof row._version !== 'string' || parseVersion(row._version) < version)) {
+        found = true
+      }
+    })
+    return found
+  }
+
+  differs(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, names: ReadonlyArray<string>, within?: Occurrences): boolean {
+    let found = false
+    this.each(data, within, (candidateKey, row) => {
       if (candidateKey === key && names.some((name) => name in entity && entity[name] !== row[name])) {
         found = true
       }
@@ -112,14 +126,14 @@ export class Patcher {
     return found
   }
 
-  remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>): Eviction {
+  remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>, within?: Occurrences): Eviction {
     const held = new Set<RowKey>()
-    const next = this.rewrite(data, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), { nullableRoots, held })
+    const next = this.rewrite(data, within, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), { nullableRoots, held })
     return { data: next, held }
   }
 
   adopt(fresh: unknown, cached: ReadonlyMap<RowKey, Row>, keys: ReadonlySet<RowKey>): unknown {
-    return this.rewrite(fresh, (candidate, candidateKey) => {
+    return this.rewrite(fresh, undefined, (candidate, candidateKey) => {
       const source = cached.get(candidateKey)
       return keys.has(candidateKey) && source !== undefined ? this.overlay(candidate, source) : candidate
     })
@@ -128,8 +142,15 @@ export class Patcher {
   private overlay(row: Row, source: Readonly<Record<string, unknown>>): Row {
     const typename = row.__typename
     const relations = typeof typename === 'string' ? this.manifest.models[typename]?.relations ?? {} : {}
+    const computed = typeof typename === 'string' ? this.manifest.models[typename]?.computed ?? {} : {}
+    const complete = Object.keys(row).every(
+      (name) => name in source || name === '__typename' || name in relations || (computed[name]?.length ?? 0) > 0 || this.holdsRows(row[name]),
+    )
     let next: Row | undefined
     for (const [name, value] of Object.entries(source)) {
+      if (name === '_version' && !complete) {
+        continue
+      }
       if (name === '__typename' || !(name in row) || name in relations || row[name] === value) {
         continue
       }
@@ -156,10 +177,10 @@ export class Patcher {
     return this.keyOf(value.__typename, value)
   }
 
-  private each(value: unknown, visit: (key: RowKey, row: Row) => void): void {
+  private each(value: unknown, within: Occurrences | undefined, visit: (key: RowKey, row: Row) => void, path = ''): void {
     if (Array.isArray(value)) {
       for (const item of value) {
-        this.each(item, visit)
+        this.each(item, within, visit, path)
       }
       return
     }
@@ -167,11 +188,11 @@ export class Patcher {
       return
     }
     const key = this.identify(value)
-    if (key !== undefined) {
+    if (key !== undefined && (within === undefined || within.includes(path))) {
       visit(key, value)
     }
-    for (const child of Object.values(value)) {
-      this.each(child, visit)
+    for (const [name, child] of Object.entries(value)) {
+      this.each(child, within, visit, childPath(path, name))
     }
   }
 
@@ -195,12 +216,12 @@ export class Patcher {
     return child
   }
 
-  private rewrite(value: unknown, transform: (row: Row, key: RowKey) => Rewritten, slots?: Slots, depth = 0): unknown {
+  private rewrite(value: unknown, within: Occurrences | undefined, transform: (row: Row, key: RowKey) => Rewritten, slots?: Slots, depth = 0, path = ''): unknown {
     if (Array.isArray(value)) {
       let changed = false
       const next: unknown[] = []
       for (const item of value) {
-        const rewritten = this.rewrite(item, transform, slots, depth + 1)
+        const rewritten = this.rewrite(item, within, transform, slots, depth + 1, path)
         if (rewritten === REMOVED) {
           changed = true
           continue
@@ -217,7 +238,7 @@ export class Patcher {
     }
     let copy: Row | undefined
     for (const [name, child] of Object.entries(value)) {
-      const rewritten = this.rewrite(child, transform, slots, depth + 1)
+      const rewritten = this.rewrite(child, within, transform, slots, depth + 1, childPath(path, name))
       const replacement = rewritten === REMOVED ? this.vacate(child, name, depth, slots, value) : rewritten
       if (replacement !== child) {
         copy ??= { ...value }
@@ -226,7 +247,7 @@ export class Patcher {
     }
     const current = copy ?? value
     const key = this.identify(current)
-    if (key === undefined) {
+    if (key === undefined || (within !== undefined && !within.includes(path))) {
       return current
     }
     return transform(current, key)
