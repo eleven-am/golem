@@ -38,37 +38,43 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row"
     },
     "createOwner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row"
     },
     "entry": {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row"
     },
     "owner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row"
     },
     "updateEntry": {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row"
     },
     "updateOwner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row"
     }
   }
 } as const;

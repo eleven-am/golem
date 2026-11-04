@@ -95,7 +95,7 @@
     {
       "path": "social/zz_golem_client.gen.ts",
       "kind": "client_manifest_ts",
-      "contentSha256": "29f0f3f82c949446fb1043b1a6de2c4dc9c7bf18748212c8bff5738a162e30c3",
+      "contentSha256": "68c9bbed448021141a308698c05b0acac051e83b806fd63e5f208582a72e4626",
       "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
       "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
       "generatorVersion": "p1-v1",

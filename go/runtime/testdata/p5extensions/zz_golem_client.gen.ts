@@ -21,61 +21,71 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "searchUsers": {
       "kind": "opaque",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows"
     },
     "transactionalUser": {
       "kind": "opaque",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "updateManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "user": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "users": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows"
     }
   }
 } as const;

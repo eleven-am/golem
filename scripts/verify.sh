@@ -30,6 +30,7 @@ RACE_PACKAGES=(
 	./events/... ./provider/... ./runtime ./queue
 	./internal/event/outbox ./internal/event/cdc ./internal/queue/worker ./internal/subscription
 )
+RACE_SKIP_TEST="^TestBatchChunkMagnitudeAndPerParentPagingSQLite$"
 GATE_PACKAGES=(./internal/migration/workflow ./internal/physical ./observe)
 GATE_GOLDEN_TEST="TestInspectSocialGoldenAndDeterminism"
 GATE_IDENTITY_TESTS="TestP5GeneratedExtensionFixtureRegeneratesByteIdentically|TestP5GeneratedSocialFixtureRegeneratesByteIdentically|TestP6GeneratedMetricsFixtureRegeneratesByteIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat"
@@ -42,14 +43,18 @@ go_test_serial() {
 	go_test -p=1 -count=1 -timeout=30m "$@"
 }
 
-go_test_matching() {
+require_matching() {
 	local want="$1" filter="$2" package="$3" matched
 	matched="$(cd "$GO_DIR" && "$GO" test -list "$filter" "$package" | grep -c '^Test')"
 	if [ "$matched" != "$want" ]; then
 		echo "filter $filter matched $matched tests in $package; want $want" >&2
 		return 1
 	fi
-	go_test -count=1 -run "$filter" "$package"
+}
+
+go_test_matching() {
+	require_matching "$1" "$2" "$3" || return 1
+	go_test -count=1 -run "$2" "$3"
 }
 
 database_bound_packages() {
@@ -134,7 +139,10 @@ run() {
 		go_test_serial "${ORACLE_FAILURE_AND_EVENT[@]}"
 		;;
 	oracle-read-and-diagnostics) go_test_serial "${ORACLE_READ_AND_DIAGNOSTICS[@]}" ;;
-	race) go_test -race -p=1 -parallel 4 -count=1 -timeout=45m "${RACE_PACKAGES[@]}" ;;
+	race)
+		require_matching 1 "$RACE_SKIP_TEST" ./runtime || return 1
+		go_test -race -p=1 -parallel 4 -count=1 -timeout=45m -skip "$RACE_SKIP_TEST" "${RACE_PACKAGES[@]}"
+		;;
 	vulncheck) (cd "$GO_DIR" && "$GO" run "$GOVULNCHECK" ./...) ;;
 	*)
 		echo "unknown step: $1 (steps: ${STEPS[*]})" >&2

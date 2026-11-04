@@ -131,305 +131,356 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "aggregate"
     },
     "comment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row"
     },
     "comments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "rows"
     },
     "createComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row"
     },
     "createPost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row"
     },
     "createPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row"
     },
     "createTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row"
     },
     "createUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "createVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deletePost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row"
     },
     "deletePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "row"
     },
     "groupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "groupBy"
     },
     "post": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row"
     },
     "postTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row"
     },
     "postTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "rows"
     },
     "posts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "rows"
     },
     "publishPost": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "relationGroupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "groupBy"
     },
     "searchPosts": {
       "kind": "opaque",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "rows"
     },
     "tag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row"
     },
     "tags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "rows"
     },
     "updateComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row"
     },
     "updateManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updatePost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row"
     },
     "updatePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row"
     },
     "updateTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row"
     },
     "updateUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "updateVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertPost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertVersionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "row"
     },
     "user": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row"
     },
     "users": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows"
     },
     "versionedNote": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "row"
     },
     "versionedNotes": {
       "kind": "generated",
       "models": [
         "VersionedNote"
-      ]
+      ],
+      "shape": "rows"
     }
   }
 } as const;

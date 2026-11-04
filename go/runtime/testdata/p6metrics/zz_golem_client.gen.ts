@@ -48,25 +48,29 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "aggregate"
     },
     "createCategory": {
       "kind": "generated",
       "models": [
         "Category"
-      ]
+      ],
+      "shape": "row"
     },
     "createMetric": {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "row"
     },
     "groupByMetrics": {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "groupBy"
     }
   }
 } as const;
