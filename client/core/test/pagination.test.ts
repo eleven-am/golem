@@ -311,6 +311,16 @@ describe('cursor shape from the manifest', () => {
     expect(() => pageSpec(taken, manifest)).toThrow(GolemDocumentError)
   })
 
+  it('uses the variable default when the caller omits the take', () => {
+    const withDefault = analyzer.analyze('query($take: Int = 20) { posts(take: $take) { title } }')
+    expect(golemInfiniteQuery(withDefault, {}, manifest).take).toBe(20)
+    expect(golemInfiniteQuery(withDefault, { take: 5 }, manifest).take).toBe(5)
+    const bare = analyzer.analyze('query($take: Int) { posts(take: $take) { title } }')
+    expect(() => golemInfiniteQuery(bare, {}, manifest)).toThrow(GolemConfigurationError)
+    const zero = analyzer.analyze('query($take: Int = 0) { posts(take: $take) { title } }')
+    expect(() => golemInfiniteQuery(zero, {}, manifest)).toThrow(GolemConfigurationError)
+  })
+
   it('rejects client-owned variables and a bad take', () => {
     const analysis = analyzer.analyze(PAGED)
     expect(() => golemInfiniteQuery(analysis, { t: 'x', take: 2, golemCursor: { ID: 'a' } }, manifest)).toThrow(GolemConfigurationError)

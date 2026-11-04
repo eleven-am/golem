@@ -5,7 +5,7 @@ import type { ClientManifest } from './manifest.js'
 
 export type Cursor = Readonly<Record<string, unknown>>
 
-export type TakeSource = { readonly variable: string } | { readonly literal: number }
+export type TakeSource = { readonly variable: string; readonly fallback?: number } | { readonly literal: number }
 
 export interface PageSpec {
   readonly root: string
@@ -31,10 +31,12 @@ function variableOf(field: FieldNode, name: string): string | undefined {
   return value?.kind === Kind.VARIABLE ? value.name.value : undefined
 }
 
-function takeOf(field: FieldNode): TakeSource | undefined {
+function takeOf(field: FieldNode, operation: OperationDefinitionNode): TakeSource | undefined {
   const value: ValueNode | undefined = field.arguments?.find((candidate) => candidate.name.value === 'take')?.value
   if (value?.kind === Kind.VARIABLE) {
-    return { variable: value.name.value }
+    const name = value.name.value
+    const fallback = operation.variableDefinitions?.find((definition) => definition.variable.name.value === name)?.defaultValue
+    return fallback?.kind === Kind.INT ? { variable: name, fallback: Number(fallback.value) } : { variable: name }
   }
   if (value?.kind === Kind.INT) {
     return { literal: Number(value.value) }
@@ -96,7 +98,7 @@ export function pageSpec(analysis: DocumentAnalysis, manifest: ClientManifest): 
   if (model.uniqueInput === null) {
     throw new GolemDocumentError(`${name} cannot be paged: the manifest names no unique input for ${modelName}`)
   }
-  const take = takeOf(field)
+  const take = takeOf(field, operation)
   if (take === undefined) {
     throw new GolemDocumentError(`${name} must give take a variable or an integer`)
   }
@@ -132,7 +134,7 @@ function pageRows(spec: PageSpec, page: unknown): ReadonlyArray<Readonly<Record<
 }
 
 function takeValue(spec: PageSpec, variables: Readonly<Record<string, unknown>>): number {
-  const value = 'literal' in spec.take ? spec.take.literal : variables[spec.take.variable]
+  const value = 'literal' in spec.take ? spec.take.literal : (variables[spec.take.variable] ?? spec.take.fallback)
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     throw new GolemConfigurationError(`an infinite query needs a positive integer take; got ${JSON.stringify(value)}`)
   }
