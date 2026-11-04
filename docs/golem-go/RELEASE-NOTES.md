@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.0
+go get github.com/eleven-am/golem/go@v0.8.1
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -14,7 +14,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
-## go/v0.8.1 / Unreleased.
+## go/v0.8.1
 
 **Relation-only updates write the version.** A relation-only update of a row in a model with `Subscriptions` now writes that row's version column, so database `UPDATE` triggers on that table fire for it.
 
