@@ -329,8 +329,7 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		column := context.dialect.Quote(field.Column)
 		assignments = append(assignments, column+" = ("+column+" + 1)")
 	}
-	stamped := context.version != nil && len(assignments) > 0
-	if stamped {
+	if context.version != nil {
 		column, columnErr := context.versionColumn()
 		if columnErr != nil {
 			return nil, columnErr
@@ -353,11 +352,6 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		return nil, err
 	}
 	if len(assignments) == 0 {
-		// Relation-only single updates still need the root action constraint,
-		// locked image, postcondition, projection, and fact contract, but must not
-		// manufacture a scalar write (or fire database update triggers). Treat the
-		// already locked root as a verified no-op apply image. Public binding is
-		// responsible for rejecting a truly empty update input.
 		selectList, resultColumns, err := context.selectFields(returned)
 		if err != nil {
 			return nil, err
