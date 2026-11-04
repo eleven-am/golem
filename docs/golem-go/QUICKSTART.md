@@ -226,3 +226,5 @@ whether the note is untitled or the field was never fetched.
   file or changes the schema without regenerating.
 - `golem doctor --schema ./notes --provider sqlite --dsn "file:notes.db"` reports whether a
   live database matches the migrations.
+- [REACT.md](./REACT.md) builds a live React front end on the application you
+  just made.

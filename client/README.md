@@ -4,8 +4,8 @@ Live GraphQL for golem backends in TypeScript. Two packages:
 
 | Package | What it is |
 |---|---|
-| `@eleven-am/golem-client` | The framework-free core: `GolemClient`, the live protocol, the transport, the cache patcher and typed errors. Works with TanStack Query core. |
-| `@eleven-am/golem-react` | React bindings: `GolemProvider` and the hooks, on top of `@tanstack/react-query`. |
+| [`@eleven-am/golem-client`](./core/README.md) | The framework-free core: `GolemClient`, the live protocol, the transport, the cache patcher and typed errors. Works with TanStack Query core. |
+| [`@eleven-am/golem-react`](./react/README.md) | React bindings: `GolemProvider` and the hooks, on top of `@tanstack/react-query`. |
 
 A golem live query is an ordinary TanStack Query. You write a plain GraphQL query, the client opens the matching subscriptions behind it, and creates, updates, deletes and rows leaving a result patch the TanStack cache by themselves. Your components never write to the cache.
 
@@ -124,6 +124,82 @@ function Posts({ tag }: { tag: string }) {
 | `FAILED` | A stream failed for good (`error` holds the cause). |
 
 TanStack's own `isFetching`, `isError` and `data` keep their usual meaning.
+
+## How live queries work
+
+### Connections
+
+A `GolemClient` opens one WebSocket (graphql-ws), and only when the first stream needs it. The socket is lazy and reconnects forever, with backoff, except when the server refuses the handshake for good (protocol or contract mismatch, a missing deadline). Queries, refetches and mutations are plain HTTP `fetch` requests.
+
+### Subscriptions
+
+The client reads your query document and opens one subscription per (model, filter) pair in it.
+
+- A literal or variable `where` gives an `exact`-scoped stream: the server sends only events for rows that match.
+- No `where` gives a `policy-only` stream: the server sends every event the caller's policy allows for that model.
+- A nested relation is a pair of its own. When the parent has a `where` and the manifest knows the relation's inverse, the child stream is scoped by that parent filter. Otherwise it is `policy-only` unless the relation has its own `where`.
+- Two selections with the same model and filter share one stream. Different filters do not. (Two selections that select the same response key differently get separate streams.)
+- Components that run the same query with the same variables share one TanStack query, and so one set of streams.
+
+| Document | Streams |
+|---|---|
+| `posts(where: { published: { equals: true } }) { id title }` | 1 (`Post`, exact) |
+| `posts { id comments { id } }` | 2 (`Post` and `Comment`, both policy-only) |
+| Two lists, both `posts(where: { published: { equals: true } })` | 1 |
+| `posts(where: { published: { equals: true } })` and `posts(where: { published: { equals: false } })` | 2 |
+
+A model without events (no `golem.Subscriptions`) makes the document not live: `useGolemQuery` throws `GolemNotLiveError`.
+
+### Filtering is automatic
+
+You never filter events in the client. The server judges each event against the caller's policy and the stream's filter, and sends one of four event types: `CREATED` and `UPDATED` for a row that matches, `EXITED` for a row that stops matching or that the caller may no longer read, and `DELETED` for a removed row. A row that starts to match arrives as `CREATED` or `UPDATED`. See [Rows that leave a list](../docs/golem-go/GUIDE.md#rows-that-leave-a-list).
+
+### Patch or refetch
+
+- `UPDATED` is patched into the cache in place only when the stream's selection is plain: a top-level list or single-row root, arguments limited to `where` (or the unique selector of a single-row root), no `orderBy`, `distinct`, `take`, `skip` or cursor, and scalar fields only. Every other `UPDATED` refetches the query.
+- `CREATED` refetches.
+- `DELETED` and `EXITED` remove the held row from the cache at once. The query then refetches, because a removal changes a list or empties a slot.
+- A response that carries an older row version than the cache already holds is discarded, and the query refetches.
+- A mutation result is never written into the cache. A committed mutation invalidates the cached queries over the models it touches (TanStack marks them stale and refetches the ones in use).
+- Refetches that arrive close together are coalesced into one.
+
+### Row versions
+
+The client adds `_version` and `__typename` to every selection of a model with events, and the primary key fields (`id` for most models) when you left them out. It compares `_version` to decide which copy of a row is newer. You can select them yourself, but not alias another field to those names. See [Row versions](../docs/golem-go/GUIDE.md#row-versions).
+
+### Status is per query
+
+`useGolemStatus` reports one query, keyed by its document and variables. It is not a global connection state. For that, read the transport:
+
+- `golem.transport.status`: `idle`, `connecting`, `open`, `reconnecting`, `unauthenticated`, `forbidden`, `invalid`, `protocol-mismatch`, `contract-mismatch` or `deadline-required`.
+- `golem.transport.onStatus(listener)`: calls you on every change and returns an unsubscribe function.
+
+Wrap them in `useSyncExternalStore`:
+
+```tsx
+import { useSyncExternalStore } from 'react'
+
+function useConnection() {
+  return useSyncExternalStore(
+    (notify) => golem.transport.onStatus(notify),
+    () => golem.transport.status,
+  )
+}
+```
+
+### Why there is a manifest
+
+GraphQL does not say which subscription root carries a model's events, what its primary key is, whether a root returns rows or a count, whether a single-row root can be `null`, which unique input a cursor uses, or which contract the server was built from. The manifest carries those facts. It has one owner, the server's generator (`golem generate` writes `zz_golem_client.gen.ts`), and `golem check` fails when it falls behind the schema. The client reads it and never guesses. See [The client manifest](../docs/golem-go/GUIDE.md#the-client-manifest).
+
+### Server concepts
+
+- [Subscriptions and events](../docs/golem-go/GUIDE.md#subscriptions-and-events)
+- [Row versions](../docs/golem-go/GUIDE.md#row-versions)
+- [Rows that leave a list](../docs/golem-go/GUIDE.md#rows-that-leave-a-list)
+- [The live handshake and the subscription ack](../docs/golem-go/GUIDE.md#the-live-handshake-and-the-subscription-ack)
+- [The socket deadline](../docs/golem-go/GUIDE.md#the-socket-deadline)
+
+For a walkthrough from a model to a live component, see [Using golem from React](../docs/golem-go/REACT.md).
 
 ## Errors
 

@@ -13,6 +13,8 @@ them is code that ran.
 - **[GUIDE.md](./GUIDE.md)** — relations, authorization, queries and
   mutations, hooks, events, kernel mode, limits and error codes. What you need
   for a real application.
+- **[REACT.md](./REACT.md)** — a live React front end on your golem server:
+  provider, live lists, mutations, infinite scroll and counts.
 
 ## Capabilities
 

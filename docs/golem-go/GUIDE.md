@@ -1950,6 +1950,9 @@ It exports `golemClientManifest` (`as const`) and its type
 
 The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 
+To use it from a front end, see [REACT.md](./REACT.md) and the
+[client README](../../client/README.md#how-live-queries-work).
+
 #### The socket deadline
 
 A live socket closes at a deadline, and a reconnect resolves the principal
