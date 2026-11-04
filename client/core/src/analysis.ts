@@ -647,8 +647,6 @@ export interface MutationAnalysis {
   readonly roots: ReadonlyArray<MutationRoot>
 }
 
-const GENERATED_DELETE = /^delete/
-
 function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode; readonly root: MutationRoot } {
   const name = field.name.value
   const key = responseKey(field)
@@ -663,11 +661,11 @@ function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode
   if (described.kind === 'generated' && (described.shape === 'updateMany' || described.shape === 'deleteMany')) {
     return { ...none, root: { ...none.root, effect: 'invalidate' } }
   }
-  const holdsRows = field.selectionSet !== undefined && described.models.length > 0 && (described.kind === 'opaque' || described.shape === 'row')
+  const holdsRows = field.selectionSet !== undefined && described.models.length > 0 && (described.kind === 'opaque' || described.shape === 'row' || described.shape === 'deletedRow')
   if (!holdsRows || field.selectionSet === undefined) {
     return none
   }
-  const effect = described.kind === 'generated' && GENERATED_DELETE.test(name) ? 'delete' : 'merge'
+  const effect = described.kind === 'generated' && described.shape === 'deletedRow' ? 'delete' : 'merge'
   return {
     field: { ...field, selectionSet: rows(field.selectionSet, described.models, null, false, NO_RANKING, walk) },
     root: { key, name, effect, models: described.models },
