@@ -49,7 +49,11 @@ interface CloseEventLike {
 }
 
 function isCloseEventLike(value: unknown): value is CloseEventLike {
-  return typeof value === 'object' && value !== null && 'code' in value && 'reason' in value
+  return typeof value === 'object' && value !== null && 'code' in value && typeof value.code === 'number'
+}
+
+function reasonOf(event: CloseEventLike): string {
+  return typeof event.reason === 'string' ? event.reason : ''
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
@@ -140,7 +144,7 @@ export class Session {
         },
         error: (reason) => {
           if (isCloseEventLike(reason)) {
-            const disposition = classifyClose(reason.code, reason.reason, this.lastCloseAcknowledged)
+            const disposition = classifyClose(reason.code, reasonOf(reason), this.lastCloseAcknowledged)
             if (disposition.action === 'fatal') {
               this.fail(disposition.status, disposition.error)
               finish({ kind: 'fatal', status: disposition.status, error: disposition.error })
@@ -169,6 +173,10 @@ export class Session {
         dispose()
       }
     }
+  }
+
+  renew(): void {
+    this.client?.terminate()
   }
 
   dispose(): void {
@@ -212,7 +220,7 @@ export class Session {
       lazy: true,
       retryAttempts: Number.POSITIVE_INFINITY,
       retryWait: (retries) => sleep(backoffDelay(retries, random)),
-      shouldRetry: (event) => !isCloseEventLike(event) || classifyClose(event.code, event.reason, this.acknowledged).action === 'retry',
+      shouldRetry: (event) => !isCloseEventLike(event) || classifyClose(event.code, reasonOf(event), this.acknowledged).action === 'retry',
       ...(webSocketImpl === undefined ? {} : { webSocketImpl }),
       on: {
         connecting: (retrying) => this.setStatus(retrying ? 'reconnecting' : 'connecting'),
@@ -226,7 +234,7 @@ export class Session {
           if (this.currentStatus === 'open') {
             this.setStatus('reconnecting')
           }
-          if (isCloseEventLike(event) && classifyClose(event.code, event.reason, this.lastCloseAcknowledged).action === 'retry') {
+          if (isCloseEventLike(event) && classifyClose(event.code, reasonOf(event), this.lastCloseAcknowledged).action === 'retry') {
             for (const stream of this.active) {
               if (stream.tracker.live) {
                 stream.tracker.reset()

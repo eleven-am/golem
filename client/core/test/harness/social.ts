@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { inject } from 'vitest'
 import { golemClientManifest } from '../../../../go/examples/social/social/zz_golem_client.gen.js'
+import { startSocialProcess } from './process.js'
 import { Transport, type Credentials, type StreamEnd, type StreamHandlers, type TransportOptions } from '../../src/index.js'
 
 export const socialUrl = (): string => inject('socialUrl')
@@ -84,4 +88,45 @@ export function postInput(title: string): Record<string, unknown> {
 
 export async function signUp(client: Transport, who: { readonly id: string }): Promise<void> {
   await client.execute({ query: CREATE_USER, variables: { data: { id: who.id, handle: `h-${who.id}`, email: `${who.id}@example.test` } } })
+}
+
+export interface SpawnedSocial {
+  readonly url: string
+  stop(graceMilliseconds?: number): Promise<void>
+  restart(): Promise<void>
+  dispose(): Promise<void>
+}
+
+export async function spawnSocial(env: Readonly<Record<string, string>>): Promise<SpawnedSocial> {
+  const work = mkdtempSync(join(tmpdir(), 'golem-client-extra-'))
+  const dsn = `file:${join(work, 'social.sqlite')}`
+  copyFileSync(inject('socialTemplateDatabase'), join(work, 'social.sqlite'))
+  const launch = { binary: inject('socialBinary'), cwd: inject('socialRoot'), dsn, env }
+  let running = await startSocialProcess(launch)
+  const port = running.port
+  return {
+    url: running.url,
+    stop: (graceMilliseconds = 500) => running.stop(graceMilliseconds),
+    async restart() {
+      running = await startSocialProcess({ ...launch, port })
+    },
+    async dispose() {
+      await running.stop(500)
+      rmSync(work, { recursive: true, force: true })
+    },
+  }
+}
+
+export async function setPrincipalMode(baseUrl: string, user: string, mode: '' | 'unresolvable' | 'forbidden'): Promise<void> {
+  const response = await fetch(`${baseUrl}/test/principal?user=${user}&mode=${mode}`, { method: 'POST' })
+  if (response.status !== 204) {
+    throw new Error(`principal mode refused: ${response.status}`)
+  }
+}
+
+export async function invalidatePolicies(baseUrl: string): Promise<void> {
+  const response = await fetch(`${baseUrl}/test/invalidate-policies`, { method: 'POST' })
+  if (response.status !== 204) {
+    throw new Error(`invalidate refused: ${response.status}`)
+  }
 }

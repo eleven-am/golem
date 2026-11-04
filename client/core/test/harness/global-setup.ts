@@ -1,14 +1,17 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:net'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { TestProject } from 'vitest/node'
+import { startSocialProcess } from './process.js'
 
 declare module 'vitest' {
   export interface ProvidedContext {
     socialUrl: string
+    socialBinary: string
+    socialRoot: string
+    socialTemplateDatabase: string
   }
 }
 
@@ -24,36 +27,6 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
   }
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const probe = createServer()
-    probe.once('error', reject)
-    probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address()
-      probe.close(() => (typeof address === 'object' && address !== null ? resolvePort(address.port) : reject(new Error('no port'))))
-    })
-  })
-}
-
-async function waitReady(baseUrl: string, child: ChildProcess, output: () => string): Promise<void> {
-  const deadline = Date.now() + 60_000
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`social exited with ${child.exitCode} before it was ready\n${output()}`)
-    }
-    try {
-      const response = await fetch(`${baseUrl}/health/ready`)
-      if (response.status === 204) {
-        return
-      }
-    } catch {
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  throw new Error(`social was not ready within 60s\n${output()}`)
-}
-
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   const work = mkdtempSync(join(tmpdir(), 'golem-client-social-'))
   const workFile = join(work, 'go.work')
@@ -66,37 +39,22 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const dsn = `file:${join(work, 'social.sqlite')}`
   run(cli, ['migration', 'apply', '--provider', 'sqlite', '--dsn', dsn, '--migrations', 'migrations'], socialRoot, { ...baseEnv, GOWORK: 'off' })
 
-  const port = await freePort()
-  const baseUrl = `http://127.0.0.1:${port}`
-  let log = ''
-  const child = spawn(binary, [], {
-    cwd: socialRoot,
-    env: {
-      ...process.env,
-      GOLEM_PROVIDER: 'sqlite',
-      GOLEM_DATABASE_DSN: dsn,
-      GOLEM_HTTP_ADDRESS: `127.0.0.1:${port}`,
-      GOLEM_ALLOW_INSECURE_HEADER_AUTH: '1',
-    },
-  })
-  child.stdout?.on('data', (chunk) => (log += chunk))
-  child.stderr?.on('data', (chunk) => (log += chunk))
+  const template = join(work, 'template.sqlite')
+  copyFileSync(join(work, 'social.sqlite'), template)
+  let social
   try {
-    await waitReady(baseUrl, child, () => log)
+    social = await startSocialProcess({ binary, cwd: socialRoot, dsn })
   } catch (error) {
-    child.kill('SIGKILL')
     rmSync(work, { recursive: true, force: true })
     throw error
   }
-  project.provide('socialUrl', baseUrl)
+  project.provide('socialUrl', social.url)
+  project.provide('socialBinary', binary)
+  project.provide('socialRoot', socialRoot)
+  project.provide('socialTemplateDatabase', template)
 
   return async () => {
-    const exited = new Promise<void>((done) => child.once('exit', () => done()))
-    child.kill('SIGTERM')
-    await Promise.race([exited, new Promise((r) => setTimeout(r, 3_000))])
-    if (child.exitCode === null) {
-      child.kill('SIGKILL')
-    }
+    await social.stop()
     rmSync(work, { recursive: true, force: true })
   }
 }
