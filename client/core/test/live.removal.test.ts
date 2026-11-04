@@ -45,7 +45,7 @@ describe('removal while every response is held', () => {
     w.gate.hold()
     await w.run(DELETE_POST, { id })
     await until(() => (view.data() as { post: unknown }).post === null)
-    expect(view.fetches()).toBe(before)
+    await until(() => view.fetches() === before + 1)
     w.gate.release()
   })
 

@@ -554,12 +554,11 @@ export class LiveSync {
         if (outcome.remove) {
           const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots, frame.type === 'EXITED' ? within : undefined)
           this.write(entry, removal.data)
-          if (removal.listed) {
-            entry.coalescer.request()
-          }
           if (removal.held.size > 0) {
             this.markNotFound(entry, removal.held)
             this.refetchNow(entry)
+          } else if (removal.evicted) {
+            entry.coalescer.request()
           }
         }
         return
@@ -678,11 +677,10 @@ export class LiveSync {
     if (dropped.size > 0) {
       const removal = this.patcher.remove(next, dropped, entry.meta.analysis.nullableRoots)
       next = removal.data
-      if (removal.listed) {
-        entry.coalescer.request()
-      }
       if (removal.held.size > 0) {
         this.markNotFound(entry, removal.held)
+      }
+      if (removal.evicted) {
         entry.coalescer.request()
       }
     }

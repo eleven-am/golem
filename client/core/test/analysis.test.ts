@@ -34,6 +34,16 @@ describe('identity injection', () => {
     }
   })
 
+  it.each(['id', '_version', '__typename'])('injects %s unconditionally when the selection only carries it under a directive', (field) => {
+    const printed = social.analyze(`query($s: Boolean!) { posts { title ${field} @skip(if: $s) } }`).query
+    expect(printed).toContain(`${field} @skip(if: $s)`)
+    expect(printed.replace(`${field} @skip(if: $s)`, '')).toContain(field)
+  })
+
+  it('keeps an unconditional required field and adds nothing beside it', () => {
+    expect(social.analyze('{ posts { id title } }').query).toBe(normal('{ posts { id title _version __typename } }'))
+  })
+
   it('adds the whole compound key and _version on a keyed model with events', () => {
     const analyzer = new DocumentAnalyzer(socialWithPostTagEvents)
     expect(analyzer.analyze('{ postTags { tagName } }').query).toBe(

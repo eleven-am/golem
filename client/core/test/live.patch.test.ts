@@ -82,13 +82,23 @@ describe('single slots', () => {
   const featured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: false } })
   const maybeFeatured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: true } })
 
-  it('turns a generated single root into null and does not refetch', async () => {
+  it('turns a generated single root into null and refetches', async () => {
     const view = await mount(socialManifest, 'query($id: UUID!) { post(where: { ID: $id }) { title } }', () => ({ post: post('a', '1') }), { id: 'a' })
     view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null })
     expect(view.query.state.data).toEqual({ post: null })
     expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
-    await sleep(150)
-    expect(view.transport.executes).toBe(1)
+    await until(() => view.transport.executes === 2)
+  })
+
+  it('refetches a nullable custom single root after its row is deleted so the next row can fill the slot', async () => {
+    let deleted = false
+    const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: deleted ? post('b', '3') : post('a', '1') }))
+    deleted = true
+    view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 0)
+    expect(view.query.state.data).toEqual({ featuredPost: null })
+    await until(() => view.transport.executes === 2)
+    await until(() => (view.query.state.data as { featuredPost: unknown }).featuredPost !== null)
+    expect(view.query.state.data).toEqual({ featuredPost: post('b', '3') })
   })
 
   it('enters the NOT_FOUND state for a slot the manifest marks non-nullable, and refetches at once', async () => {

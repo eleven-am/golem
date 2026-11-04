@@ -183,11 +183,13 @@ function injections(model: ManifestModel): string[] {
 function ensure(selections: ReadonlyArray<SelectionNode>, names: ReadonlyArray<string>): SelectionNode[] {
   const result = [...selections]
   for (const name of names) {
-    const existing = result.find((selection): selection is FieldNode => selection.kind === Kind.FIELD && responseKey(selection) === name)
-    if (existing === undefined) {
+    const keyed = result.filter((selection): selection is FieldNode => selection.kind === Kind.FIELD && responseKey(selection) === name)
+    const taken = keyed.find((selection) => selection.name.value !== name)
+    if (taken !== undefined) {
+      throw new GolemDocumentError(`the response key ${name} is taken by ${taken.name.value}; golem needs ${name} unaliased on this selection`)
+    }
+    if (!keyed.some((selection) => (selection.directives ?? []).length === 0)) {
       result.push(bareField(name))
-    } else if (existing.name.value !== name) {
-      throw new GolemDocumentError(`the response key ${name} is taken by ${existing.name.value}; golem needs ${name} unaliased on this selection`)
     }
   }
   return result

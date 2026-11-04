@@ -13,7 +13,7 @@ type Rewritten = unknown | typeof REMOVED
 interface Slots {
   readonly nullableRoots: ReadonlySet<string>
   readonly held: Set<RowKey>
-  listed: boolean
+  evicted: boolean
 }
 
 function isPlainObject(value: unknown): value is Row {
@@ -29,7 +29,7 @@ export type EventIdentity = string | Readonly<Record<string, unknown>>
 export interface Eviction {
   readonly data: unknown
   readonly held: ReadonlySet<RowKey>
-  readonly listed: boolean
+  readonly evicted: boolean
 }
 
 export class Patcher {
@@ -101,9 +101,9 @@ export class Patcher {
   }
 
   remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>, within?: Occurrences): Eviction {
-    const slots: Slots = { nullableRoots, held: new Set<RowKey>(), listed: false }
+    const slots: Slots = { nullableRoots, held: new Set<RowKey>(), evicted: false }
     const next = this.rewrite(data, within, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), slots)
-    return { data: next, held: slots.held, listed: slots.listed }
+    return { data: next, held: slots.held, evicted: slots.evicted }
   }
 
   private overlay(row: Row, source: Readonly<Record<string, unknown>>): Row {
@@ -173,6 +173,9 @@ export class Patcher {
   }
 
   private vacate(child: unknown, name: string, depth: number, slots: Slots | undefined, parent: Row): unknown {
+    if (slots !== undefined) {
+      slots.evicted = true
+    }
     if (slots !== undefined && this.nullableSlot(parent, name, depth, slots)) {
       return null
     }
@@ -192,7 +195,7 @@ export class Patcher {
         if (rewritten === REMOVED) {
           changed = true
           if (slots !== undefined) {
-            slots.listed = true
+            slots.evicted = true
           }
           continue
         }
