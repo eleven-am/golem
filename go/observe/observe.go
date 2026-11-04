@@ -90,6 +90,7 @@ const (
 	ReasonDeletionUnverifiable   Reason = "deletion_unverifiable"
 	ReasonEntityAbsent           Reason = "entity_absent"
 	ReasonCorrelatedGolemWrite   Reason = "correlated_golem_write"
+	ReasonCDCSuperseded          Reason = "cdc_superseded"
 	ReasonIncompatibleGeneration Reason = "incompatible_generation"
 	ReasonClosed                 Reason = "closed"
 )
@@ -274,7 +275,7 @@ func validReason(value Reason) bool {
 	case ReasonNone, ReasonAuthorization, ReasonInvalidInput, ReasonNotFound, ReasonConflict,
 		ReasonProvider, ReasonCapability, ReasonSchemaDrift, ReasonMigrationHistory, ReasonLimit,
 		ReasonTimeout, ReasonPanic, ReasonTransport, ReasonQueueFull, ReasonRevalidation,
-		ReasonFiltered, ReasonDeletionUnverifiable, ReasonEntityAbsent, ReasonCorrelatedGolemWrite,
+		ReasonFiltered, ReasonDeletionUnverifiable, ReasonEntityAbsent, ReasonCorrelatedGolemWrite, ReasonCDCSuperseded,
 		ReasonIncompatibleGeneration, ReasonClosed:
 		return true
 	default:

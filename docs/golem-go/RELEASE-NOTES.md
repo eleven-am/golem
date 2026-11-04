@@ -18,6 +18,8 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 **Relation-only updates write the version.** A relation-only update of a row in a model with `Subscriptions` now writes that row's version column, so database `UPDATE` triggers on that table fire for it.
 
+**CDC changes whose live row is gone are superseded.** A CDC create or update whose row no longer exists when the recorder stamps it (an external update followed by a delete, or an insert and a delete in one source transaction) is no longer a failed batch. It is neither stamped nor published, and the observer receives a suppression with the new reason `events.SuppressionCDCSuperseded` (`cdc_superseded`, mapped to `observe.ReasonCDCSuperseded`). The delete that follows, in the same or a later batch, is recorded and published as usual, and so are the batch's other changes. A replay of the batch gives the same result. The batch's recorded events are numbered contiguously from 1; event identities still derive from the source ordinals.
+
 **The live protocol.** WebSocket and SSE subscriptions now require the `golem`
 block `{"protocol": 1, "contract": "<hex>"}`: in `connection_init.payload.golem`
 on WebSocket, in `extensions.golem` on SSE. There is no live path for a client

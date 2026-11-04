@@ -411,7 +411,9 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 		if err != nil {
 			return scalarMutationExecution{}, err
 		}
-		result.statements = append(result.statements, row)
+		if err := result.record(program, row); err != nil {
+			return scalarMutationExecution{}, err
+		}
 		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {
 				return scalarMutationExecution{}, err
@@ -476,7 +478,9 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 		if err != nil {
 			return scalarMutationExecution{}, err
 		}
-		result.statements = append(result.statements, row)
+		if err := result.record(program, row); err != nil {
+			return scalarMutationExecution{}, err
+		}
 		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {
 				return scalarMutationExecution{}, err
@@ -601,7 +605,6 @@ func scalarMutationFactImages(registry *schema.Registry, model policyir.ModelID,
 		if err != nil {
 			return nil, nil, err
 		}
-		after, err = withStampedVersion(registry, model, after, execution)
 		return nil, after, err
 	case mutationir.FactUpdated:
 		beforeIndex, ok := verification.BeforeStatement()
@@ -626,40 +629,36 @@ func scalarMutationFactImages(registry *schema.Registry, model policyir.ModelID,
 	}
 }
 
-func withStampedVersion(registry *schema.Registry, model policyir.ModelID, row *mutationdecode.Row, execution scalarMutationExecution) (*mutationdecode.Row, error) {
-	metadata, ok := registry.Model(golem.ModelID(model))
-	if !ok {
-		return row, nil
+func (execution *scalarMutationExecution) record(program mutationsql.Program, row scalarMutationStatementResult) error {
+	execution.statements = append(execution.statements, row)
+	if row.role != mutationsql.StampVersion || program.Operation() != mutationir.Create {
+		return nil
 	}
-	field, ok := metadata.RowVersion()
-	if !ok {
-		return row, nil
+	index := program.IdentityVerification().AfterStatement()
+	if uint64(index) >= uint64(len(execution.statements)) {
+		return scalarMutationError(program.Operation(), scalarMutationInvariant, row.role, index, "version stamp has no create image", nil)
 	}
-	for _, statement := range execution.statements {
-		if statement.role != mutationsql.StampVersion {
-			continue
-		}
-		stamp, err := mutationdecode.FromReadCells(registry, model, statement.cells)
-		if err != nil {
-			return nil, err
-		}
-		cell, present := stamp.Cell(policyir.FieldID(field))
-		if !present {
-			return nil, fmt.Errorf("version stamp statement carries no version")
-		}
-		cells := make([]mutationdecode.Cell, 0, len(row.Cells())+1)
-		for _, existing := range row.Cells() {
-			if existing.FieldID() != policyir.FieldID(field) {
-				cells = append(cells, existing)
+	execution.statements[index] = execution.statements[index].withStamp(row)
+	return nil
+}
+
+func (result scalarMutationStatementResult) withStamp(stamp scalarMutationStatementResult) scalarMutationStatementResult {
+	merged := result.clone()
+	for _, cell := range stamp.cells {
+		replaced := false
+		for index, existing := range merged.cells {
+			if existing.FieldID() == cell.FieldID() {
+				merged.cells[index], replaced = cell, true
 			}
 		}
-		stamped, err := mutationdecode.NewRow(registry, model, append(cells, cell))
-		if err != nil {
-			return nil, err
+		if !replaced {
+			merged.cells = append(merged.cells, cell)
 		}
-		return &stamped, nil
 	}
-	return row, nil
+	for field, value := range stamp.fields {
+		merged.fields[field] = cloneMutationPhysicalValue(value)
+	}
+	return merged
 }
 
 func scalarMutationArguments(operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, results []scalarMutationStatementResult) ([]any, error) {

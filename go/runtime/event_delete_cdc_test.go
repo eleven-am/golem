@@ -25,16 +25,16 @@ type deleteEvalCDCRecorder struct {
 	causations []string
 }
 
-func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
+func (recorder *deleteEvalCDCRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []eventcdc.Change, build func([]eventcdc.Stamp) ([]mutationfact.OutboxRow, error)) error {
 	recorder.mu.Lock()
 	recorder.causations = append(recorder.causations, golem.UUID(causation).String())
 	recorder.mu.Unlock()
 	if recorder.discard {
-		versions := make([]int64, len(changes))
-		for index := range versions {
-			versions[index] = 1
+		stamps := make([]eventcdc.Stamp, len(changes))
+		for index := range stamps {
+			stamps[index] = eventcdc.Stamp{Version: 1}
 		}
-		_, err := build(versions)
+		_, err := build(stamps)
 		return err
 	}
 	if err := recorder.inner.RecordCDC(ctx, causation, changes, build); err != nil {
@@ -96,7 +96,7 @@ func (fixture deleteEvalFixture) cdcEmitter(t *testing.T, transport events.Event
 	if err != nil {
 		t.Fatal(err)
 	}
-	emitter, err := eventcdc.NewEmitter(eventcdc.Config{Adapter: p7AuthorizationCDCAdapter{}, Transport: transport, Encoder: encoder, Recorder: recorder})
+	emitter, err := eventcdc.NewEmitter(eventcdc.Config{Adapter: p7AuthorizationCDCAdapter{}, Transport: transport, Encoder: encoder, Recorder: recorder, Observer: fixture.observed})
 	if err != nil {
 		t.Fatal(err)
 	}

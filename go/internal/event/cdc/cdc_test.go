@@ -307,12 +307,12 @@ type fakeRecorder struct {
 	failure error
 }
 
-func (recorder *fakeRecorder) RecordCDC(_ context.Context, _ golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
-	versions := make([]int64, len(changes))
-	for index := range versions {
-		versions[index] = int64(100 + index)
+func (recorder *fakeRecorder) RecordCDC(_ context.Context, _ golem.CausationID, changes []Change, build func([]Stamp) ([]mutationfact.OutboxRow, error)) error {
+	stamps := make([]Stamp, len(changes))
+	for index := range stamps {
+		stamps[index] = Stamp{Version: int64(100 + index)}
 	}
-	rows, err := build(versions)
+	rows, err := build(stamps)
 	if err != nil {
 		return err
 	}

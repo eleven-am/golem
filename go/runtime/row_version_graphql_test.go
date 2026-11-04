@@ -114,3 +114,35 @@ func TestHooksReadTheRowVersionLikeAnyOtherFieldAcrossProviders(t *testing.T) {
 		}
 	})
 }
+
+func TestRowVersionIsReturnedByCreateAndUpsertCreateAcrossProviders(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		versionOf := func(response p10OperationGraphQLResponse, path ...string) int64 {
+			t.Helper()
+			if len(response.Errors) != 0 {
+				t.Fatalf("errors=%#v", response.Errors)
+			}
+			var node any = response.Data
+			for _, key := range path {
+				node = node.(map[string]any)[key]
+			}
+			version, err := strconv.ParseInt(node.(string), 10, 64)
+			if err != nil || version <= 0 {
+				t.Fatalf("_version=%v err=%v", node, err)
+			}
+			return version
+		}
+		created := fixture.graphql(t, "alpha", fmt.Sprintf(`mutation { createTeam(data: {id: "%s", owner: "alpha"}) { id _version } }`, p10OperationID(t, 7801)))
+		createdVersion := versionOf(created, "createTeam", "_version")
+		reread := fixture.graphql(t, "alpha", fmt.Sprintf(`{ team(where: {ID: "%s"}) { _version } }`, p10OperationID(t, 7801)))
+		if got := versionOf(reread, "team", "_version"); got != createdVersion {
+			t.Fatalf("create response _version=%d, stored=%d", createdVersion, got)
+		}
+		upserted := fixture.graphql(t, "alpha", fmt.Sprintf(`mutation { upsertTeam(where: {ID: "%s"}, create: {id: "%s", owner: "alpha"}, update: {owner: {set: "alpha"}}) { _version } }`, p10OperationID(t, 7802), p10OperationID(t, 7802)))
+		upsertedVersion := versionOf(upserted, "upsertTeam", "_version")
+		reread = fixture.graphql(t, "alpha", fmt.Sprintf(`{ team(where: {ID: "%s"}) { _version } }`, p10OperationID(t, 7802)))
+		if got := versionOf(reread, "team", "_version"); got != upsertedVersion {
+			t.Fatalf("upsert-create response _version=%d, stored=%d", upsertedVersion, got)
+		}
+	})
+}

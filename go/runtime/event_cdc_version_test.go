@@ -80,9 +80,9 @@ func TestCDCStampCommitsOnlyWithItsFacts(t *testing.T) {
 		change.Ordinal = 1
 		causation := golem.CausationID{15: 77}
 		failure := errors.New("the facts could not be built")
-		err := recorder.RecordCDC(context.Background(), causation, []events.CDCChangeInput{change}, func(versions []int64) ([]mutationfact.OutboxRow, error) {
-			if len(versions) != 1 || versions[0] <= 0 {
-				t.Errorf("the recorder offered versions %v", versions)
+		err := recorder.RecordCDC(context.Background(), causation, []eventcdc.Change{{CDCChangeInput: change}}, func(stamps []eventcdc.Stamp) ([]mutationfact.OutboxRow, error) {
+			if len(stamps) != 1 || stamps[0].Version <= 0 || stamps[0].Superseded {
+				t.Errorf("the recorder offered stamps %v", stamps)
 			}
 			return nil, failure
 		})
@@ -230,5 +230,84 @@ func TestEventCarriesItsOwnFactsVersionWhenALaterWriteLandsFirst(t *testing.T) {
 		if got := event.validated.Metadata().Version(); got != 7 {
 			t.Fatalf("event version = %d, want its own fact's version 7 (the row is already at 50)", got)
 		}
+	})
+}
+
+func (fixture deleteEvalFixture) cdcCommentChange(t *testing.T, action golem.EventAction, comment, post byte, body string) events.CDCChangeInput {
+	t.Helper()
+	row := fixture.cdcCommentRow(t, comment, post, body)
+	change := events.CDCChangeInput{Model: fixture.schema.Comment, Action: action, After: &row}
+	if action == golem.EventUpdated {
+		before := fixture.cdcCommentRow(t, comment, post, "hello")
+		change.Before = &before
+	}
+	return change
+}
+
+func TestCDCSupersededUpdateIsObservedNotPublishedAndTheDeleteIs(t *testing.T) {
+	runDeleteEvalProfiles(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
+		stream := fixture.subscribeComments(t, "alice")
+		fixture.removeComment(t, deleteEvalOnPub)
+		batch := []events.CDCChangeInput{
+			fixture.cdcPostUpdate(t, deleteEvalPublished, deleteEvalAlice, "published", "edited"),
+			fixture.cdcCommentChange(t, golem.EventUpdated, deleteEvalOnPub, deleteEvalPublished, "edited"),
+			fixture.cdcCommentDelete(t, deleteEvalOnPub, deleteEvalPublished),
+		}
+		causation := fixture.emitCDC(t, "cdc-superseded-update", batch...)
+		fixture.expectRecordedDelivered(t, causation, 2)
+		stamped := fixture.postVersion(t, deleteEvalPublished)
+		if versions := fixture.recordedFactVersions(t, causation); len(versions) != 2 || versions[0] != stamped || stamped <= 0 || versions[1] != 1 {
+			t.Fatalf("recorded fact versions %v, post version %d, want [post stamp, the delete's version 1]", versions, stamped)
+		}
+		if got := fixture.suppressions(events.SuppressionCDCSuperseded); got != 1 {
+			t.Fatalf("superseded observations = %d, want 1", got)
+		}
+		if deleted := receiveP7Event(t, stream); deleted.validated.Metadata().Action() != golem.EventDeleted || deleted.validated.Metadata().Version() != 1 {
+			t.Fatalf("received %q at version %d, want the delete at version 1", deleted.validated.Metadata().Action(), deleted.validated.Metadata().Version())
+		}
+
+		again := fixture.emitCDC(t, "cdc-superseded-update", batch...)
+		if again != causation {
+			t.Fatalf("replay causation %s differs from %s", again, causation)
+		}
+		fixture.expectRecordedDelivered(t, causation, 2)
+		if replayed := fixture.postVersion(t, deleteEvalPublished); replayed != stamped {
+			t.Fatalf("a replay re-stamped the post: %d then %d", stamped, replayed)
+		}
+		if versions := fixture.recordedFactVersions(t, causation); len(versions) != 2 || versions[0] != stamped || versions[1] != 1 {
+			t.Fatalf("a replay changed the recorded versions to %v", versions)
+		}
+	})
+}
+
+func TestCDCSupersededCreateInTheSourceTransactionOfItsDelete(t *testing.T) {
+	runDeleteEvalProfiles(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
+		stream := fixture.subscribeComments(t, "alice")
+		fixture.removeComment(t, deleteEvalOnPub)
+		causation := fixture.emitCDC(t, "cdc-superseded-create",
+			fixture.cdcCommentChange(t, golem.EventCreated, deleteEvalOnPub, deleteEvalPublished, "hello"),
+			fixture.cdcCommentDelete(t, deleteEvalOnPub, deleteEvalPublished),
+		)
+		fixture.expectRecordedDelivered(t, causation, 1)
+		if got := fixture.suppressions(events.SuppressionCDCSuperseded); got != 1 {
+			t.Fatalf("superseded observations = %d, want 1", got)
+		}
+		expectCDCDeleteDelivered(t, stream)
+	})
+}
+
+func TestCDCBatchOfOnlySupersededChangesRecordsNothingAndALaterDeleteIsPublished(t *testing.T) {
+	runDeleteEvalProfiles(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
+		stream := fixture.subscribeComments(t, "alice")
+		fixture.removeComment(t, deleteEvalOnPub)
+		causation := fixture.emitCDC(t, "cdc-superseded-only", fixture.cdcCommentChange(t, golem.EventUpdated, deleteEvalOnPub, deleteEvalPublished, "edited"))
+		if facts := fixture.recordedFacts(t, causation); facts != 0 {
+			t.Fatalf("a batch of only superseded changes recorded %d facts", facts)
+		}
+		if got := fixture.suppressions(events.SuppressionCDCSuperseded); got != 1 {
+			t.Fatalf("superseded observations = %d, want 1", got)
+		}
+		fixture.emitCDCDelete(t, "cdc-superseded-later-delete", deleteEvalOnPub, deleteEvalPublished)
+		expectCDCDeleteDelivered(t, stream)
 	})
 }

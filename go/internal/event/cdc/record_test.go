@@ -16,7 +16,7 @@ type orderingRecorder struct {
 	published int
 }
 
-func (recorder *orderingRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
+func (recorder *orderingRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []Change, build func([]Stamp) ([]mutationfact.OutboxRow, error)) error {
 	recorder.published = len(recorder.transport.snapshot())
 	return recorder.fakeRecorder.RecordCDC(ctx, causation, changes, build)
 }

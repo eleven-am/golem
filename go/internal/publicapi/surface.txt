@@ -348,6 +348,7 @@ events.Stream type interface {Close, Recv}
 events.Stream.Close func() error
 events.Stream.Recv func(context.Context) (internal/event/value.Notice, error)
 events.Subscription = internal/event/value.Subscription
+events.SuppressionCDCSuperseded const SuppressionReason = "cdc_superseded"
 events.SuppressionCorrelatedGolemWrite const SuppressionReason = "correlated_golem_write"
 events.SuppressionDeleteFiltered const SuppressionReason = "delete_filtered"
 events.SuppressionDeleteOverDelivered const SuppressionReason = "delete_over_delivered"
@@ -3834,6 +3835,7 @@ observe.PhaseVerify const Phase = "verify"
 observe.Reason comparable
 observe.Reason type string
 observe.ReasonAuthorization const Reason = "authorization"
+observe.ReasonCDCSuperseded const Reason = "cdc_superseded"
 observe.ReasonCapability const Reason = "capability"
 observe.ReasonClosed const Reason = "closed"
 observe.ReasonConflict const Reason = "conflict"

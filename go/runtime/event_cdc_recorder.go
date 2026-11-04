@@ -43,7 +43,7 @@ func (app *App[P, A]) cdcOutboxRecorder() (*cdcOutboxRecorder, error) {
 	return &cdcOutboxRecorder{registry: app.registry, history: app.eventSchemas, database: app.database, provider: app.provider, namespace: string(namespace), limits: app.mutationLimits, scan: app.scanDeleteFact}, nil
 }
 
-func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func([]int64) ([]mutationfact.OutboxRow, error)) error {
+func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []eventcdc.Change, build func([]eventcdc.Stamp) ([]mutationfact.OutboxRow, error)) error {
 	if recorder == nil || recorder.database == nil || ctx == nil {
 		return fmt.Errorf("P7_CDC_RECORD: recorder is incomplete")
 	}
@@ -55,40 +55,54 @@ func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, causation gole
 		if err != nil {
 			return err
 		}
-		var versions []int64
+		var stamps []eventcdc.Stamp
 		if len(stored) != 0 {
-			versions, err = recorder.storedVersions(stored, len(changes))
+			stamps, err = recorder.storedStamps(stored, changes)
 		} else {
-			versions, err = recorder.stampVersions(ctx, execer, changes)
+			stamps, err = recorder.stampVersions(ctx, execer, changes)
 		}
 		if err != nil {
 			return err
 		}
-		rows, err := build(versions)
+		rows, err := build(stamps)
 		if err != nil {
 			return err
+		}
+		if len(rows) == 0 {
+			return nil
 		}
 		return recorder.insert(ctx, execer, rows)
 	})
 }
 
-func (recorder *cdcOutboxRecorder) storedVersions(stored []mutationfact.OutboxRow, changes int) ([]int64, error) {
-	if len(stored) != changes {
-		return nil, events.Failure(events.CodeCDCInvalid)
-	}
-	versions := make([]int64, len(stored))
-	for index, row := range stored {
+func (recorder *cdcOutboxRecorder) storedStamps(stored []mutationfact.OutboxRow, changes []eventcdc.Change) ([]eventcdc.Stamp, error) {
+	versions := make(map[string]int64, len(stored))
+	for _, row := range stored {
 		envelope, err := mutationfact.ValidateStoredRow(row, recorder.history)
 		if err != nil {
 			return nil, events.Failure(events.CodeCDCInvalid)
 		}
-		versions[index] = envelope.RowVersion()
+		versions[row.EventID] = envelope.RowVersion()
 	}
-	return versions, nil
+	stamps := make([]eventcdc.Stamp, len(changes))
+	matched := 0
+	for index, change := range changes {
+		version, recorded := versions[golem.UUID(change.EventID).String()]
+		if !recorded {
+			stamps[index] = eventcdc.Stamp{Superseded: true}
+			continue
+		}
+		stamps[index] = eventcdc.Stamp{Version: version}
+		matched++
+	}
+	if matched != len(stored) {
+		return nil, events.Failure(events.CodeCDCInvalid)
+	}
+	return stamps, nil
 }
 
-func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sqlx.QueryerContext, changes []events.CDCChangeInput) ([]int64, error) {
-	versions := make([]int64, len(changes))
+func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sqlx.QueryerContext, changes []eventcdc.Change) ([]eventcdc.Stamp, error) {
+	stamps := make([]eventcdc.Stamp, len(changes))
 	for index, change := range changes {
 		model := policyir.ModelID(change.Model)
 		if change.Action == golem.EventDeleted {
@@ -100,7 +114,7 @@ func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sq
 			if err != nil {
 				return nil, events.Failure(events.CodeCDCInvalid)
 			}
-			versions[index] = version
+			stamps[index] = eventcdc.Stamp{Version: version}
 			continue
 		}
 		after, err := decodeCDCExactImage(recorder.registry, model, change.After)
@@ -108,6 +122,11 @@ func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sq
 			return nil, events.Failure(events.CodeCDCInvalid)
 		}
 		stamped, err := stampCascadeRows(ctx, queryer, recorder.registry, recorder.provider, recorder.limits, model, []mutationdecode.Row{*after})
+		var absent *batchCardinalityError
+		if errors.As(err, &absent) && absent.got == 0 {
+			stamps[index] = eventcdc.Stamp{Superseded: true}
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("P7_CDC_RECORD: stamp: %w", err)
 		}
@@ -118,9 +137,9 @@ func (recorder *cdcOutboxRecorder) stampVersions(ctx context.Context, queryer sq
 		if err != nil {
 			return nil, fmt.Errorf("P7_CDC_RECORD: stamp: %w", err)
 		}
-		versions[index] = version
+		stamps[index] = eventcdc.Stamp{Version: version}
 	}
-	return versions, nil
+	return stamps, nil
 }
 
 func (recorder *cdcOutboxRecorder) insert(ctx context.Context, execer cdcOutboxExecer, rows []mutationfact.OutboxRow) error {

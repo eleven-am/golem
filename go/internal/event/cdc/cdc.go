@@ -26,8 +26,18 @@ type Encoded struct {
 	Fact   mutationfact.OutboxRow
 }
 
+type Change struct {
+	events.CDCChangeInput
+	EventID golem.EventID
+}
+
+type Stamp struct {
+	Version    int64
+	Superseded bool
+}
+
 type Recorder interface {
-	RecordCDC(ctx context.Context, causation golem.CausationID, changes []events.CDCChangeInput, build func(versions []int64) ([]mutationfact.OutboxRow, error)) error
+	RecordCDC(ctx context.Context, causation golem.CausationID, changes []Change, build func(stamps []Stamp) ([]mutationfact.OutboxRow, error)) error
 }
 
 type Correlator interface {
@@ -103,28 +113,43 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 		return nil
 	}
 	causation := deriveCausationID(identity, owned.SourceTransactionID)
-	notices := make([]events.Notice, len(owned.Changes))
+	changes := make([]Change, len(owned.Changes))
+	for index, change := range owned.Changes {
+		changes[index] = Change{CDCChangeInput: change, EventID: deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)}
+	}
 	var batch events.EventBatch
-	build := func(versions []int64) ([]mutationfact.OutboxRow, error) {
-		if len(versions) != len(owned.Changes) {
+	var kept []events.CDCChangeInput
+	build := func(stamps []Stamp) ([]mutationfact.OutboxRow, error) {
+		if len(stamps) != len(changes) {
 			return nil, events.Failure(events.CodeCDCInvalid)
 		}
-		facts := make([]mutationfact.OutboxRow, len(owned.Changes))
-		for index, change := range owned.Changes {
-			eventID := deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)
+		notices := make([]events.Notice, 0, len(changes))
+		facts := make([]mutationfact.OutboxRow, 0, len(changes))
+		survivors := make([]events.CDCChangeInput, 0, len(changes))
+		for index, change := range changes {
+			if stamps[index].Superseded {
+				events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionCDCSuperseded, 0, 0, 0, 0, 1)
+				continue
+			}
+			ordinal := uint32(len(facts) + 1)
 			encoded, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
 				Adapter: identity, SourceTransactionID: owned.SourceTransactionID,
-				RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: eventID, CausationID: causation,
-				Ordinal: change.Ordinal, Version: versions[index], Model: change.Model, Action: change.Action,
+				RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: change.EventID, CausationID: causation,
+				Ordinal: ordinal, Version: stamps[index].Version, Model: change.Model, Action: change.Action,
 				Before: cloneRowPointer(change.Before), After: cloneRowPointer(change.After),
 			})
 			notice, fact := encoded.Notice, encoded.Fact
-			if encodeErr != nil || !notice.Valid() || !factMatches(fact, eventID, causation, change.Ordinal) || notice.EventID() != eventID || notice.CausationID() != causation || notice.TransactionOrdinal() != change.Ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
+			if encodeErr != nil || !notice.Valid() || !factMatches(fact, change.EventID, causation, ordinal) || notice.EventID() != change.EventID || notice.CausationID() != causation || notice.TransactionOrdinal() != ordinal || notice.ModelID() != change.Model || notice.Action() != change.Action {
 				return nil, events.Failure(events.CodeCDCInvalid)
 			}
-			notices[index] = notice
-			facts[index] = fact
+			notices = append(notices, notice)
+			facts = append(facts, fact)
+			survivors = append(survivors, change.CDCChangeInput)
 			events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCReceive, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
+		}
+		kept, batch = survivors, events.EventBatch{}
+		if len(notices) == 0 {
+			return facts, nil
 		}
 		built, batchErr := eventvalue.NewEventBatchBounded(causation, notices, emitter.config.MaxBatchBytes)
 		if batchErr != nil {
@@ -133,16 +158,19 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 		batch = built
 		return facts, nil
 	}
-	if err := emitter.config.Recorder.RecordCDC(ctx, causation, owned.Changes, build); err != nil {
+	if err := emitter.config.Recorder.RecordCDC(ctx, causation, changes, build); err != nil {
 		if code, ok := events.CodeOf(err); ok && code == events.CodeCDCInvalid {
 			return events.Failure(events.CodeCDCInvalid)
 		}
 		return events.Failure(events.CodeCDCUnavailable)
 	}
+	if len(kept) == 0 {
+		return nil
+	}
 	if err := emitter.config.Transport.Publish(ctx, batch); err != nil {
 		return events.Failure(events.CodeCDCUnavailable)
 	}
-	for _, change := range owned.Changes {
+	for _, change := range kept {
 		events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCAck, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
 	}
 	return nil
