@@ -129,6 +129,27 @@ func TestRowVersionRisesOnNestedUpdateAcrossProviders(t *testing.T) {
 	})
 }
 
+func TestRowVersionRisesOnRelationOnlyUpdateAcrossProviders(t *testing.T) {
+	rowVersionRestrictFixtures(t, compilerir.ActionRestrict, func(t *testing.T, profile mutationProviderAcceptanceFixture) {
+		ctx, fixture := context.Background(), profile.fixture
+		system := fixture.app.System()
+		if _, err := SystemCreate(ctx, system, fixture.postDescriptor, fixture.createPost(10, golem.UUID{15: 1}, "created")); err != nil {
+			t.Fatal(err)
+		}
+		schema := fixture.schema
+		disconnect := golem.GeneratedUpdateInput[mutationResultPost](schema.Post,
+			golem.GeneratedNestedDisconnectOne[mutationResultPost, mutationResultUser](schema.Post, schema.PostAuthor, schema.Authorship, schema.User))
+		if _, err := SystemUpdate(ctx, system, fixture.postDescriptor, fixture.target(10), disconnect); err != nil {
+			t.Fatal(err)
+		}
+		before := postVersions(t, profile)[10]
+		if _, err := SystemUpdate(ctx, system, fixture.postDescriptor, fixture.target(10), disconnect); err != nil {
+			t.Fatal(err)
+		}
+		requireRise(t, "relation-only update", before, postVersions(t, profile)[10])
+	})
+}
+
 func TestRowVersionRisesOnSetNullCascadeAcrossProviders(t *testing.T) {
 	rowVersionRestrictFixtures(t, compilerir.ActionSetNull, func(t *testing.T, profile mutationProviderAcceptanceFixture) {
 		ctx, fixture := context.Background(), profile.fixture

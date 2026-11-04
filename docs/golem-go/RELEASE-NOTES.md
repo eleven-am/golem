@@ -16,6 +16,8 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.8.1 / Unreleased.
 
+**Relation-only updates write the version.** A relation-only update of a row in a model with `Subscriptions` now writes that row's version column, so database `UPDATE` triggers on that table fire for it.
+
 **The live protocol.** WebSocket and SSE subscriptions now require the `golem`
 block `{"protocol": 1, "contract": "<hex>"}`: in `connection_init.payload.golem`
 on WebSocket, in `extensions.golem` on SSE. There is no live path for a client
