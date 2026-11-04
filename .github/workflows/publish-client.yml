@@ -1,0 +1,60 @@
+name: Publish client
+
+on:
+  push:
+    tags: ["client/v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+defaults:
+  run:
+    working-directory: client
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+      - name: Tag matches both package versions
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#client/v}"
+          for dir in core react; do
+            actual="$(node -p "require('./$dir/package.json').version")"
+            if [ "$actual" != "$version" ]; then
+              echo "client/$dir is $actual but the tag is $TAG" >&2
+              exit 1
+            fi
+          done
+      - run: npm ci
+      - name: No useEffect under client
+        run: npm run check:no-use-effect
+      - run: npm run build
+      - run: npm test
+      - name: Publish packages in dependency order
+        run: |
+          publish() {
+            name="$1"
+            version="$(node -p "require('./$2/package.json').version")"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published, skipping"
+            else
+              npm publish -w "$name" --access public
+            fi
+          }
+          publish @eleven-am/golem-client core
+          publish @eleven-am/golem-react react

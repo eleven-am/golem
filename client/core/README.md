@@ -1,11 +1,11 @@
 # @eleven-am/golem-client
 
-Live GraphQL client for golem backends.
+Live GraphQL client for golem backends: `GolemClient`, the live protocol, the HTTP and WebSocket transport, the TanStack cache patcher and typed errors.
 
 ```sh
 npm install @eleven-am/golem-client @tanstack/query-core graphql graphql-ws gql.tada
 ```
 
-Status: client/v0.1.0 is under construction. This package currently provides the live protocol negotiation, the HTTP and WebSocket transport, and typed errors.
+See the [client README](../README.md) for setup, hooks, live status, errors and the server requirements.
 
 License: GPL-3.0.
