@@ -43,6 +43,10 @@ export class Transport {
     return this.session.subscribe(request, handlers)
   }
 
+  renew(): void {
+    this.session.renew()
+  }
+
   dispose(): void {
     this.session.dispose()
   }
