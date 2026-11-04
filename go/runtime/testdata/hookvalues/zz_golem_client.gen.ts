@@ -7,11 +7,13 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "EntryWhereUniqueInput",
       "events": null,
       "relations": {
         "owner": {
           "target": "Owner",
           "list": false,
+          "nullable": true,
           "inverse": "entries"
         }
       },
@@ -22,11 +24,13 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "OwnerWhereUniqueInput",
       "events": null,
       "relations": {
         "entries": {
           "target": "Entry",
           "list": true,
+          "nullable": true,
           "inverse": "owner"
         }
       },
@@ -38,37 +42,49 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createOwner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "entry": {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "owner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "updateEntry": {
       "kind": "generated",
       "models": [
         "Entry"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateOwner": {
       "kind": "generated",
       "models": [
         "Owner"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     }
   }
 } as const;

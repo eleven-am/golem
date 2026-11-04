@@ -7,26 +7,31 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "CommentWhereUniqueInput",
       "events": null,
       "relations": {
         "author": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "comments"
         },
         "post": {
           "target": "Post",
           "list": false,
+          "nullable": true,
           "inverse": "comments"
         },
         "replies": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "replyTo"
         },
         "replyTo": {
           "target": "Comment",
           "list": false,
+          "nullable": true,
           "inverse": "replies"
         }
       },
@@ -38,16 +43,19 @@ export const golemClientManifest = {
         "friendID"
       ],
       "cursorSelector": "UserID_FriendID",
+      "uniqueInput": "FriendshipWhereUniqueInput",
       "events": null,
       "relations": {
         "friend": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "friendshipsTo"
         },
         "user": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "friendshipsFrom"
         }
       },
@@ -58,21 +66,25 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "PostWhereUniqueInput",
       "events": null,
       "relations": {
         "author": {
           "target": "User",
           "list": false,
+          "nullable": true,
           "inverse": "posts"
         },
         "comments": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "post"
         },
         "postTags": {
           "target": "PostTag",
           "list": true,
+          "nullable": true,
           "inverse": "post"
         }
       },
@@ -84,16 +96,19 @@ export const golemClientManifest = {
         "tagName"
       ],
       "cursorSelector": "PostID_TagName",
+      "uniqueInput": "PostTagWhereUniqueInput",
       "events": null,
       "relations": {
         "post": {
           "target": "Post",
           "list": false,
+          "nullable": true,
           "inverse": "postTags"
         },
         "tag": {
           "target": "Tag",
           "list": false,
+          "nullable": true,
           "inverse": "postTags"
         }
       },
@@ -104,11 +119,13 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "TagWhereUniqueInput",
       "events": null,
       "relations": {
         "postTags": {
           "target": "PostTag",
           "list": true,
+          "nullable": true,
           "inverse": "tag"
         }
       },
@@ -119,26 +136,31 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "UserWhereUniqueInput",
       "events": null,
       "relations": {
         "comments": {
           "target": "Comment",
           "list": true,
+          "nullable": true,
           "inverse": "author"
         },
         "friendshipsFrom": {
           "target": "Friendship",
           "list": true,
+          "nullable": true,
           "inverse": "user"
         },
         "friendshipsTo": {
           "target": "Friendship",
           "list": true,
+          "nullable": true,
           "inverse": "friend"
         },
         "posts": {
           "target": "Post",
           "list": true,
+          "nullable": true,
           "inverse": "author"
         }
       },
@@ -150,307 +172,409 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "aggregate",
+      "nullable": false
     },
     "comment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "comments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "createComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createFriendship": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createPost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "deleteComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteFriendship": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyFriendships": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deletePost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deletePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "deleteUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "friendship": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "friendships": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "groupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "groupBy",
+      "nullable": false
     },
     "post": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "postTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "postTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "posts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "relationGroupByPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "groupBy",
+      "nullable": false
     },
     "tag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "tags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "updateComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateFriendship": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateManyComments": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyFriendships": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyPostTags": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyPosts": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyTags": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updatePost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updatePostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertComment": {
       "kind": "generated",
       "models": [
         "Comment"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertFriendship": {
       "kind": "generated",
       "models": [
         "Friendship"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertPost": {
       "kind": "generated",
       "models": [
         "Post"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertPostTag": {
       "kind": "generated",
       "models": [
         "PostTag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertTag": {
       "kind": "generated",
       "models": [
         "Tag"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "user": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "users": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     }
   }
 } as const;

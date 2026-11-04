@@ -15,7 +15,7 @@ defaults:
 
 jobs:
   publish:
-    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, 'go/v')
+    if: github.event_name == 'workflow_dispatch' || (!startsWith(github.event.release.tag_name, 'go/v') && !startsWith(github.event.release.tag_name, 'client/v'))
     runs-on: ubuntu-latest
     environment: npm
     env:

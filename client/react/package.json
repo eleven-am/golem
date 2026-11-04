@@ -1,0 +1,57 @@
+{
+  "name": "@eleven-am/golem-react",
+  "version": "0.1.0",
+  "description": "React bindings for the golem live GraphQL client",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc --noEmit -p tsconfig.spec.json && vitest run"
+  },
+  "peerDependencies": {
+    "@eleven-am/golem-client": "^0.1.0",
+    "@tanstack/react-query": "^5.0.0",
+    "gql.tada": "^1.8.0",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@eleven-am/golem-client": "*",
+    "@tanstack/query-core": "^5.0.0",
+    "@tanstack/react-query": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "gql.tada": "^1.8.0",
+    "graphql": "^16.11.0",
+    "graphql-ws": "^6.0.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "GPL-3.0",
+  "author": "Roy OSSAI",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eleven-am/golem.git",
+    "directory": "client/react"
+  }
+}

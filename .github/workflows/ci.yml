@@ -21,6 +21,7 @@ jobs:
     outputs:
       go: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' || steps.changes.outputs.go == 'true' }}
       typescript: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' || steps.changes.outputs.typescript == 'true' }}
+      client: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' || steps.changes.outputs.client == 'true' }}
       dependencies: ${{ steps.changes.outputs.dependencies == 'true' }}
       steps: ${{ steps.plan.outputs.steps }}
     steps:
@@ -38,6 +39,10 @@ jobs:
               - .github/workflows/ci.yml
             typescript:
               - typescript/**
+              - .github/workflows/ci.yml
+            client:
+              - client/**
+              - go/**
               - .github/workflows/ci.yml
             dependencies:
               - go/go.mod
@@ -239,3 +244,28 @@ jobs:
       # over everything blocks releases on issues no change here can fix.
       # Tighten this back once those are patched upstream.
       - run: npm audit --omit=dev --audit-level=critical
+
+  client:
+    name: Client
+    needs: plan
+    if: needs.plan.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - name: No useEffect under client
+        run: npm run check:no-use-effect
+      - run: npm run build
+      - run: npm test

@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@eleven-am/golem-client": ["../core/src/index.ts"]
+    }
+  },
+  "include": ["src", "test", "../core/test/harness/global-setup.ts"]
+}

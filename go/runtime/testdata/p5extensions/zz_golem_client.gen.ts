@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "UserWhereUniqueInput",
       "events": null,
       "relations": {},
       "computed": {
@@ -21,61 +22,81 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "deleteManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deleteMany",
+      "nullable": false
     },
     "deleteUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "deletedRow",
+      "nullable": false
     },
     "searchUsers": {
       "kind": "opaque",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     },
     "transactionalUser": {
       "kind": "opaque",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "updateManyUsers": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "updateMany",
+      "nullable": false
     },
     "updateUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "upsertUser": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "user": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "row",
+      "nullable": true
     },
     "users": {
       "kind": "generated",
       "models": [
         "User"
-      ]
+      ],
+      "shape": "rows",
+      "nullable": false
     }
   }
 } as const;

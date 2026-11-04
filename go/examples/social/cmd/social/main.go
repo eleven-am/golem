@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -42,7 +43,7 @@ func runHost(ctx context.Context, stop context.CancelFunc) error {
 	return runHostWith(ctx, stop, hostRunner{
 		openDatabase: openDatabase, openEventTransport: openEventTransport, openApplication: openApplication,
 		openGraph: func(application *social.App[social.Principal]) (hostGraph, error) {
-			return application.GraphQL(social.GraphQLConfig[social.Principal]{PrincipalFromContext: principalFromContext, ReportInternalError: func(context.Context, error) { log.Print("GraphQL request failed") }})
+			return application.GraphQL(social.GraphQLConfig[social.Principal]{PrincipalFromContext: principalFromContext, ReportInternalError: func(context.Context, error) { log.Print("GraphQL request failed") }, SubscriptionRecheck: hostSubscriptionRecheck(os.Getenv, activeTestControls)})
 		},
 		runPublisher: func(ctx context.Context, application *social.App[social.Principal]) error {
 			return application.RunEventPublisher(ctx)
@@ -142,6 +143,7 @@ func runHostWith(ctx context.Context, stop context.CancelFunc, runner hostRunner
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", principalMiddleware(application, graph.Handler()))
 	registerHealthHandlers(mux, database, application)
+	registerTestControls(mux, activeTestControls, application)
 	server := runner.newServer(mux)
 	if server == nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), runner.shutdownGrace)
@@ -354,7 +356,7 @@ func openApplicationWithScopedReport(ctx context.Context, database *provider.Dat
 	return social.Open(ctx, social.Config[social.Principal]{
 		Database:       database,
 		EventTransport: transport,
-		EventLimits:    events.Limits{RevalidateEvery: 5 * time.Minute},
+		EventLimits:    hostEventLimits(os.Getenv),
 		ResolvePrincipal: func(ctx context.Context, principal social.Principal) (social.Actor, error) {
 			return resolveSessionActor(ctx, database, principal)
 		},
@@ -387,6 +389,9 @@ func principalAuditID(principal social.Principal) string {
 
 func resolveSessionActor(ctx context.Context, database *provider.Database, principal social.Principal) (social.Actor, error) {
 	if principal.Development {
+		if activeTestControls.modeOf(principal.DevUserID) == principalModeUnresolvable {
+			return social.Actor{}, errors.New("principal resolution failed")
+		}
 		return social.Actor{UserID: principal.DevUserID, Authenticated: true}, nil
 	}
 	if principal.TokenHash == ([32]byte{}) {
@@ -448,15 +453,32 @@ func principalMiddleware(application *social.App[social.Principal], next http.Ha
 			return
 		}
 		ctx := context.WithValue(request.Context(), principalContextKey{}, principal)
-		if expiresAt.IsZero() {
-			ctx = golem.WithoutCredentialExpiry(ctx)
-		} else {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, expiresAt)
-			defer cancel()
+		unbounded := false
+		if principal.Development && os.Getenv("GOLEM_ALLOW_INSECURE_HEADER_AUTH") == "1" {
+			expiresAt, unbounded = testCredentialWindow(request, expiresAt)
+		}
+		if !unbounded {
+			if expiresAt.IsZero() {
+				ctx = golem.WithoutCredentialExpiry(ctx)
+			} else {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, expiresAt)
+				defer cancel()
+			}
 		}
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
+}
+
+func testCredentialWindow(request *http.Request, expiresAt time.Time) (time.Time, bool) {
+	if strings.TrimSpace(request.Header.Get("X-Golem-Test-Unbounded")) == "1" {
+		return time.Time{}, true
+	}
+	milliseconds, err := strconv.Atoi(strings.TrimSpace(request.Header.Get("X-Golem-Test-Deadline-Ms")))
+	if err != nil || milliseconds <= 0 {
+		return expiresAt, false
+	}
+	return time.Now().Add(time.Duration(milliseconds) * time.Millisecond), false
 }
 
 func authenticate(ctx context.Context, application *social.App[social.Principal], request *http.Request) (social.Principal, time.Time, error) {

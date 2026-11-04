@@ -1,0 +1,16 @@
+{
+  "name": "golem-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core",
+    "react"
+  ],
+  "scripts": {
+    "build": "npm run build -w @eleven-am/golem-client && npm run build -w @eleven-am/golem-react",
+    "test": "npm run test -w @eleven-am/golem-client && npm run test -w @eleven-am/golem-react",
+    "check:no-use-effect": "sh scripts/no-use-effect.sh"
+  },
+  "license": "GPL-3.0"
+}

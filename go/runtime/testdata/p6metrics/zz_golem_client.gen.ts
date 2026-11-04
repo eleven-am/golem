@@ -7,21 +7,25 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": null,
       "events": null,
       "relations": {
         "children": {
           "target": "Category",
           "list": true,
+          "nullable": true,
           "inverse": "parent"
         },
         "metrics": {
           "target": "Metric",
           "list": true,
+          "nullable": true,
           "inverse": "category"
         },
         "parent": {
           "target": "Category",
           "list": false,
+          "nullable": true,
           "inverse": "children"
         }
       },
@@ -32,11 +36,13 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": null,
       "events": null,
       "relations": {
         "category": {
           "target": "Category",
           "list": false,
+          "nullable": true,
           "inverse": "metrics"
         }
       },
@@ -48,25 +54,33 @@ export const golemClientManifest = {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "aggregate",
+      "nullable": false
     },
     "createCategory": {
       "kind": "generated",
       "models": [
         "Category"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "createMetric": {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "row",
+      "nullable": false
     },
     "groupByMetrics": {
       "kind": "generated",
       "models": [
         "Metric"
-      ]
+      ],
+      "shape": "groupBy",
+      "nullable": false
     }
   }
 } as const;

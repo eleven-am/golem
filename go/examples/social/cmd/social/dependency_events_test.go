@@ -71,14 +71,13 @@ func newDependencyWorld(t *testing.T, database *provider.Database) *dependencyWo
 	if _, err := world.caller(t, world.carol).Posts.Create(ctx, referencePostInput(t, barrier, true)); err != nil {
 		t.Fatal(err)
 	}
-	for {
+	pending := map[golem.UUID]bool{world.shared: true, barrier: true}
+	for len(pending) > 0 {
 		event, err := dependencyRecv(world, settle, 5*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.ID() == barrier {
-			break
-		}
+		delete(pending, event.ID())
 	}
 	return world
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -401,3 +402,86 @@ func TestWebSocketContextCancelledRecvEndsOperationWithoutFrame(t *testing.T) {
 func (clientStopExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
 
 func (*stopRaceExecutor) ListBounds() ListBounds { return NewListBounds(nil) }
+
+func TestWebSocketCredentialExpiryClosesWith4401WithoutAnOperationErrorFrame(t *testing.T) {
+	executor := &clientStopExecutor{created: make(chan *clientStopStream, 4)}
+	server, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
+		PrincipalFromContext: func(ctx context.Context) (int, bool) {
+			value, ok := ctx.Value(wsAuthKey{}).(int)
+			return value, ok
+		},
+		WebSocketInit: func(ctx context.Context, _ json.RawMessage) (context.Context, error) {
+			derived, cancel := context.WithTimeout(context.WithValue(ctx, wsAuthKey{}, 41), 300*time.Millisecond)
+			context.AfterFunc(derived, cancel)
+			return derived, nil
+		},
+		ReportInternalError: func(context.Context, error) {},
+	}, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := httptest.NewServer(server.Handler())
+	t.Cleanup(host.Close)
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: liveInit(`"token":"valid"`)})
+	if ack := readWS(t, connection); ack.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", ack)
+	}
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	<-executor.created
+	readAckWS(t, connection, "one")
+	_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := connection.ReadMessage()
+	var closed *websocket.CloseError
+	if !errors.As(err, &closed) || closed.Code != 4401 {
+		t.Fatalf("first message after credential expiry = %s err=%v, want close 4401", data, err)
+	}
+}
+
+func TestWebSocketOperationFrameIsRefusedOnceTheContextIsDone(t *testing.T) {
+	for name, prepare := range map[string]func(state *wsConnection[int], cancel context.CancelFunc){
+		"context done before the close frame": func(_ *wsConnection[int], cancel context.CancelFunc) { cancel() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			server, err := NewServer(`type Query { viewer: Int! }`, Config[int]{
+				PrincipalFromContext: func(context.Context) (int, bool) { return 0, true },
+				ReportInternalError:  func(context.Context, error) {},
+			}, &clientStopExecutor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted := make(chan *websocket.Conn, 1)
+			host := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
+				if upgradeErr != nil {
+					return
+				}
+				accepted <- conn
+				<-request.Context().Done()
+			}))
+			t.Cleanup(host.Close)
+			client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			state := &wsConnection[int]{server: server, conn: <-accepted, ctx: ctx, cancel: cancel}
+			prepare(state, cancel)
+			state.operationErrorUnlessStopped(nil, "one", publicError("X", "late"))
+			state.close(4401, "credential expired")
+			_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, data, err := client.ReadMessage()
+			var closed *websocket.CloseError
+			if !errors.As(err, &closed) || closed.Code != 4401 {
+				t.Fatalf("first message = %s err=%v, want close 4401", data, err)
+			}
+		})
+	}
+}

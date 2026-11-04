@@ -1918,17 +1918,35 @@ It exports `golemClientManifest` (`as const`) and its type
   - `cursorSelector`: the name of the unique input a `cursor` uses for the
     primary key, a plain value for a one-field key and an object keyed by the
     `primaryKey` fields for a compound key;
+  - `uniqueInput`: the GraphQL type name of the model's unique input, read from
+    the `cursor` argument of the list root (or the `where` argument of the
+    single-row root), or `null` when the model has neither root; a client
+    declares a cursor variable with it;
   - `events`: the name of the model's events subscription root, or `null`;
   - `relations`, keyed by relation field: its `target` type, whether it is a
-    `list`, and its `inverse` field on the target, or `null` when the other side
-    is not exposed;
+    `list`, whether the field is `nullable` in the schema, and its `inverse` field
+    on the target, or `null` when the other side is not exposed;
   - `computed`, keyed by computed field: the models whose rows its result holds.
 - `roots`, keyed by every Query and Mutation field in the SDL: `kind` is
   `generated` for the roots golem builds from a model and `opaque` for custom,
   semantic and full-text roots. `models` means "the models whose changes this
   root's result depends on": the owning model for a generated root (aggregate,
   groupBy and the many-row mutations included), and for an opaque root the
-  models whose rows the result holds, possibly none.
+  models whose rows the result holds, possibly none. `shape` is the result
+  shape the client patches the root with:
+  - `rows`: a list of model rows (`findMany`, and a custom root returning a list
+    of a model);
+  - `row`: one model row (`findOne`, `create`, `update`, `upsert`, and
+    a custom root returning one model);
+  - `deletedRow`: the generated `delete` root, which returns the row it removes;
+  - `aggregate`: the `aggregate` root's result;
+  - `groupBy`: the `groupBy` and `relationGroupBy` roots' result;
+  - `updateMany` and `deleteMany`: the many-row mutations' counts;
+  - `value`: a custom root whose result is neither a model nor a list of one.
+
+  `nullable` is `true` when the root's schema type is nullable (`findOne` is, a
+  mutation's row is not). A client sets a single-row slot to `null` only when it
+  is `nullable`.
 
 The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 
