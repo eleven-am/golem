@@ -1,5 +1,6 @@
 import {
   Kind,
+  OperationTypeNode,
   parse,
   print,
   visit,
@@ -534,21 +535,31 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, walk) }
 }
 
-function analyse(document: DocumentNode, operationName: string | undefined, manifest: ClientManifest): DocumentAnalysis {
+function operationOf(document: DocumentNode, operationName: string | undefined, kind: OperationTypeNode): OperationDefinitionNode {
   const operations = document.definitions.filter((definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION)
   const operation = operationName === undefined ? (operations.length === 1 ? operations[0] : undefined) : operations.find((candidate) => candidate.name?.value === operationName)
   if (operation === undefined) {
     throw new GolemDocumentError(operationName === undefined ? 'the document needs exactly one operation, or an operation name' : `the document has no operation ${operationName}`)
   }
-  if (operation.operation !== 'query') {
-    throw new GolemDocumentError(`only queries are analysed; got ${operation.operation}`)
+  if (operation.operation !== kind) {
+    throw new GolemDocumentError(`only ${kind} operations are analysed here; got ${operation.operation}`)
   }
+  return operation
+}
+
+function fragmentsOf(document: DocumentNode): Map<string, FragmentDefinitionNode> {
   const fragments = new Map<string, FragmentDefinitionNode>()
   for (const definition of document.definitions) {
     if (definition.kind === Kind.FRAGMENT_DEFINITION) {
       fragments.set(definition.name.value, definition)
     }
   }
+  return fragments
+}
+
+function analyse(document: DocumentNode, operationName: string | undefined, manifest: ClientManifest): DocumentAnalysis {
+  const operation = operationOf(document, operationName, OperationTypeNode.QUERY)
+  const fragments = fragmentsOf(document)
   const variables = new Map((operation.variableDefinitions ?? []).map((definition) => [definition.variable.name.value, definition] as const))
   const sink: Sink = { streams: new Map(), notLive: new Map(), nullable: new Set(), sequence: 0 }
   const live: Walk = { manifest, fragments, variables, sink }
@@ -614,4 +625,71 @@ export class DocumentAnalyzer {
     }
     return analysis
   }
+}
+
+export type MutationEffect = 'merge' | 'delete' | 'invalidate' | 'none'
+
+export interface MutationRoot {
+  readonly key: string
+  readonly name: string
+  readonly effect: MutationEffect
+  readonly models: ReadonlyArray<string>
+}
+
+export interface MutationAnalysis {
+  readonly operationName: string | undefined
+  readonly query: string
+  readonly roots: ReadonlyArray<MutationRoot>
+}
+
+const GENERATED_DELETE = /^delete/
+
+function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode; readonly root: MutationRoot } {
+  const name = field.name.value
+  const key = responseKey(field)
+  if (name.startsWith('__')) {
+    return { field, root: { key, name, effect: 'none', models: [] } }
+  }
+  const described = walk.manifest.roots[name]
+  if (described === undefined) {
+    throw new GolemDocumentError(`${name} is not a root in the manifest`)
+  }
+  const none = { field, root: { key, name, effect: 'none' as const, models: described.models } }
+  if (described.kind === 'generated' && (described.shape === 'updateMany' || described.shape === 'deleteMany')) {
+    return { ...none, root: { ...none.root, effect: 'invalidate' } }
+  }
+  const holdsRows = field.selectionSet !== undefined && described.models.length > 0 && (described.kind === 'opaque' || described.shape === 'row')
+  if (!holdsRows || field.selectionSet === undefined) {
+    return none
+  }
+  const effect = described.kind === 'generated' && GENERATED_DELETE.test(name) ? 'delete' : 'merge'
+  return {
+    field: { ...field, selectionSet: rows(field.selectionSet, described.models, null, false, NO_RANKING, walk) },
+    root: { key, name, effect, models: described.models },
+  }
+}
+
+export function analyzeMutation(document: DocumentNode | string, operationName: string | undefined, manifest: ClientManifest): MutationAnalysis {
+  const parsed = typeof document === 'string' ? parse(document) : document
+  const operation = operationOf(parsed, operationName, OperationTypeNode.MUTATION)
+  const walk: Walk = { manifest, fragments: fragmentsOf(parsed), variables: new Map(), sink: null }
+  const roots: MutationRoot[] = []
+  const selections = operation.selectionSet.selections.map((selection) => {
+    if (selection.kind !== Kind.FIELD) {
+      throw new GolemDocumentError('a mutation document selects its roots directly; fragments at the mutation root are not supported')
+    }
+    const analysed = mutationRoot(selection, walk)
+    roots.push(analysed.root)
+    return analysed.field
+  })
+  const definitions = parsed.definitions.map((definition) => {
+    if (definition === operation) {
+      return { ...operation, selectionSet: { ...operation.selectionSet, selections } }
+    }
+    if (definition.kind === Kind.FRAGMENT_DEFINITION && walk.manifest.models[definition.typeCondition.name.value] !== undefined) {
+      return rewriteFragment(definition, walk)
+    }
+    return definition
+  })
+  return { operationName: operation.name?.value, query: print({ ...parsed, definitions }), roots }
 }
