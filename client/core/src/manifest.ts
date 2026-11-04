@@ -1,6 +1,7 @@
 export interface ManifestRelation {
   readonly target: string
   readonly list: boolean
+  readonly nullable: boolean
   readonly inverse: string | null
 }
 
@@ -12,11 +13,12 @@ export interface ManifestModel {
   readonly computed: Readonly<Record<string, ReadonlyArray<string>>>
 }
 
-export type RootShape = 'rows' | 'row' | 'aggregate' | 'groupBy' | 'updateMany' | 'deleteMany' | 'value'
+export type RootShape = 'rows' | 'row' | 'deletedRow' | 'aggregate' | 'groupBy' | 'updateMany' | 'deleteMany' | 'value'
 
 export interface ManifestRoot {
   readonly kind: 'generated' | 'opaque'
   readonly shape: RootShape
+  readonly nullable: boolean
   readonly models: ReadonlyArray<string>
 }
 

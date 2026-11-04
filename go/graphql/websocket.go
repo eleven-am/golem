@@ -440,7 +440,7 @@ func (state *wsConnection[P]) writeLocked(message wsMessage) error {
 func (state *wsConnection[P]) writeOperation(stopped *atomic.Bool, message wsMessage) error {
 	state.writeMu.Lock()
 	defer state.writeMu.Unlock()
-	if stopped != nil && stopped.Load() {
+	if state.ctx.Err() != nil || (stopped != nil && stopped.Load()) {
 		return nil
 	}
 	return state.writeLocked(message)

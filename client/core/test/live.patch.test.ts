@@ -2,7 +2,7 @@ import { QueryClient, QueryObserver, type Query } from '@tanstack/query-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DocumentAnalyzer, GolemNotFoundError, LiveSync, type ClientManifest, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../src/index.js'
 import { sleep, until } from './harness/live.js'
-import { socialManifest, socialWithPostTagEvents } from './fixtures/manifests.js'
+import { socialManifest, socialStrictCommentPost, socialWithPostTagEvents } from './fixtures/manifests.js'
 
 class ScriptedTransport implements LiveTransport {
   readonly streams: StreamHandlers[] = []
@@ -78,7 +78,8 @@ describe('composite primary keys on events', () => {
 })
 
 describe('single slots', () => {
-  const featured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row' } })
+  const featured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: false } })
+  const maybeFeatured = withRoots({ featuredPost: { kind: 'opaque', models: ['Post'], shape: 'row', nullable: true } })
 
   it('turns a generated single root into null and does not refetch', async () => {
     const view = await mount(socialManifest, 'query($id: UUID!) { post(where: { ID: $id }) { title } }', () => ({ post: post('a', '1') }), { id: 'a' })
@@ -89,7 +90,7 @@ describe('single slots', () => {
     expect(view.transport.executes).toBe(1)
   })
 
-  it('enters the NOT_FOUND state for a slot not known to be nullable, and refetches at once', async () => {
+  it('enters the NOT_FOUND state for a slot the manifest marks non-nullable, and refetches at once', async () => {
     let held = true
     const view = await mount(featured, '{ featuredPost { title } }', () => (held ? { featuredPost: post('a', '1') } : { featuredPost: post('b', '3') }))
     held = false
@@ -103,8 +104,24 @@ describe('single slots', () => {
     expect(view.query.state.data).toEqual({ featuredPost: post('b', '3') })
   })
 
-  it('enters NOT_FOUND for a nested single slot', async () => {
+  it('turns a custom single root the manifest marks nullable into null', async () => {
+    const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: post('a', '1') }))
+    view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 0)
+    expect(view.query.state.data).toEqual({ featuredPost: null })
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
+  })
+
+  it('turns a nested to-one relation the manifest marks nullable into null', async () => {
     const view = await mount(socialManifest, '{ comments { body post { title } } }', () => ({
+      comments: [{ __typename: 'Comment', id: 'c', _version: '1', body: 'x', post: post('a', '1') }],
+    }))
+    view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 1)
+    expect((view.query.state.data as { comments: Array<{ post: unknown }> }).comments[0]?.post).toBeNull()
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
+  })
+
+  it('enters NOT_FOUND for a nested single slot the manifest marks non-nullable', async () => {
+    const view = await mount(socialStrictCommentPost, '{ comments { body post { title } } }', () => ({
       comments: [{ __typename: 'Comment', id: 'c', _version: '1', body: 'x', post: post('a', '1') }],
     }))
     view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 1)

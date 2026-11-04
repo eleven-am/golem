@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GolemProtocolError, Patcher } from '../src/index.js'
-import { socialManifest } from './fixtures/manifests.js'
+import { socialManifest, socialStrictCommentPost } from './fixtures/manifests.js'
 
 const store = new Patcher(socialManifest)
 
@@ -110,6 +110,17 @@ describe('Patcher single slots', () => {
     const eviction = store.remove(data, new Set(['Post:a']), new Set(['post']))
     expect(eviction.data).toBe(data)
     expect(eviction.held).toEqual(new Set(['Post:a']))
+  })
+
+  it('nulls a nested to-one relation only when the manifest marks it nullable', () => {
+    const child = post('a', 'x', '1')
+    const data = { comments: [{ __typename: 'Comment', id: 'c', _version: '1', body: 'b', post: child }] }
+    const nulled = store.remove(data, new Set(['Post:a']), new Set()).data as typeof data
+    expect(nulled.comments[0]?.post).toBeNull()
+    const strict = new Patcher(socialStrictCommentPost)
+    const kept = strict.remove(data, new Set(['Post:a']), new Set())
+    expect(kept.data).toBe(data)
+    expect(kept.held).toEqual(new Set(['Post:a']))
   })
 
   it('removes from a list and shares every untouched row', () => {

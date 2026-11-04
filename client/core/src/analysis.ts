@@ -21,7 +21,7 @@ import {
   type VariableDefinitionNode,
 } from 'graphql'
 import { GolemDocumentError, GolemNotLiveError } from './errors.js'
-import type { ClientManifest, ManifestModel } from './manifest.js'
+import type { ClientManifest, ManifestModel, ManifestRoot } from './manifest.js'
 import type { SubscriptionRequest } from './session.js'
 
 const VERSION_FIELD = '_version'
@@ -484,7 +484,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     if (modelName === undefined || model === undefined) {
       throw new GolemDocumentError(`the manifest root ${name} names no model`)
     }
-    if (root.shape !== 'rows' && root.shape !== 'row') {
+    if (root.shape !== 'rows' && root.shape !== 'row' && root.shape !== 'deletedRow') {
       record(
         walk.sink,
         new GolemNotLiveError('non-row-root', name, `${name} is not live: its result shape is ${root.shape}, not model rows`),
@@ -497,9 +497,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     }
     const where = argument(field, 'where')?.value
     const scope = argument(field, 'where') === undefined ? null : isUniqueStyle(where) ? uniqueScope(model, where, walk) : filterScope(where)
-    if (root.shape === 'row' && walk.sink !== null) {
-      walk.sink.nullable.add(responseKey(field))
-    }
+    markNullable(field, root, walk)
     return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, rankingOf(field, model), walk) }
   }
   if (root.models.length === 0 || field.selectionSet === undefined) {
@@ -510,7 +508,14 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     )
     return field
   }
+  markNullable(field, root, walk)
   return { ...field, selectionSet: rows(field.selectionSet, root.models, null, true, NO_RANKING, walk) }
+}
+
+function markNullable(field: FieldNode, root: ManifestRoot, walk: Walk): void {
+  if ((root.shape === 'row' || root.shape === 'deletedRow') && root.nullable && walk.sink !== null) {
+    walk.sink.nullable.add(responseKey(field))
+  }
 }
 
 function isUniqueStyle(value: ValueNode | undefined): boolean {

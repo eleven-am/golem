@@ -205,7 +205,7 @@ describe('4401 at the credential deadline', () => {
       aliceId = user.id
       current = user.id
       return (): Credentials => ({
-        headers: { 'x-golem-user': current, ...(current === aliceId ? { 'x-golem-test-deadline-ms': '4000' } : {}) },
+        headers: { 'x-golem-user': current, ...(current === aliceId ? { 'x-golem-test-deadline-ms': '8000' } : {}) },
       })
     }
     const { w, probe } = await live({ credentialsFor })

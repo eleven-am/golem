@@ -30,8 +30,26 @@ export const socialHiddenCommentInverse: ClientManifest = {
       ...social.models.Post,
       relations: {
         ...social.models.Post.relations,
-        comments: { target: 'Comment', list: true, inverse: null },
+        comments: { target: 'Comment', list: true, nullable: false, inverse: null },
       },
     },
   },
 }
+
+export const socialStrictCommentPost: ClientManifest = {
+  ...social,
+  models: {
+    ...social.models,
+    Comment: {
+      ...social.models.Comment,
+      relations: { ...social.models.Comment.relations, post: { ...social.models.Comment.relations.post, nullable: false } },
+    },
+  },
+}
+
+export const socialPostNotNullable: ClientManifest = {
+  ...social,
+  roots: { ...social.roots, post: { ...social.roots.post, nullable: false } },
+}
+
+export const socialWithRoot = (name: string, root: ClientManifest['roots'][string]): ClientManifest => ({ ...social, roots: { ...social.roots, [name]: root } })

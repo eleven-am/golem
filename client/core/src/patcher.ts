@@ -175,8 +175,17 @@ export class Patcher {
     }
   }
 
-  private vacate(child: unknown, name: string, depth: number, slots: Slots | undefined): unknown {
-    if (slots !== undefined && depth === 0 && slots.nullableRoots.has(name)) {
+  private nullableSlot(parent: Row, name: string, depth: number, slots: Slots): boolean {
+    if (depth === 0) {
+      return slots.nullableRoots.has(name)
+    }
+    const typename = parent.__typename
+    const relation = typeof typename === 'string' ? this.manifest.models[typename]?.relations[name] : undefined
+    return relation !== undefined && !relation.list && relation.nullable
+  }
+
+  private vacate(child: unknown, name: string, depth: number, slots: Slots | undefined, parent: Row): unknown {
+    if (slots !== undefined && this.nullableSlot(parent, name, depth, slots)) {
       return null
     }
     const key = this.identify(child)
@@ -209,7 +218,7 @@ export class Patcher {
     let copy: Row | undefined
     for (const [name, child] of Object.entries(value)) {
       const rewritten = this.rewrite(child, transform, slots, depth + 1)
-      const replacement = rewritten === REMOVED ? this.vacate(child, name, depth, slots) : rewritten
+      const replacement = rewritten === REMOVED ? this.vacate(child, name, depth, slots, value) : rewritten
       if (replacement !== child) {
         copy ??= { ...value }
         copy[name] = replacement

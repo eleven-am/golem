@@ -12,6 +12,7 @@ export const golemClientManifest = {
         "owner": {
           "target": "Owner",
           "list": false,
+          "nullable": true,
           "inverse": "entries"
         }
       },
@@ -27,6 +28,7 @@ export const golemClientManifest = {
         "entries": {
           "target": "Entry",
           "list": true,
+          "nullable": true,
           "inverse": "owner"
         }
       },
@@ -39,42 +41,48 @@ export const golemClientManifest = {
       "models": [
         "Entry"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "createOwner": {
       "kind": "generated",
       "models": [
         "Owner"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "entry": {
       "kind": "generated",
       "models": [
         "Entry"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "owner": {
       "kind": "generated",
       "models": [
         "Owner"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": true
     },
     "updateEntry": {
       "kind": "generated",
       "models": [
         "Entry"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     },
     "updateOwner": {
       "kind": "generated",
       "models": [
         "Owner"
       ],
-      "shape": "row"
+      "shape": "row",
+      "nullable": false
     }
   }
 } as const;
