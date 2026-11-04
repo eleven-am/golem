@@ -175,7 +175,7 @@ func copyP8AuthoredApplication(t *testing.T, source, destination string) {
 		if strings.HasSuffix(entry.Name(), "_test.go") || strings.HasPrefix(entry.Name(), "zz_golem_") {
 			return nil
 		}
-		if !allowedRootFiles[slash] && !strings.HasPrefix(slash, "social/") && slash != "cmd/social/main.go" {
+		if !allowedRootFiles[slash] && !strings.HasPrefix(slash, "social/") && !(filepath.Dir(slash) == "cmd/social" && strings.HasSuffix(slash, ".go")) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
