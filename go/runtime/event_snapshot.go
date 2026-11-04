@@ -198,8 +198,13 @@ func (shared *eventNoticeShared) verdict(spec *eventJudgeSpec) (deleteTruth, err
 }
 
 func (app *App[P, A]) exitUnseen(shared *eventNoticeShared, state *callerEventSubscription[P]) bool {
-	shared.beforeOnce.Do(func() { shared.before = app.newExitSnapshot(shared, policyir.ModelID(state.model)) })
-	return shared.before != nil && shared.before.judge(state.judge) == deleteFalse
+	before := app.beforeSnapshot(shared, policyir.ModelID(state.model))
+	return before != nil && before.judge(state.judge) == deleteFalse
+}
+
+func (app *App[P, A]) beforeSnapshot(shared *eventNoticeShared, model policyir.ModelID) *eventSnapshot {
+	shared.beforeOnce.Do(func() { shared.before = app.newExitSnapshot(shared, model) })
+	return shared.before
 }
 
 func (app *App[P, A]) newExitSnapshot(shared *eventNoticeShared, model policyir.ModelID) *eventSnapshot {

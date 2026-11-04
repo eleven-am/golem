@@ -271,11 +271,14 @@ func (app *App[P, A]) dependencyChanged(member *eventDependencyMember, shared *e
 			return false, nil
 		}
 	case golem.EventUpdated:
-		evaluator, imaged := app.dependencyBeforeImage(member, fact)
-		if imaged && !dependencyFieldsDiffer(member.watch, evaluator.cells, shared.snapshot) {
+		image := app.beforeSnapshot(shared, policyir.ModelID(member.metadata.ModelID()))
+		if image != nil && !dependencyFieldsDiffer(member.watch, image.evaluator.cells, shared.snapshot) {
 			return false, nil
 		}
-		before = dependencyVerdict(member, evaluator)
+		before = deleteUnknown
+		if image != nil && member.judge != nil {
+			before = image.judge(member.judge)
+		}
 	case golem.EventDeleted:
 		if !member.membership {
 			return false, nil
