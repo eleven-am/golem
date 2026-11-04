@@ -135,6 +135,7 @@ export class Session {
               return
             case 'error':
               finish({ kind: 'error', errors: outcome.errors })
+              dispose()
               return
             case 'violation':
               finish({ kind: 'fatal', status: 'invalid', error: outcome.error })
