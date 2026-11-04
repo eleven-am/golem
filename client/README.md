@@ -230,6 +230,8 @@ npm test
 npm run check:no-use-effect
 ```
 
+Release: bump both versions in a commit to main; the Publish client workflow publishes any version not yet on npm.
+
 The tests run against the real social example server (`go/examples/social`) and need Go.
 
 Frontend rule enforced in CI: there is no `useEffect` or `useLayoutEffect` anywhere under `client/`.

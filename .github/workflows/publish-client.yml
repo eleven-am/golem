@@ -2,7 +2,10 @@ name: Publish client
 
 on:
   push:
+    branches: [main]
     tags: ["client/v*"]
+    paths: ["client/**"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,7 +31,16 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
+      - name: Both packages carry the same version
+        run: |
+          core="$(node -p "require('./core/package.json').version")"
+          react="$(node -p "require('./react/package.json').version")"
+          if [ "$core" != "$react" ]; then
+            echo "client/core is $core but client/react is $react" >&2
+            exit 1
+          fi
       - name: Tag matches both package versions
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           TAG: ${{ github.ref_name }}
         run: |

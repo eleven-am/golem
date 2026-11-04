@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Live GraphQL client for golem backends",
   "type": "module",
   "main": "dist/index.js",
@@ -33,6 +33,7 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
+  "keywords": ["golem", "graphql", "live-query", "realtime", "subscriptions", "tanstack-query", "graphql-ws", "typescript"],
   "license": "GPL-3.0",
   "author": "Roy OSSAI",
   "engines": {
