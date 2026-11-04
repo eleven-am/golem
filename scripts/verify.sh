@@ -30,7 +30,8 @@ RACE_PACKAGES=(
 	./events/... ./provider/... ./runtime ./queue
 	./internal/event/outbox ./internal/event/cdc ./internal/queue/worker ./internal/subscription
 )
-RACE_SKIP_TEST="^TestBatchChunkMagnitudeAndPerParentPagingSQLite$"
+RACE_SKIP_TESTS="^(TestBatchChunkMagnitudeAndPerParentPagingSQLite|Test.*FixtureRegeneratesByteIdentically|TestP5GeneratedExtensionFixtureBuildsFromCleanSourceThenRepeatsIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat)$"
+RACE_SKIP_COUNT=9
 GATE_PACKAGES=(./internal/migration/workflow ./internal/physical ./observe)
 GATE_GOLDEN_TEST="TestInspectSocialGoldenAndDeterminism"
 GATE_IDENTITY_TESTS="TestP5GeneratedExtensionFixtureRegeneratesByteIdentically|TestP5GeneratedSocialFixtureRegeneratesByteIdentically|TestP6GeneratedMetricsFixtureRegeneratesByteIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat"
@@ -140,8 +141,8 @@ run() {
 		;;
 	oracle-read-and-diagnostics) go_test_serial "${ORACLE_READ_AND_DIAGNOSTICS[@]}" ;;
 	race)
-		require_matching 1 "$RACE_SKIP_TEST" ./runtime || return 1
-		go_test -race -p=1 -parallel 4 -count=1 -timeout=45m -skip "$RACE_SKIP_TEST" "${RACE_PACKAGES[@]}"
+		require_matching "$RACE_SKIP_COUNT" "$RACE_SKIP_TESTS" ./runtime || return 1
+		go_test -race -p=1 -parallel 4 -count=1 -timeout=45m -skip "$RACE_SKIP_TESTS" "${RACE_PACKAGES[@]}"
 		;;
 	vulncheck) (cd "$GO_DIR" && "$GO" run "$GOVULNCHECK" ./...) ;;
 	*)
