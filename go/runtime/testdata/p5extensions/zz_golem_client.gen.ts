@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "UserWhereUniqueInput",
       "events": null,
       "relations": {},
       "computed": {

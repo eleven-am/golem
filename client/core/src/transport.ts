@@ -15,7 +15,6 @@ export interface TransportOptions {
 export interface ExecuteRequest {
   readonly query: string
   readonly variables?: Readonly<Record<string, unknown>>
-  readonly operationName?: string
   readonly signal?: AbortSignal
 }
 
@@ -60,7 +59,6 @@ export class Transport {
       body: JSON.stringify({
         query: request.query,
         variables: request.variables,
-        operationName: request.operationName,
         extensions: { golem: golemBlock(this.options.manifest) },
       }),
       signal: request.signal,

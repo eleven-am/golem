@@ -413,6 +413,7 @@ export class LiveSync {
         return
       case SubscriptionCode.Overflow:
       case SubscriptionCode.SourceClosed:
+      case SubscriptionCode.Cancelled:
         this.reopen(entry, stream, this.backoff(stream), false)
         return
       case SubscriptionCode.Revalidation:
@@ -425,8 +426,6 @@ export class LiveSync {
         return
       case SubscriptionCode.Limit:
         this.endStream(entry, stream, 'limit')
-        return
-      case SubscriptionCode.Cancelled:
         return
       default:
         this.endFatal(entry, stream, first ?? new GolemProtocolError('a stream ended with an empty error list'))
@@ -537,7 +536,10 @@ export class LiveSync {
         const decision = decideUpdate(held, version)
         if (decision === 'invalidate') {
           entry.coalescer.request()
-        } else if (decision === 'patch' && frame.entity !== null) {
+        } else if (decision === 'patch') {
+          if (frame.entity === null) {
+            throw new GolemProtocolError(`an UPDATED event for the held row ${key} carried no entity`)
+          }
           const reorders = stream.plan.slot || stream.plan.rankedBy === 'any' || this.patcher.differs(data, key, frame.entity, stream.plan.rankedBy)
           this.write(entry, this.patcher.patch(data, key, frame.entity))
           if (reorders) {

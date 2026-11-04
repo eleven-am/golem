@@ -1,6 +1,7 @@
-import { parse, print } from 'graphql'
-import { describe, expect, it } from 'vitest'
-import { DocumentAnalyzer, GolemDocumentError, GolemNotLiveError, assertLive, streamRequest } from '../src/index.js'
+import { QueryClient } from '@tanstack/query-core'
+import { parse, print, type DocumentNode } from 'graphql'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import { DocumentAnalyzer, GolemClient, GolemDocumentError, GolemMultipleOperationsError, analyzeMutation, GolemNotLiveError, assertLive, streamRequest } from '../src/index.js'
 import {
   socialHiddenCommentInverse,
   socialManifest,
@@ -167,6 +168,18 @@ describe('stream set', () => {
     expect(byHandle.streams[0]?.scope).toBe('policy-only')
   })
 
+  it('reads a variable under a single-row root as a unique input whatever its type is called', () => {
+    const eventful = new DocumentAnalyzer(socialWithEventfulUsers)
+    const analysis = eventful.analyze('query($u: UserKey!) { user(where: $u) { handle } }')
+    expect(analysis.streams[0]?.scope).toBe('policy-only')
+  })
+
+  it('reads a variable under a list root as a filter whatever its type is called', () => {
+    const analysis = social.analyze('query($w: PostFilter) { posts(where: $w) { title } }')
+    expect(analysis.streams[0]?.scope).toBe('exact')
+    expect(flat(analysis.streams[0]?.query)).toContain('where: $w')
+  })
+
   it('merges the selections of repeated occurrences of one stream', () => {
     const analysis = social.analyze('{ a: posts { title } b: posts { body } }')
     expect(analysis.streams).toHaveLength(1)
@@ -271,13 +284,32 @@ describe('document handling', () => {
     expect(analyzer.analyze(parse('{ posts { title } }'))).not.toBe(analyzer.analyze(node))
   })
 
-  it('selects an operation by name and caches each', () => {
+  it('refuses a document with more than one operation, naming the count', () => {
     const analyzer = new DocumentAnalyzer(socialManifest)
     const text = 'query A { posts { title } } query B { comments { body } }'
-    expect(() => analyzer.analyze(text)).toThrow(GolemDocumentError)
-    expect(analyzer.analyze(text, 'A').streams[0]?.eventsRoot).toBe('postEvents')
-    expect(analyzer.analyze(text, 'B').streams[0]?.eventsRoot).toBe('commentEvents')
-    expect(analyzer.analyze(text, 'A')).toBe(analyzer.analyze(text, 'A'))
+    const refusal = (() => {
+      try {
+        analyzer.analyze(text)
+      } catch (error) {
+        return error
+      }
+    })()
+    expect(refusal).toBeInstanceOf(GolemMultipleOperationsError)
+    expect(refusal).toBeInstanceOf(GolemDocumentError)
+    expect((refusal as GolemMultipleOperationsError).operations).toBe(2)
+    expect(() => analyzeMutation('mutation A { createTag(data: { name: "x" }) { id } } mutation B { createTag(data: { name: "y" }) { id } }', socialManifest)).toThrow(GolemMultipleOperationsError)
+  })
+
+  it('leaves no operation name option on the public entry points', () => {
+    const client = new GolemClient({ queryClient: new QueryClient(), url: 'ws://unused/graphql', manifest: socialManifest })
+    type Document = DocumentNode | string
+    type Variables = Readonly<Record<string, unknown>>
+    expectTypeOf(client.queryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
+    expectTypeOf(client.infiniteQueryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
+    expectTypeOf(client.staticQueryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
+    expectTypeOf(client.mutate).parameters.toEqualTypeOf<[Document, Variables?, AbortSignal?]>()
+    expectTypeOf(DocumentAnalyzer.prototype.analyze).parameters.toEqualTypeOf<[Document]>()
+    client.dispose()
   })
 
   it('refuses a mutation, an unknown root and a missing fragment', () => {

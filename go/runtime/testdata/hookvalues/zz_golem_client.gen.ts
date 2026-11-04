@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "EntryWhereUniqueInput",
       "events": null,
       "relations": {
         "owner": {
@@ -23,6 +24,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "OwnerWhereUniqueInput",
       "events": null,
       "relations": {
         "entries": {

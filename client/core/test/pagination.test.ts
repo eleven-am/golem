@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cursorOf, DocumentAnalyzer, GolemConfigurationError, GolemDocumentError, GolemError, golemInfiniteQuery, pageSpec } from '../src/index.js'
 import { DELETE_POST, sleep, until, world, type World } from './harness/live.js'
 import { collector, manifest } from './harness/social.js'
-import { socialWithPostTagEvents } from './fixtures/manifests.js'
+import { socialWithoutPostUniqueInput, socialWithPostTagEvents, socialWithRenamedPostUniqueInput } from './fixtures/manifests.js'
 
 const PAGED =
   'query($t: String!, $take: Int!) { posts(where: { title: { contains: $t }, published: { equals: true } }, orderBy: [{ title: asc }], take: $take) { title } }'
@@ -275,6 +275,17 @@ describe('cursor shape from the manifest', () => {
     expect(next.query).toContain('$golemCursor: PostWhereUniqueInput')
     expect(next.query).toContain('$golemSkip: Int')
     expect(next.query).toMatch(/take: \$take\s+cursor: \$golemCursor\s+skip: \$golemSkip/)
+  })
+
+  it('declares the continuation variable with the unique input the manifest names', () => {
+    const plan = golemInfiniteQuery(analyzer.analyze(PAGED), { t: 'x', take: 2 }, socialWithRenamedPostUniqueInput)
+    const next = plan.requestFor({ ID: 'b' })
+    expect(next.query).toContain('$golemCursor: PostKey')
+    expect(next.query).not.toContain('PostWhereUniqueInput')
+  })
+
+  it('refuses to page a model whose manifest names no unique input', () => {
+    expect(() => pageSpec(analyzer.analyze(PAGED), socialWithoutPostUniqueInput)).toThrow(GolemDocumentError)
   })
 
   it('reads a literal take and an aliased root', () => {

@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "CommentWhereUniqueInput",
       "events": "commentEvents",
       "relations": {
         "author": {
@@ -41,6 +42,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "PostWhereUniqueInput",
       "events": "postEvents",
       "relations": {
         "author": {
@@ -73,6 +75,7 @@ export const golemClientManifest = {
         "tagName"
       ],
       "cursorSelector": "PostID_TagName",
+      "uniqueInput": "PostTagWhereUniqueInput",
       "events": null,
       "relations": {
         "post": {
@@ -95,6 +98,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "TagWhereUniqueInput",
       "events": null,
       "relations": {
         "postTags": {
@@ -111,6 +115,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "UserWhereUniqueInput",
       "events": null,
       "relations": {
         "comments": {
@@ -133,6 +138,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "VersionedNoteWhereUniqueInput",
       "events": null,
       "relations": {},
       "computed": {}

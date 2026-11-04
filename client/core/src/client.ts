@@ -49,24 +49,24 @@ export class GolemClient {
     claimed.set(options.queryClient, this)
   }
 
-  queryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}, operationName?: string) {
-    return this.live.options(this.analyzer.analyze(document, operationName), variables)
+  queryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}) {
+    return this.live.options(this.analyzer.analyze(document), variables)
   }
 
-  infiniteQueryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}, operationName?: string) {
-    return this.live.infiniteOptions(this.analyzer.analyze(document, operationName), variables)
+  infiniteQueryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}) {
+    return this.live.infiniteOptions(this.analyzer.analyze(document), variables)
   }
 
-  staticQueryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}, operationName?: string) {
-    const analysis = this.analyzer.analyze(document, operationName)
+  staticQueryOptions(document: DocumentNode | string, variables: Readonly<Record<string, unknown>> = {}) {
+    const analysis = this.analyzer.analyze(document)
     return {
       queryKey: ['golem', 'static', analysis.query, variables] as const,
       queryFn: (context: Pick<QueryFunctionContext, 'signal'>) => this.transport.execute({ query: analysis.query, variables, signal: context.signal }),
     }
   }
 
-  mutate<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, operationName?: string, signal?: AbortSignal): Promise<T> {
-    return this.mutations.execute<T>(document, variables, operationName, signal)
+  mutate<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<T> {
+    return this.mutations.execute<T>(document, variables, signal)
   }
 
   attach(): () => void {

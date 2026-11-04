@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": null,
       "events": null,
       "relations": {
         "children": {
@@ -35,6 +36,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": null,
       "events": null,
       "relations": {
         "category": {

@@ -7,6 +7,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "InviteWhereUniqueInput",
       "events": "inviteEvents",
       "relations": {
         "team": {
@@ -23,6 +24,7 @@ export const golemClientManifest = {
         "id"
       ],
       "cursorSelector": "ID",
+      "uniqueInput": "TeamWhereUniqueInput",
       "events": "teamEvents",
       "relations": {
         "invites": {

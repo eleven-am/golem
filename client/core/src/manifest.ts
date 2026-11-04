@@ -8,6 +8,7 @@ export interface ManifestRelation {
 export interface ManifestModel {
   readonly primaryKey: ReadonlyArray<string>
   readonly cursorSelector: string
+  readonly uniqueInput: string | null
   readonly events: string | null
   readonly relations: Readonly<Record<string, ManifestRelation>>
   readonly computed: Readonly<Record<string, ReadonlyArray<string>>>

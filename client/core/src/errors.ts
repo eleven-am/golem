@@ -124,6 +124,16 @@ export class GolemDocumentError extends Error {
   }
 }
 
+export class GolemMultipleOperationsError extends GolemDocumentError {
+  readonly operations: number
+
+  constructor(operations: number) {
+    super(`the document holds ${operations} operations; golem takes exactly one operation per document`)
+    this.name = 'GolemMultipleOperationsError'
+    this.operations = operations
+  }
+}
+
 export function toGolemError(shape: GraphQLErrorShape): GolemError {
   switch (shape.extensions?.code) {
     case CODE_PROTOCOL_MISMATCH:

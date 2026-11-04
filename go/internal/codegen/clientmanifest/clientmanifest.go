@@ -37,6 +37,7 @@ type Manifest struct {
 type Model struct {
 	PrimaryKey     []string            `json:"primaryKey"`
 	CursorSelector string              `json:"cursorSelector"`
+	UniqueInput    *string             `json:"uniqueInput"`
 	Events         *string             `json:"events"`
 	Relations      map[string]Relation `json:"relations"`
 	Computed       map[string][]string `json:"computed"`
@@ -155,6 +156,7 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 		primaryKey = append(primaryKey, field.GraphQLName)
 	}
 	entry := Model{PrimaryKey: primaryKey, CursorSelector: selector.Name, Relations: map[string]Relation{}, Computed: map[string][]string{}}
+	entry.UniqueInput = uniqueInputName(schema, contract.Roots)
 	if contract.Subscriptions {
 		events := contract.Roots.Events
 		entry.Events = &events
@@ -203,6 +205,28 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 		entry.Computed[computed.Name] = resultModels(computed.Result)
 	}
 	return entry, nil
+}
+
+func uniqueInputName(schema *ast.Schema, roots ir.GraphQLRootNamesIR) *string {
+	candidates := []struct{ root, argument string }{
+		{roots.FindMany, "cursor"},
+		{roots.FindOne, "where"},
+	}
+	for _, candidate := range candidates {
+		if candidate.root == "" {
+			continue
+		}
+		for _, field := range rootFields(schema) {
+			if field.Name != candidate.root {
+				continue
+			}
+			if argument := field.Arguments.ForName(candidate.argument); argument != nil {
+				name := argument.Type.Name()
+				return &name
+			}
+		}
+	}
+	return nil
 }
 
 func visibleFieldName(contract ir.ModelContractIR, id *ir.FieldID) *string {

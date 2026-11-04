@@ -9,10 +9,11 @@ class FakeTransport implements LiveTransport {
   readonly requests: SubscriptionRequest[] = []
   executes = 0
   renews = 0
+  posts: unknown[] = []
 
   async execute<T>(): Promise<T> {
     this.executes++
-    return { posts: [] } as T
+    return { posts: this.posts } as T
   }
 
   subscribe(request: SubscriptionRequest, handlers: StreamHandlers): () => void {
@@ -71,6 +72,19 @@ describe('stream ends the real server does not emit in a reachable scenario', ()
     expect(live.statusOf(query)?.state).toBe('LIVE')
   })
 
+  it('CANCELLED resubscribes and refetches instead of leaving a dead stream reported as live', async () => {
+    const { transport, live, query } = mount()
+    transport.streams[0]?.onAck()
+    await until(() => transport.executes === 1)
+    transport.streams[0]?.onEnd(ended('GOLEM_SUBSCRIPTION_CANCELLED'))
+    expect(live.statusOf(query)?.state).toBe('RECOVERING')
+    await until(() => transport.streams.length === 2)
+    transport.streams[1]?.onAck()
+    await until(() => transport.executes === 2)
+    await sleep(150)
+    expect(live.statusOf(query)?.state).toBe('LIVE')
+  })
+
   it('an unrecognised end code fails the query without resubscribing, and releases the fetch', async () => {
     const { transport, live, query } = mount()
     transport.streams[0]?.onAck()
@@ -79,6 +93,15 @@ describe('stream ends the real server does not emit in a reachable scenario', ()
     expect(live.statusOf(query)?.state).toBe('FAILED')
     await sleep(100)
     expect(transport.streams).toHaveLength(1)
+  })
+
+  it('an UPDATED event without an entity for a held row fails the query instead of keeping the stale row', async () => {
+    const { transport, live, query } = mount()
+    transport.posts = [{ __typename: 'Post', id: 'a', _version: '1', title: 'held' }]
+    transport.streams[0]?.onAck()
+    await until(() => transport.executes === 1)
+    transport.streams[0]?.onEvent({ data: { postEvents: { version: '2', type: 'UPDATED', id: 'a', entity: null } } })
+    expect(live.statusOf(query)?.state).toBe('FAILED')
   })
 
   it('an event of an unknown type fails the query instead of being skipped', async () => {

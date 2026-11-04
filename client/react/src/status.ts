@@ -16,15 +16,14 @@ export function useLiveStatus(client: GolemClient, queryKey: QueryKey): LiveStat
 
 export interface GolemStatusOptions {
   readonly infinite?: boolean
-  readonly operationName?: string
 }
 
 export function useGolemStatus(document: GolemDocument, variables: Readonly<Record<string, unknown>> = {}, options: GolemStatusOptions = {}): LiveStatus | undefined {
   const client = useGolemClient()
   const variablesHash = hashKey([variables])
   const queryKey = useMemo(
-    () => (options.infinite === true ? client.infiniteQueryOptions(document, variables, options.operationName) : client.queryOptions(document, variables, options.operationName)).queryKey,
-    [client, document, variablesHash, options.infinite, options.operationName],
+    () => (options.infinite === true ? client.infiniteQueryOptions(document, variables) : client.queryOptions(document, variables)).queryKey,
+    [client, document, variablesHash, options.infinite],
   )
   return useLiveStatus(client, queryKey)
 }

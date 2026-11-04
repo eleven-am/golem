@@ -14,11 +14,11 @@ License: GPL-3.0.
 ## Install
 
 ```sh
-npm install @eleven-am/golem-client @tanstack/query-core graphql graphql-ws gql.tada
-npm install @eleven-am/golem-react @tanstack/react-query react
+npm install @eleven-am/golem-client @tanstack/query-core graphql graphql-ws
+npm install @eleven-am/golem-react @tanstack/react-query react gql.tada
 ```
 
-Peers: `@tanstack/query-core` ^5 (core), `@tanstack/react-query` ^5 and `react` >=18 (React), `graphql` ^16, `graphql-ws` ^6, `gql.tada` ^1.8.
+Peers: `@tanstack/query-core` ^5 (core), `@tanstack/react-query` ^5 and `react` >=18 (React), `graphql` ^16, `graphql-ws` ^6 (core), and `gql.tada` ^1.8 (React, for the typed document types).
 
 ## Setup
 
@@ -73,7 +73,7 @@ const observer = new QueryObserver(queryClient, golem.queryOptions(POSTS, { tag:
 observer.subscribe((result) => render(result.data))
 ```
 
-`client.live.start()` needs no React. `golem.queryOptions`, `golem.infiniteQueryOptions` and `golem.staticQueryOptions` return plain TanStack options; `golem.mutate(document, variables)` runs a mutation.
+`client.live.start()` needs no React. `golem.queryOptions`, `golem.infiniteQueryOptions` and `golem.staticQueryOptions` return plain TanStack options; `golem.mutate(document, variables)` runs a mutation. A document holds exactly one operation; a document with several is refused with `GolemMultipleOperationsError`, so split it into one document per operation.
 
 ## Hooks
 
@@ -127,7 +127,7 @@ All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) o
 - `GolemUnauthenticatedError`, `GolemHttpError`.
 - `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated for you.
 
-Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError` (a document the client cannot run, for example one that sets `cursor` or `skip` itself), `GolemNotLiveError`, `GolemNotFoundError`, `GolemProtocolError`.
+Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError` (a document the client cannot run, for example one that sets `cursor` or `skip` itself) and its subclass `GolemMultipleOperationsError` (a document with more than one operation), `GolemNotLiveError`, `GolemNotFoundError`, `GolemProtocolError`.
 
 ## Server requirements
 

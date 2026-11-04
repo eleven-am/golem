@@ -14,6 +14,22 @@ export const socialWithPostTagEvents: ClientManifest = {
   },
 }
 
+export const socialWithRenamedPostUniqueInput: ClientManifest = {
+  ...social,
+  models: {
+    ...social.models,
+    Post: { ...social.models.Post, uniqueInput: 'PostKey' },
+  },
+}
+
+export const socialWithoutPostUniqueInput: ClientManifest = {
+  ...social,
+  models: {
+    ...social.models,
+    Post: { ...social.models.Post, uniqueInput: null },
+  },
+}
+
 export const socialWithEventfulUsers: ClientManifest = {
   ...social,
   models: {

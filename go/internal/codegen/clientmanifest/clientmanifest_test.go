@@ -1,6 +1,7 @@
 package clientmanifest
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -10,9 +11,12 @@ const shapeSDL = `
 type Post {
   id: ID!
 }
+input PostWhereUniqueInput {
+  id: ID
+}
 type Query {
-  post(id: ID!): Post
-  posts: [Post!]!
+  post(where: PostWhereUniqueInput!): Post
+  posts(cursor: PostWhereUniqueInput): [Post!]!
   aggregatePost: Int!
   groupByPost: [Int!]!
   relationGroupByPost: [Int!]!
@@ -99,6 +103,39 @@ func TestRootShapes(t *testing.T) {
 		if got := manifest.Roots[name].Shape; got != want {
 			t.Errorf("root %s shape = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestUniqueInputIsReadFromTheGeneratedSchema(t *testing.T) {
+	manifest, err := Build(shapeCompilation(), "contract", shapeSDL)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got := manifest.Models["Post"].UniqueInput
+	if got == nil || *got != "PostWhereUniqueInput" {
+		t.Fatalf("uniqueInput = %v, want PostWhereUniqueInput", got)
+	}
+}
+
+func TestUniqueInputFollowsTheSchemaNotAConvention(t *testing.T) {
+	sdl := strings.ReplaceAll(shapeSDL, "PostWhereUniqueInput", "PostKey")
+	manifest, err := Build(shapeCompilation(), "contract", sdl)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got := manifest.Models["Post"].UniqueInput
+	if got == nil || *got != "PostKey" {
+		t.Fatalf("uniqueInput = %v, want PostKey", got)
+	}
+}
+
+func TestUniqueInputIsNullWithoutALookupRoot(t *testing.T) {
+	manifest, err := Build(relationCompilation(), "contract", relationSDL)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got := manifest.Models["Author"].UniqueInput; got != nil {
+		t.Fatalf("uniqueInput = %v, want null", *got)
 	}
 }
 

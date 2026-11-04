@@ -1918,6 +1918,10 @@ It exports `golemClientManifest` (`as const`) and its type
   - `cursorSelector`: the name of the unique input a `cursor` uses for the
     primary key, a plain value for a one-field key and an object keyed by the
     `primaryKey` fields for a compound key;
+  - `uniqueInput`: the GraphQL type name of the model's unique input, read from
+    the `cursor` argument of the list root (or the `where` argument of the
+    single-row root), or `null` when the model has neither root; a client
+    declares a cursor variable with it;
   - `events`: the name of the model's events subscription root, or `null`;
   - `relations`, keyed by relation field: its `target` type, whether it is a
     `list`, whether the field is `nullable` in the schema, and its `inverse` field

@@ -9,18 +9,15 @@ import {
   type FieldNode,
   type FragmentDefinitionNode,
   type InlineFragmentNode,
-  type NamedTypeNode,
   type ObjectFieldNode,
   type ObjectValueNode,
   type OperationDefinitionNode,
   type SelectionNode,
   type SelectionSetNode,
-  type TypeNode,
   type ValueNode,
   type VariableNode,
-  type VariableDefinitionNode,
 } from 'graphql'
-import { GolemDocumentError, GolemNotLiveError } from './errors.js'
+import { GolemDocumentError, GolemMultipleOperationsError, GolemNotLiveError } from './errors.js'
 import type { ClientManifest, ManifestModel, ManifestRoot } from './manifest.js'
 import type { SubscriptionRequest } from './session.js'
 
@@ -41,7 +38,6 @@ export interface StreamPlan {
 }
 
 export interface DocumentAnalysis {
-  readonly operationName: string | undefined
   readonly document: DocumentNode
   readonly query: string
   readonly streams: ReadonlyArray<StreamPlan>
@@ -88,7 +84,6 @@ interface Sink {
 interface Walk {
   readonly manifest: ClientManifest
   readonly fragments: ReadonlyMap<string, FragmentDefinitionNode>
-  readonly variables: ReadonlyMap<string, VariableDefinitionNode>
   readonly sink: Sink | null
 }
 
@@ -121,10 +116,6 @@ function conjunction(left: Scope | null, right: Scope | null): Scope | null {
   return objectValue({ AND: { kind: Kind.LIST, values: [left, right] } })
 }
 
-function namedType(type: TypeNode): NamedTypeNode {
-  return type.kind === Kind.NAMED_TYPE ? type : namedType(type.type)
-}
-
 function argument(field: FieldNode, name: string): ArgumentNode | undefined {
   return field.arguments?.find((candidate) => candidate.name.value === name)
 }
@@ -139,26 +130,12 @@ function filterScope(value: ValueNode | undefined): Scope | null {
   return value.kind === Kind.VARIABLE ? value : null
 }
 
-function uniqueScope(model: ManifestModel, value: ValueNode | undefined, walk: Walk): Scope | null {
-  if (value === undefined || value.kind === Kind.NULL) {
-    return null
-  }
-  if (value.kind === Kind.VARIABLE) {
-    const declared = walk.variables.get(value.name.value)
-    if (declared !== undefined && namedType(declared.type).name.value.endsWith('WhereUniqueInput')) {
-      return null
-    }
-    return value
-  }
-  if (value.kind !== Kind.OBJECT || value.fields.length === 0) {
+function uniqueScope(model: ManifestModel, value: ValueNode | undefined): Scope | null {
+  if (value === undefined || value.kind !== Kind.OBJECT || value.fields.length === 0) {
     return null
   }
   const first = value.fields[0]
-  const isUnique = first !== undefined && /^[A-Z]/.test(first.name.value)
-  if (!isUnique) {
-    return value
-  }
-  if (value.fields.length !== 1 || first.name.value !== model.cursorSelector) {
+  if (first === undefined || value.fields.length !== 1 || first.name.value !== model.cursorSelector) {
     return null
   }
   const key = first.value
@@ -496,7 +473,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
       return field
     }
     const where = argument(field, 'where')?.value
-    const scope = argument(field, 'where') === undefined ? null : isUniqueStyle(where) ? uniqueScope(model, where, walk) : filterScope(where)
+    const scope = root.shape === 'rows' ? filterScope(where) : uniqueScope(model, where)
     markNullable(field, root, walk)
     return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, rankingOf(field, model), walk) }
   }
@@ -518,17 +495,6 @@ function markNullable(field: FieldNode, root: ManifestRoot, walk: Walk): void {
   }
 }
 
-function isUniqueStyle(value: ValueNode | undefined): boolean {
-  if (value === undefined) {
-    return false
-  }
-  if (value.kind === Kind.OBJECT) {
-    const first = value.fields[0]
-    return first !== undefined && /^[A-Z]/.test(first.name.value)
-  }
-  return value.kind === Kind.VARIABLE
-}
-
 function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): FragmentDefinitionNode {
   const condition = definition.typeCondition.name.value
   if (condition === 'Query') {
@@ -540,11 +506,14 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, walk) }
 }
 
-export function operationOf(document: DocumentNode, operationName: string | undefined, kind: OperationTypeNode): OperationDefinitionNode {
+export function operationOf(document: DocumentNode, kind: OperationTypeNode): OperationDefinitionNode {
   const operations = document.definitions.filter((definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION)
-  const operation = operationName === undefined ? (operations.length === 1 ? operations[0] : undefined) : operations.find((candidate) => candidate.name?.value === operationName)
+  if (operations.length > 1) {
+    throw new GolemMultipleOperationsError(operations.length)
+  }
+  const operation = operations[0]
   if (operation === undefined) {
-    throw new GolemDocumentError(operationName === undefined ? 'the document needs exactly one operation, or an operation name' : `the document has no operation ${operationName}`)
+    throw new GolemDocumentError('the document holds no operation')
   }
   if (operation.operation !== kind) {
     throw new GolemDocumentError(`only ${kind} operations are analysed here; got ${operation.operation}`)
@@ -562,13 +531,12 @@ function fragmentsOf(document: DocumentNode): Map<string, FragmentDefinitionNode
   return fragments
 }
 
-function analyse(document: DocumentNode, operationName: string | undefined, manifest: ClientManifest): DocumentAnalysis {
-  const operation = operationOf(document, operationName, OperationTypeNode.QUERY)
+function analyse(document: DocumentNode, manifest: ClientManifest): DocumentAnalysis {
+  const operation = operationOf(document, OperationTypeNode.QUERY)
   const fragments = fragmentsOf(document)
-  const variables = new Map((operation.variableDefinitions ?? []).map((definition) => [definition.variable.name.value, definition] as const))
   const sink: Sink = { streams: new Map(), notLive: new Map(), nullable: new Set(), sequence: 0 }
-  const live: Walk = { manifest, fragments, variables, sink }
-  const silent: Walk = { manifest, fragments, variables, sink: null }
+  const live: Walk = { manifest, fragments, sink }
+  const silent: Walk = { manifest, fragments, sink: null }
   const rewrittenOperation: OperationDefinitionNode = {
     ...operation,
     selectionSet: { ...operation.selectionSet, selections: visitRootSet(operation.selectionSet, live) },
@@ -585,7 +553,6 @@ function analyse(document: DocumentNode, operationName: string | undefined, mani
   const rewritten: DocumentNode = { ...document, definitions }
   const notLive = [...sink.notLive.values()]
   return {
-    operationName: operation.name?.value,
     document: rewritten,
     query: print(rewritten),
     nullableRoots: sink.nullable,
@@ -597,36 +564,26 @@ function analyse(document: DocumentNode, operationName: string | undefined, mani
 
 export class DocumentAnalyzer {
   private readonly manifest: ClientManifest
-  private readonly byText = new Map<string, Map<string, DocumentAnalysis>>()
-  private readonly byNode = new WeakMap<DocumentNode, Map<string, DocumentAnalysis>>()
+  private readonly byText = new Map<string, DocumentAnalysis>()
+  private readonly byNode = new WeakMap<DocumentNode, DocumentAnalysis>()
 
   constructor(manifest: ClientManifest) {
     this.manifest = manifest
   }
 
-  analyze(document: DocumentNode | string, operationName?: string): DocumentAnalysis {
-    const slot = operationName ?? ''
+  analyze(document: DocumentNode | string): DocumentAnalysis {
     if (typeof document === 'string') {
-      let entry = this.byText.get(document)
-      if (entry === undefined) {
-        entry = new Map()
-        this.byText.set(document, entry)
+      let analysis = this.byText.get(document)
+      if (analysis === undefined) {
+        analysis = analyse(parse(document), this.manifest)
+        this.byText.set(document, analysis)
       }
-      return this.cached(entry, slot, () => analyse(parse(document), operationName, this.manifest))
+      return analysis
     }
-    let entry = this.byNode.get(document)
-    if (entry === undefined) {
-      entry = new Map()
-      this.byNode.set(document, entry)
-    }
-    return this.cached(entry, slot, () => analyse(document, operationName, this.manifest))
-  }
-
-  private cached(entry: Map<string, DocumentAnalysis>, slot: string, build: () => DocumentAnalysis): DocumentAnalysis {
-    let analysis = entry.get(slot)
+    let analysis = this.byNode.get(document)
     if (analysis === undefined) {
-      analysis = build()
-      entry.set(slot, analysis)
+      analysis = analyse(document, this.manifest)
+      this.byNode.set(document, analysis)
     }
     return analysis
   }
@@ -642,7 +599,6 @@ export interface MutationRoot {
 }
 
 export interface MutationAnalysis {
-  readonly operationName: string | undefined
   readonly query: string
   readonly roots: ReadonlyArray<MutationRoot>
 }
@@ -672,10 +628,10 @@ function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode
   }
 }
 
-export function analyzeMutation(document: DocumentNode | string, operationName: string | undefined, manifest: ClientManifest): MutationAnalysis {
+export function analyzeMutation(document: DocumentNode | string, manifest: ClientManifest): MutationAnalysis {
   const parsed = typeof document === 'string' ? parse(document) : document
-  const operation = operationOf(parsed, operationName, OperationTypeNode.MUTATION)
-  const walk: Walk = { manifest, fragments: fragmentsOf(parsed), variables: new Map(), sink: null }
+  const operation = operationOf(parsed, OperationTypeNode.MUTATION)
+  const walk: Walk = { manifest, fragments: fragmentsOf(parsed), sink: null }
   const roots: MutationRoot[] = []
   const selections = operation.selectionSet.selections.map((selection) => {
     if (selection.kind !== Kind.FIELD) {
@@ -694,5 +650,5 @@ export function analyzeMutation(document: DocumentNode | string, operationName: 
     }
     return definition
   })
-  return { operationName: operation.name?.value, query: print({ ...parsed, definitions }), roots }
+  return { query: print({ ...parsed, definitions }), roots }
 }

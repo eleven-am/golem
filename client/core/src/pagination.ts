@@ -48,7 +48,7 @@ export const SKIP_VARIABLE = 'golemSkip'
 
 const nameNode = (value: string) => ({ kind: Kind.NAME as const, value })
 
-function continuationOf(document: DocumentNode, operation: OperationDefinitionNode, field: FieldNode, model: string): string {
+function continuationOf(document: DocumentNode, operation: OperationDefinitionNode, field: FieldNode, uniqueInput: string): string {
   const taken = operation.variableDefinitions?.find((definition) => definition.variable.name.value === CURSOR_VARIABLE || definition.variable.name.value === SKIP_VARIABLE)
   if (taken !== undefined) {
     throw new GolemDocumentError(`the variable ${taken.variable.name.value} belongs to the client; an infinite query adds it to every page after the first`)
@@ -65,7 +65,7 @@ function continuationOf(document: DocumentNode, operation: OperationDefinitionNo
     ...operation,
     variableDefinitions: [
       ...(operation.variableDefinitions ?? []),
-      { kind: Kind.VARIABLE_DEFINITION, variable: { kind: Kind.VARIABLE, name: nameNode(CURSOR_VARIABLE) }, type: { kind: Kind.NAMED_TYPE, name: nameNode(`${model}WhereUniqueInput`) } },
+      { kind: Kind.VARIABLE_DEFINITION, variable: { kind: Kind.VARIABLE, name: nameNode(CURSOR_VARIABLE) }, type: { kind: Kind.NAMED_TYPE, name: nameNode(uniqueInput) } },
       { kind: Kind.VARIABLE_DEFINITION, variable: { kind: Kind.VARIABLE, name: nameNode(SKIP_VARIABLE) }, type: { kind: Kind.NAMED_TYPE, name: nameNode('Int') } },
     ],
     selectionSet: { ...operation.selectionSet, selections: operation.selectionSet.selections.map((selection) => (selection === field ? paged : selection)) },
@@ -74,7 +74,7 @@ function continuationOf(document: DocumentNode, operation: OperationDefinitionNo
 }
 
 export function pageSpec(analysis: DocumentAnalysis, manifest: ClientManifest): PageSpec {
-  const operation = operationOf(analysis.document, analysis.operationName, OperationTypeNode.QUERY)
+  const operation = operationOf(analysis.document, OperationTypeNode.QUERY)
   const named = (field: FieldNode, name: string) => field.arguments?.some((candidate) => candidate.name.value === name) === true
   for (const selection of operation.selectionSet.selections) {
     if (selection.kind === Kind.FIELD && (named(selection, 'cursor') || named(selection, 'skip'))) {
@@ -93,6 +93,9 @@ export function pageSpec(analysis: DocumentAnalysis, manifest: ClientManifest): 
   if (root === undefined || root.kind !== 'generated' || root.shape !== 'rows' || modelName === undefined || model === undefined) {
     throw new GolemDocumentError(`${name} cannot be paged: only a generated list root has a cursor`)
   }
+  if (model.uniqueInput === null) {
+    throw new GolemDocumentError(`${name} cannot be paged: the manifest names no unique input for ${modelName}`)
+  }
   const take = takeOf(field)
   if (take === undefined) {
     throw new GolemDocumentError(`${name} must give take a variable or an integer`)
@@ -103,7 +106,7 @@ export function pageSpec(analysis: DocumentAnalysis, manifest: ClientManifest): 
     selector: model.cursorSelector,
     primaryKey: model.primaryKey,
     take,
-    continuation: continuationOf(analysis.document, operation, field, modelName),
+    continuation: continuationOf(analysis.document, operation, field, model.uniqueInput),
   }
 }
 

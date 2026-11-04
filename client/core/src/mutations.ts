@@ -36,11 +36,11 @@ export class Mutations {
     this.patcher = new Patcher(options.manifest)
   }
 
-  async execute<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, operationName?: string, signal?: AbortSignal): Promise<T> {
-    const analysis = analyzeMutation(document, operationName, this.manifest)
+  async execute<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<T> {
+    const analysis = analyzeMutation(document, this.manifest)
     let data: T
     try {
-      data = await this.transport.execute<T>({ query: analysis.query, variables, operationName: analysis.operationName, signal })
+      data = await this.transport.execute<T>({ query: analysis.query, variables, signal })
     } catch (error) {
       if (error instanceof GolemPartialCommitError || error instanceof GolemCommitUnknownError) {
         this.invalidateCommitted(analysis)

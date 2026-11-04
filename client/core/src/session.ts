@@ -18,7 +18,6 @@ export type SocketFactory = (url: string, protocols: string | string[], credenti
 export interface SubscriptionRequest {
   readonly query: string
   readonly variables?: Readonly<Record<string, unknown>>
-  readonly operationName?: string
 }
 
 export type StreamEnd =
@@ -120,7 +119,7 @@ export class Session {
       handlers.onEnd(end)
     }
     const dispose = this.connection().subscribe(
-      { query: request.query, variables: request.variables as Record<string, unknown> | undefined, operationName: request.operationName },
+      { query: request.query, variables: request.variables as Record<string, unknown> | undefined },
       {
         next: (value) => {
           if (ended) {
@@ -220,7 +219,7 @@ export class Session {
       lazy: true,
       retryAttempts: Number.POSITIVE_INFINITY,
       retryWait: (retries) => sleep(backoffDelay(retries, random)),
-      shouldRetry: (event) => !isCloseEventLike(event) || classifyClose(event.code, reasonOf(event), this.acknowledged).action === 'retry',
+      shouldRetry: (event) => !isCloseEventLike(event) || classifyClose(event.code, reasonOf(event), this.lastCloseAcknowledged).action === 'retry',
       ...(webSocketImpl === undefined ? {} : { webSocketImpl }),
       on: {
         connecting: (retrying) => this.setStatus(retrying ? 'reconnecting' : 'connecting'),
