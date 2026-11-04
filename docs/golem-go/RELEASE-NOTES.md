@@ -102,11 +102,20 @@ v0.8.0, every event ran a full principal resolution, hook pass and read for each
 of about 96 subscribers at 100 users and about 240 at 250 users. At 100 users
 delivery lag p99 was 13.8 s. At 250 users the stream fell 41,729 of 50,306
 events behind, with a lag p99 of 186.8 s. Now an event costs one shared read
-plus one full path for the one subscriber that owns the row (0.96 per event). At
-100 users, delivery lag p99 is 0.51 s. At 250 users it is 0.26 s, and every
-expected event arrives. At 500 users every event still arrives, but lag p99 is
-9.6 s because the Article hub is saturated, so about 250 to 400 subscribers per
-model hub is the comfortable range.
+plus one full path for the one subscriber that owns the row (0.96 per event).
+Measured on this release, with row versions, update before-snapshots, exits
+and dependency streams included:
+
+| Load | Delivered / expected | Delivery lag p99 | Article commit p99 |
+|---|---|---|---|
+| 100 users, steady | 20,192 / 20,192 | 261 ms | 10.0 ms |
+| 250 users, steady | 50,306 / 50,306 | 259 ms | 6.4 ms |
+| 100 users, burst | 25,989 / 25,989 | 255 ms | 5.5 ms |
+
+No delivery was foreign or duplicated and no stream ended. At 500 users every
+event still arrives, but the Article hub saturates (lag p99 about 9.6 s in the
+development measurement), so about 250 to 400 subscribers per model hub is the
+comfortable range.
 
 **Rows of models with `Subscriptions` carry a version.** Every write golem
 issues gives the row a version higher than any version that key has committed;
