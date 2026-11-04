@@ -107,6 +107,16 @@ export class GolemNotLiveError extends Error {
   }
 }
 
+export class GolemNotFoundError extends Error {
+  readonly subjects: ReadonlyArray<string>
+
+  constructor(subjects: ReadonlyArray<string>) {
+    super(`a row held in a single result slot left the result: ${subjects.join(', ')}`)
+    this.name = 'GolemNotFoundError'
+    this.subjects = subjects
+  }
+}
+
 export class GolemDocumentError extends Error {
   constructor(message: string) {
     super(message)

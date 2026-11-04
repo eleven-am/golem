@@ -232,6 +232,23 @@ describe('G7: a query is live, or it says it is not', () => {
     expect([error.reason, error.subject]).toEqual(['non-row-root', 'aggregatePosts'])
   })
 
+  it.each(['aggregate', 'groupBy', 'updateMany', 'deleteMany', 'value'] as const)('classifies a root by the manifest shape %s, whatever its name', (shape) => {
+    const renamed = {
+      ...socialManifest,
+      roots: { ...socialManifest.roots, posts: { kind: 'generated' as const, models: ['Post'], shape } },
+    }
+    const error = notLive(new DocumentAnalyzer(renamed), '{ posts { title } }')
+    expect([error.reason, error.subject]).toEqual(['non-row-root', 'posts'])
+  })
+
+  it('treats a root named like an aggregate as rows when the manifest says rows', () => {
+    const renamed = {
+      ...socialManifest,
+      roots: { ...socialManifest.roots, aggregatePosts: { kind: 'generated' as const, models: ['Post'], shape: 'rows' as const } },
+    }
+    expect(new DocumentAnalyzer(renamed).analyze('{ aggregatePosts { title } }').live).toBe(true)
+  })
+
   it('keeps every reason, not only the first', () => {
     const analysis = social.analyze('{ postTags { tagName } publishPost }')
     expect(analysis.notLive.map((error) => error.subject)).toEqual(['PostTag', 'publishPost'])
@@ -272,5 +289,61 @@ describe('document handling', () => {
     const before = print(node)
     social.analyze(node)
     expect(print(node)).toBe(before)
+  })
+})
+
+describe('ranking, slots and nullable roots', () => {
+  it('collects the orderBy fields of a list root, adds them to the query and to the stream, and keeps others out', () => {
+    const analysis = social.analyze('{ posts(orderBy: [{ priority: asc }, { title: desc }]) { body } }')
+    expect(analysis.streams[0]?.rankedBy).toEqual(['priority', 'title'])
+    const selection = flat(analysis.query).split(') {')[1] ?? ''
+    expect(selection).toContain('priority')
+    expect(selection).toContain('title')
+    const entity = flat(analysis.streams[0]?.query).split('entity {')[1] ?? ''
+    expect(entity).toContain('priority')
+    expect(entity).toContain('title')
+  })
+
+  it('ranks a nested list by its own orderBy', () => {
+    const analysis = social.analyze('{ posts { comments(orderBy: { body: asc }) { id } } }')
+    const comments = analysis.streams.find((stream) => stream.model === 'Comment')
+    expect(comments?.rankedBy).toEqual(['body'])
+    expect(analysis.streams.find((stream) => stream.model === 'Post')?.rankedBy).toEqual([])
+  })
+
+  it('treats an orderBy variable as ranked by anything', () => {
+    const analysis = social.analyze('query($by: [PostOrderByInput!]) { posts(orderBy: $by) { title } }')
+    expect(analysis.streams[0]?.rankedBy).toBe('any')
+  })
+
+  it('keeps a shared policy-only stream a slot when a plain list reads it first', () => {
+    const analysis = social.analyze('{ posts { title } searchPosts(take: 5, where: {}) { title } }')
+    expect(analysis.streams).toHaveLength(1)
+    expect(analysis.streams[0]?.slot).toBe(true)
+  })
+
+  it('has no ranking without orderBy', () => {
+    expect(social.analyze('{ posts { title } }').streams[0]?.rankedBy).toEqual([])
+  })
+
+  it('marks the policy-only stream of a custom root as a slot, and a plain list as not', () => {
+    expect(social.analyze('{ searchPosts(take: 5, where: {}) { title } }').streams[0]?.slot).toBe(true)
+    expect(social.analyze('{ posts { title } }').streams[0]?.slot).toBe(false)
+  })
+
+  it('reports the response keys of generated single roots as nullable, aliases included', () => {
+    const analysis = social.analyze('query($id: UUID!) { first: post(where: { ID: $id }) { title } posts { title } searchPosts(take: 1, where: {}) { title } }')
+    expect([...analysis.nullableRoots]).toEqual(['first'])
+  })
+})
+
+describe('composite keys', () => {
+  it('selects the identity object of a composite-key model in its stream', () => {
+    const analysis = new DocumentAnalyzer(socialWithPostTagEvents).analyze('{ postTags { tagName } }')
+    expect(flat(analysis.streams[0]?.query)).toContain('id { postID tagName }')
+  })
+
+  it('keeps a bare id for a single-key model', () => {
+    expect(flat(social.analyze('{ posts { title } }').streams[0]?.query)).not.toContain('id {')
   })
 })

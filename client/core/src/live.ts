@@ -1,11 +1,11 @@
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryFunctionContext } from '@tanstack/query-core'
 import { assertLive, streamRequest, type DocumentAnalysis, type StreamPlan } from './analysis.js'
 import { Coalescer, COALESCE_MAX_WAIT_MS, COALESCE_WINDOW_MS } from './coalescer.js'
-import { GolemProtocolError, type GolemError } from './errors.js'
+import { GolemNotFoundError, GolemProtocolError, type GolemError } from './errors.js'
 import type { ClientManifest } from './manifest.js'
 import { applyRemoval, decideUpdate, EMPTY_MERGE_STATE, noteChange, parseVersion, resolveResponse, type MergeState } from './merge.js'
 import { backoffDelay } from './protocol.js'
-import { RowStore, type RowKey } from './rows.js'
+import { Patcher, type EventIdentity, type RowKey } from './patcher.js'
 import type { StreamEnd, StreamHandlers, SubscriptionRequest } from './session.js'
 import type { ExecuteRequest } from './transport.js'
 
@@ -24,7 +24,7 @@ export const SubscriptionCode = {
 
 export const REASON_DEPENDENCY_CHANGED = 'DEPENDENCY_CHANGED'
 
-export type LiveState = 'CONNECTING' | 'LIVE' | 'RECOVERING' | 'LIMIT' | 'FORBIDDEN' | 'FAILED'
+export type LiveState = 'CONNECTING' | 'LIVE' | 'RECOVERING' | 'LIMIT' | 'FORBIDDEN' | 'NOT_FOUND' | 'FAILED'
 
 export interface LiveStatus {
   readonly state: LiveState
@@ -78,6 +78,7 @@ interface Entry {
   bypass: boolean
   everLive: boolean
   failure: Error | undefined
+  notFound: GolemNotFoundError | undefined
   closeTimer: ReturnType<typeof setTimeout> | undefined
   closed: boolean
 }
@@ -85,7 +86,7 @@ interface Entry {
 interface EventFrame {
   readonly version: string
   readonly type: string
-  readonly id: string
+  readonly id: EventIdentity
   readonly entity: Record<string, unknown> | null
 }
 
@@ -103,10 +104,10 @@ function frameOf(plan: StreamPlan, data: unknown): EventFrame {
     throw new GolemProtocolError(`an event frame for ${plan.eventsRoot} carried no ${plan.eventsRoot} object`)
   }
   const { version, type, id, entity } = frame as Record<string, unknown>
-  if (typeof version !== 'string' || typeof type !== 'string' || typeof id !== 'string') {
+  if (typeof version !== 'string' || typeof type !== 'string' || !(typeof id === 'string' || (typeof id === 'object' && id !== null))) {
     throw new GolemProtocolError(`an event frame for ${plan.eventsRoot} lacks version, type or id`)
   }
-  return { version, type, id, entity: typeof entity === 'object' && entity !== null ? (entity as Record<string, unknown>) : null }
+  return { version, type, id: id as EventIdentity, entity: typeof entity === 'object' && entity !== null ? (entity as Record<string, unknown>) : null }
 }
 
 const SAME_STATUS = (left: LiveStatus, right: LiveStatus): boolean => left.state === right.state && left.error === right.error
@@ -114,7 +115,7 @@ const SAME_STATUS = (left: LiveStatus, right: LiveStatus): boolean => left.state
 export class LiveSync {
   private readonly client: QueryClient
   private readonly transport: LiveTransport
-  private readonly rows: RowStore
+  private readonly patcher: Patcher
   private readonly clock: () => number
   private readonly closeGraceMs: number
   private readonly windowMs: number
@@ -128,7 +129,7 @@ export class LiveSync {
   constructor(options: LiveSyncOptions) {
     this.client = options.queryClient
     this.transport = options.transport
-    this.rows = new RowStore(options.manifest)
+    this.patcher = new Patcher(options.manifest)
     this.clock = options.clock ?? (() => performance.now())
     this.closeGraceMs = options.closeGraceMs ?? CLOSE_GRACE_MS
     this.windowMs = options.windowMs ?? COALESCE_WINDOW_MS
@@ -231,6 +232,7 @@ export class LiveSync {
       bypass: false,
       everLive: false,
       failure: undefined,
+      notFound: undefined,
       closeTimer: undefined,
       closed: false,
     }
@@ -469,6 +471,9 @@ export class LiveSync {
     if (entry.streams.some((stream) => stream.phase === 'limit')) {
       return { state: 'LIMIT', error: undefined }
     }
+    if (entry.notFound !== undefined) {
+      return { state: 'NOT_FOUND', error: entry.notFound }
+    }
     if (entry.streams.every((stream) => stream.acked)) {
       return { state: 'LIVE', error: undefined }
     }
@@ -495,11 +500,11 @@ export class LiveSync {
   }
 
   private onEvent(entry: Entry, stream: StreamState, frame: EventFrame): void {
-    const key = this.rows.eventKey(stream.plan.model, frame.id, frame.entity)
+    const key = this.patcher.eventKey(stream.plan.model, frame.id, frame.entity)
     const version = parseVersion(frame.version)
     const receivedAt = this.clock()
     const data = entry.query.state.data
-    const held = this.rows.versions(data).get(key)
+    const held = this.patcher.versions(data).get(key)
     const recording = entry.inFlight > 0
     switch (frame.type) {
       case 'CREATED':
@@ -516,7 +521,11 @@ export class LiveSync {
         if (decision === 'invalidate') {
           entry.coalescer.request()
         } else if (decision === 'patch' && frame.entity !== null) {
-          this.write(entry, this.rows.patch(data, key, frame.entity))
+          const reorders = stream.plan.slot || stream.plan.rankedBy === 'any' || this.patcher.differs(data, key, frame.entity, stream.plan.rankedBy)
+          this.write(entry, this.patcher.patch(data, key, frame.entity))
+          if (reorders) {
+            entry.coalescer.request()
+          }
         }
         return
       }
@@ -527,12 +536,29 @@ export class LiveSync {
           entry.merge = outcome.state
         }
         if (outcome.remove) {
-          this.write(entry, this.rows.remove(data, new Set<RowKey>([key])))
+          const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots)
+          this.write(entry, removal.data)
+          if (removal.held.size > 0) {
+            this.markNotFound(entry, removal.held)
+            this.refetchNow(entry)
+          }
         }
         return
       }
       default:
         throw new GolemProtocolError(`an event frame carried the unknown type ${JSON.stringify(frame.type)}`)
+    }
+  }
+
+  private markNotFound(entry: Entry, keys: ReadonlySet<RowKey>): void {
+    entry.notFound = new GolemNotFoundError([...keys])
+    this.publish(entry)
+  }
+
+  private clearNotFound(entry: Entry): void {
+    if (entry.notFound !== undefined) {
+      entry.notFound = undefined
+      this.publish(entry)
     }
   }
 
@@ -590,6 +616,11 @@ export class LiveSync {
         return data
       }
       return this.reconcile(live, issuedAt, data)
+    } catch (error) {
+      if (live !== undefined && !context.signal.aborted) {
+        this.clearNotFound(live)
+      }
+      throw error
     } finally {
       if (live !== undefined) {
         live.inFlight--
@@ -601,11 +632,12 @@ export class LiveSync {
   }
 
   private reconcile(entry: Entry, issuedAt: number, fresh: unknown): unknown {
+    this.clearNotFound(entry)
     const cachedData = entry.query.state.data
     const resolution = resolveResponse(entry.merge, {
       issuedAt,
-      rows: this.rows.versions(fresh),
-      cached: this.rows.versions(cachedData),
+      rows: this.patcher.versions(fresh),
+      cached: this.patcher.versions(cachedData),
     })
     entry.merge = resolution.state
     const dropped = new Set<RowKey>()
@@ -619,10 +651,15 @@ export class LiveSync {
     }
     let next = fresh
     if (kept.size > 0) {
-      next = this.rows.adopt(next, this.rows.rows(cachedData), kept)
+      next = this.patcher.adopt(next, this.patcher.rows(cachedData), kept)
     }
     if (dropped.size > 0) {
-      next = this.rows.remove(next, dropped)
+      const removal = this.patcher.remove(next, dropped, entry.meta.analysis.nullableRoots)
+      next = removal.data
+      if (removal.held.size > 0) {
+        this.markNotFound(entry, removal.held)
+        entry.coalescer.request()
+      }
     }
     if (resolution.refetch) {
       entry.coalescer.request()
