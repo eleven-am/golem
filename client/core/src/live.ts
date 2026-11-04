@@ -5,6 +5,7 @@ import { GolemNotFoundError, GolemProtocolError, type GolemError } from './error
 import type { ClientManifest } from './manifest.js'
 import { applyRemoval, decideUpdate, EMPTY_MERGE_STATE, noteChange, parseVersion, resolveResponse, type MergeState } from './merge.js'
 import { backoffDelay } from './protocol.js'
+import { golemInfiniteQuery, lastPageOf, type Cursor, type PageSpec } from './pagination.js'
 import { Patcher, type EventIdentity, type RowKey } from './patcher.js'
 import type { StreamEnd, StreamHandlers, SubscriptionRequest } from './session.js'
 import type { ExecuteRequest } from './transport.js'
@@ -34,6 +35,7 @@ export interface LiveStatus {
 export interface GolemQueryMeta {
   readonly analysis: DocumentAnalysis
   readonly variables: Readonly<Record<string, unknown>>
+  readonly pagination?: PageSpec
 }
 
 export interface LiveTransport {
@@ -116,6 +118,7 @@ export class LiveSync {
   private readonly client: QueryClient
   private readonly transport: LiveTransport
   private readonly patcher: Patcher
+  private readonly manifest: ClientManifest
   private readonly clock: () => number
   private readonly closeGraceMs: number
   private readonly windowMs: number
@@ -129,6 +132,7 @@ export class LiveSync {
   constructor(options: LiveSyncOptions) {
     this.client = options.queryClient
     this.transport = options.transport
+    this.manifest = options.manifest
     this.patcher = new Patcher(options.manifest)
     this.clock = options.clock ?? (() => performance.now())
     this.closeGraceMs = options.closeGraceMs ?? CLOSE_GRACE_MS
@@ -166,6 +170,19 @@ export class LiveSync {
     return {
       queryKey: ['golem', analysis.query, variables] as const,
       queryFn: (context: QueryFunctionContext) => this.fetch(context, meta),
+      meta: { golem: meta },
+    }
+  }
+
+  infiniteOptions(analysis: DocumentAnalysis, variables: Readonly<Record<string, unknown>> = {}) {
+    assertLive(analysis)
+    const plan = golemInfiniteQuery(analysis, variables, this.manifest)
+    const meta: GolemQueryMeta = { analysis, variables, pagination: plan.spec }
+    return {
+      queryKey: ['golem', analysis.query, variables, 'infinite'] as const,
+      queryFn: (context: QueryFunctionContext<readonly unknown[], Cursor | null>) => this.fetch(context, meta, plan.requestFor(context.pageParam)),
+      initialPageParam: plan.initialPageParam,
+      getNextPageParam: (lastPage: unknown) => plan.getNextPageParam(lastPage),
       meta: { golem: meta },
     }
   }
@@ -538,6 +555,9 @@ export class LiveSync {
         if (outcome.remove) {
           const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots)
           this.write(entry, removal.data)
+          if (entry.meta.pagination !== undefined && lastPageOf(removal.data) !== lastPageOf(data)) {
+            entry.coalescer.request()
+          }
           if (removal.held.size > 0) {
             this.markNotFound(entry, removal.held)
             this.refetchNow(entry)
@@ -599,7 +619,7 @@ export class LiveSync {
     })
   }
 
-  private async fetch(context: QueryFunctionContext, meta: GolemQueryMeta): Promise<unknown> {
+  private async fetch(context: Pick<QueryFunctionContext, 'queryKey' | 'signal'>, meta: GolemQueryMeta, request: Pick<ExecuteRequest, 'query' | 'variables'> = { query: meta.analysis.query, variables: meta.variables }): Promise<unknown> {
     const query = this.client.getQueryCache().find({ queryKey: context.queryKey, exact: true })
     const entry = query === undefined ? undefined : this.entries.get(query.queryHash)
     if (entry !== undefined) {
@@ -611,7 +631,7 @@ export class LiveSync {
       live.inFlight++
     }
     try {
-      const data = await this.transport.execute({ query: meta.analysis.query, variables: meta.variables, signal: context.signal })
+      const data = await this.transport.execute({ ...request, signal: context.signal })
       if (live === undefined || live.closed || context.signal.aborted) {
         return data
       }
@@ -656,6 +676,9 @@ export class LiveSync {
     if (dropped.size > 0) {
       const removal = this.patcher.remove(next, dropped, entry.meta.analysis.nullableRoots)
       next = removal.data
+      if (entry.meta.pagination !== undefined) {
+        entry.coalescer.request()
+      }
       if (removal.held.size > 0) {
         this.markNotFound(entry, removal.held)
         entry.coalescer.request()
