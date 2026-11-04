@@ -535,7 +535,7 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, walk) }
 }
 
-function operationOf(document: DocumentNode, operationName: string | undefined, kind: OperationTypeNode): OperationDefinitionNode {
+export function operationOf(document: DocumentNode, operationName: string | undefined, kind: OperationTypeNode): OperationDefinitionNode {
   const operations = document.definitions.filter((definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION)
   const operation = operationName === undefined ? (operations.length === 1 ? operations[0] : undefined) : operations.find((candidate) => candidate.name?.value === operationName)
   if (operation === undefined) {
