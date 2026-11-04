@@ -193,3 +193,34 @@ func TestTransportCapabilitiesNameTheFieldWithoutEchoingTheIdentity(t *testing.T
 		t.Fatalf("scope error %q does not name the valid scopes", err)
 	}
 }
+
+func TestFailureWithReasonCarriesTheReasonWithoutChangingClassification(t *testing.T) {
+	bare := Failure(CodeSubscriptionResync)
+	reasoned := FailureWithReason(CodeSubscriptionResync, ReasonDependencyChanged, "")
+	if want := string(CodeSubscriptionResync) + " " + string(ReasonDependencyChanged); reasoned.Error() != want {
+		t.Fatalf("reasoned failure = %q want %q", reasoned.Error(), want)
+	}
+	if !errors.Is(reasoned, bare) || !errors.Is(bare, reasoned) {
+		t.Fatal("the reason broke code-only identity")
+	}
+	named := FailureWithReason(CodeSubscriptionInvalid, ReasonDependencyUnobservable, "Tag")
+	if want := string(CodeSubscriptionInvalid) + " " + string(ReasonDependencyUnobservable) + ": Tag"; named.Error() != want {
+		t.Fatalf("named failure = %q want %q", named.Error(), want)
+	}
+	var typed *Error
+	if !errors.As(fmt.Errorf("wrapped: %w", named), &typed) || typed.Reason() != ReasonDependencyUnobservable || typed.Detail() != "Tag" {
+		t.Fatalf("typed reason or detail lost: %+v", typed)
+	}
+	if reason, ok := ReasonOf(fmt.Errorf("wrapped: %w", reasoned)); !ok || reason != ReasonDependencyChanged {
+		t.Fatalf("ReasonOf(wrapped) = %q ok=%t", reason, ok)
+	}
+	for name, err := range map[string]error{"nil": nil, "plain": errors.New("plain"), "no reason": bare, "nil typed": (*Error)(nil)} {
+		if reason, ok := ReasonOf(err); ok || reason != "" {
+			t.Fatalf("%s: ReasonOf = %q ok=%t", name, reason, ok)
+		}
+	}
+	var absent *Error
+	if absent.Reason() != "" || absent.Detail() != "" {
+		t.Fatal("a nil error carried a reason or detail")
+	}
+}

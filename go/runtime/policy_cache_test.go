@@ -123,7 +123,7 @@ func TestPolicyCacheFailedPolicyBuildEndsEventStreamsWithRevalidation(t *testing
 		t.Fatal(err)
 	}
 	fixture.app.bindings = bindings
-	fixture.app.InvalidatePolicies()
+	fixture.app.policyCache.invalidate()
 	fixture.publish(t, fixture.notice(t, golem.EventUpdated, 2300, "visible", false))
 	expectStreamEnds(t, stream, events.CodeSubscriptionRevalidation)
 }

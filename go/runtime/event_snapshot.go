@@ -19,6 +19,11 @@ import (
 type eventJudgeSpec struct {
 	row    policyir.Condition
 	filter *policyir.Condition
+	watch  []golem.FieldID
+}
+
+type eventJudged interface {
+	judgeSpec() *eventJudgeSpec
 }
 
 type eventNoticeShared struct {
@@ -42,20 +47,28 @@ func (spec eventJudgeSpec) conditions() []policyir.Condition {
 	return []policyir.Condition{spec.row, *spec.filter}
 }
 
-func (app *App[P, A]) newEventJudgeSpec(initial *Caller[P, A], model golem.ModelID, metadata golem.EventModelMetadata, where *policyir.Condition) *eventJudgeSpec {
+func (app *App[P, A]) newEventJudgeSpec(initial *Caller[P, A], model golem.ModelID, metadata golem.EventModelMetadata, where *policyir.Condition, watch ...golem.FieldID) *eventJudgeSpec {
 	row, filter, err := readplan.CallerReach(initial.policies, policyir.ModelID(model), where, app.readLimits.plan.MaxRelationDepth)
 	if err != nil {
 		return nil
 	}
-	spec := &eventJudgeSpec{row: row, filter: filter}
+	spec := &eventJudgeSpec{row: row, filter: filter, watch: watch}
 	tree, err := eventDependencyTree(spec)
 	if err != nil {
 		return nil
 	}
-	if _, err := app.eventSnapshotPlan(model, metadata, tree); err != nil {
+	if _, err := app.eventSnapshotPlan(model, metadata, tree, watch); err != nil {
 		return nil
 	}
 	return spec
+}
+
+func eventWatchFields(specs []*eventJudgeSpec) []golem.FieldID {
+	var watch []golem.FieldID
+	for _, spec := range specs {
+		watch = append(watch, spec.watch...)
+	}
+	return watch
 }
 
 func eventDependencyTree(specs ...*eventJudgeSpec) (dependency.Tree, error) {
@@ -70,14 +83,20 @@ func eventDependencyTree(specs ...*eventJudgeSpec) (dependency.Tree, error) {
 	return collected.Dependencies(), nil
 }
 
-func (app *App[P, A]) eventSnapshotPlan(model golem.ModelID, metadata golem.EventModelMetadata, tree dependency.Tree) (readplan.Plan, error) {
-	selection := make([]readir.Selection, len(metadata.IdentityFields()))
-	for index, field := range metadata.IdentityFields() {
+func (app *App[P, A]) eventSnapshotPlan(model golem.ModelID, metadata golem.EventModelMetadata, tree dependency.Tree, watch []golem.FieldID) (readplan.Plan, error) {
+	selected := append(append([]golem.FieldID(nil), metadata.IdentityFields()...), watch...)
+	selection := make([]readir.Selection, 0, len(selected))
+	seen := make(map[golem.FieldID]struct{}, len(selected))
+	for _, field := range selected {
+		if _, duplicate := seen[field]; duplicate {
+			continue
+		}
+		seen[field] = struct{}{}
 		scalar, err := readir.NewScalarSelection(policyir.FieldID(field))
 		if err != nil {
 			return readplan.Plan{}, err
 		}
-		selection[index] = scalar
+		selection = append(selection, scalar)
 	}
 	request, err := readir.NewRequest(readir.RequestInput{
 		Operation: readir.FindMany, Model: policyir.ModelID(model), Selection: selection, Projection: readir.ProjectionSelect,
@@ -101,8 +120,8 @@ func (app *App[P, A]) prepareEventNotice(ctx context.Context, notice events.Noti
 	}
 	specs := make([]*eventJudgeSpec, 0, len(retained))
 	for _, item := range retained {
-		if state, ok := item.(*callerEventSubscription[P]); ok && state != nil && state.judge != nil {
-			specs = append(specs, state.judge)
+		if judged, ok := item.(eventJudged); ok && judged.judgeSpec() != nil {
+			specs = append(specs, judged.judgeSpec())
 		}
 	}
 	if len(specs) == 0 {
@@ -137,7 +156,7 @@ func (app *App[P, A]) eventSnapshotUnionPlan(metadata golem.EventModelMetadata, 
 	if err != nil {
 		return readplan.Plan{}, err
 	}
-	planned, err := app.eventSnapshotPlan(metadata.ModelID(), metadata, tree)
+	planned, err := app.eventSnapshotPlan(metadata.ModelID(), metadata, tree, eventWatchFields(specs))
 	if err != nil {
 		return readplan.Plan{}, err
 	}

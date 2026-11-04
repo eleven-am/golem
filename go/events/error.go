@@ -30,8 +30,16 @@ const (
 	CodeSubscriptionResync ErrorCode = "GOLEM_SUBSCRIPTION_RESYNC"
 )
 
+type Reason string
+
+const (
+	ReasonDependencyChanged      Reason = "DEPENDENCY_CHANGED"
+	ReasonDependencyUnobservable Reason = "DEPENDENCY_UNOBSERVABLE"
+)
+
 type Error struct {
 	code   ErrorCode
+	reason Reason
 	detail string
 	cause  error
 }
@@ -41,6 +49,9 @@ func (failure *Error) Error() string {
 		return ""
 	}
 	message := string(failure.code)
+	if failure.reason != "" {
+		message += " " + string(failure.reason)
+	}
 	if failure.detail != "" {
 		message += ": " + failure.detail
 	}
@@ -55,6 +66,18 @@ func (failure *Error) Code() ErrorCode {
 	}
 	return failure.code
 }
+func (failure *Error) Reason() Reason {
+	if failure == nil {
+		return ""
+	}
+	return failure.reason
+}
+func (failure *Error) Detail() string {
+	if failure == nil {
+		return ""
+	}
+	return failure.detail
+}
 func (failure *Error) Is(target error) bool {
 	other, ok := target.(*Error)
 	return ok && failure != nil && other != nil && failure.code == other.code
@@ -68,6 +91,18 @@ func (failure *Error) Unwrap() error {
 }
 
 func Failure(code ErrorCode) error { return &Error{code: code} }
+
+func FailureWithReason(code ErrorCode, reason Reason, detail string) error {
+	return &Error{code: code, reason: reason, detail: detail}
+}
+
+func ReasonOf(err error) (Reason, bool) {
+	var failure *Error
+	if !errors.As(err, &failure) || failure == nil || failure.reason == "" {
+		return "", false
+	}
+	return failure.reason, true
+}
 
 func Cancelled(cause error) error {
 	return &Error{code: CodeSubscriptionCancelled, cause: cause}

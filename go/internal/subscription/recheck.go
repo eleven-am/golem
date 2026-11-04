@@ -27,10 +27,26 @@ func (stream *Stream[T]) Recheck(interval time.Duration, check func(context.Cont
 }
 
 func (stream *Stream[T]) Terminate(code events.ErrorCode) {
+	stream.End(events.Failure(code))
+}
+
+func (stream *Stream[T]) End(failure error) {
 	if stream == nil || stream.hub == nil {
 		return
 	}
-	stream.closeWith(events.Failure(code))
+	stream.closeWith(failure)
+}
+
+func (hub *ModelHub[T]) EndAll(failure error) {
+	hub.mu.Lock()
+	cleanups := make([]func(), 0, len(hub.members))
+	for _, item := range hub.members {
+		cleanups = append(cleanups, hub.removeLocked(item, failure))
+	}
+	hub.mu.Unlock()
+	for _, cleanup := range cleanups {
+		runCleanup(cleanup)
+	}
 }
 
 func (hub *ModelHub[T]) recheckLoop(ctx context.Context, stream *Stream[T], interval time.Duration, check func(context.Context) error) {

@@ -36,11 +36,11 @@ func TestPrepareNoticeRunsOncePerNoticeWithEveryRetainedStateAndSharesItsResult(
 		t.Fatal(err)
 	}
 	firstState, secondState := &struct{ n int }{1}, &struct{ n int }{2}
-	first, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), firstState, func(any) {})
+	first, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), firstState, func(any, error) {})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "two", false), secondState, func(any) {})
+	second, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "two", false), secondState, func(any, error) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestPrepareNoticePanicLeavesSharedNilAndDoesNotEndTheHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), &struct{}{}, func(any) {})
+	stream, err := hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), &struct{}{}, func(any, error) {})
 	if err != nil {
 		t.Fatal(err)
 	}

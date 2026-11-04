@@ -77,8 +77,10 @@ events.(*Capabilities).SubscriptionModelIDs func() []golem.ModelID
 events.(*Capabilities).Transport func() TransportCapabilities
 events.(*Capabilities).TransportAvailable func() bool
 events.(*Error).Code func() ErrorCode
+events.(*Error).Detail func() string
 events.(*Error).Error func() string
 events.(*Error).Is func(error) bool
+events.(*Error).Reason func() Reason
 events.(*Error).Unwrap func() error
 events.(*Limits).RetentionEnabled func() bool
 events.(*Observation).Action func() golem.EventAction
@@ -219,6 +221,7 @@ events.EventTransport.Publish func(context.Context, internal/event/value.EventBa
 events.EventTransport.Subscribe func(context.Context, internal/event/value.Subscription) (Stream, error)
 events.Failf func(ErrorCode, string, ...any) error
 events.Failure func(ErrorCode) error
+events.FailureWithReason func(ErrorCode, Reason, string) error
 events.Limits comparable
 events.Limits type struct
 events.Limits unkeyed literal {ClaimRows, PublisherConcurrency, LeaseDuration, PublishTimeout, RetryBase, RetryCap, MaxEncodedEventBytes, MaxEncodedBatchBytes, SubscriberQueue, HubInputQueue, EvaluationConcurrency, MaxSubscriptionsPerConnection, ConnectionInitBytes, ConnectionInitTimeout, KeepAlive, WebSocketKeepAlive, WebSocketPongTimeout, ShutdownGrace, RetentionDeleteRows, RetentionAge, RetentionEvery, RequireExclusiveProcessLocalPublisher, RevalidateEvery, MaxSubscriptionsPerPrincipal}
@@ -321,6 +324,11 @@ events.OutcomeSuppressed const Outcome = "suppressed"
 events.PayloadLimitOf func(EventTransport) (int, bool)
 events.PayloadLimitReporter type interface {MaxEncodedEventBytes}
 events.PayloadLimitReporter.MaxEncodedEventBytes func() int
+events.Reason comparable
+events.Reason type string
+events.ReasonDependencyChanged const Reason = "DEPENDENCY_CHANGED"
+events.ReasonDependencyUnobservable const Reason = "DEPENDENCY_UNOBSERVABLE"
+events.ReasonOf func(error) (Reason, bool)
 events.ReportOperatorAudit func(OperatorAudit, context.Context, OperatorAuditRecord)
 events.RetentionDisabled const time.Duration = -1
 events.RetentionPolicy comparable

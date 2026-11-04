@@ -254,10 +254,8 @@ func (app *App[P, A]) newDeleteEvaluator(model policyir.ModelID, fact mutationfa
 		checks:     make(map[string]*deleteFactCheck),
 	}
 	var snapshot *mutationdecode.Row
-	if fact.DeleteSnapshotState() == mutationir.DeleteSnapshotStoredScalars {
-		if row, present := fact.PrivateDeleteSnapshot(); present && row.ModelID() == model && app.deleteSnapshotDeclared(row) {
-			snapshot = &row
-		}
+	if row, present := app.eventBeforeImage(model, fact); present {
+		snapshot = &row
 	}
 	return newDeleteNode(shared, model, snapshot, identity, 0)
 }

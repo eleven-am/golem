@@ -99,7 +99,7 @@ func TestStatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing.T
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := hub.SubscribeWithState(ctx, testKey(t, "p", "v", "f", "s", "d", "e", "member", false), state, func(retained any) {
+	stream, err := hub.SubscribeWithState(ctx, testKey(t, "p", "v", "f", "s", "d", "e", "member", false), state, func(retained any, _ error) {
 		if retained != state {
 			t.Errorf("dropped state = %p, want %p", retained, state)
 		}
@@ -222,7 +222,7 @@ func TestStateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) 
 	}
 	entered, release, reentered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var first *Stream[golem.EventID]
-	first, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), struct{}{}, func(any) {
+	first, err = hub.SubscribeWithState(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "one", false), struct{}{}, func(any, error) {
 		close(entered)
 		<-release
 		_ = first.Close()

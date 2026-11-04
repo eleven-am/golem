@@ -654,7 +654,9 @@ Code that breaks the contract is frozen at its first result for that actor.
   are evicted first.
 - **Invalidation.** `application.InvalidatePolicies()` drops every cached set.
   Call it when something a policy legitimately depends on changes outside the
-  actor, such as a deploy-time feature flag.
+  actor, such as a deploy-time feature flag. It also ends every open event
+  stream with `GOLEM_SUBSCRIPTION_RESYNC`, so clients reopen them under the new
+  policies.
 - **Failures.** A model whose policy cannot be built for an actor, because its
   `DefinePolicy` declares something invalid or panics, affects only that
   model. `ForPrincipal` still succeeds and other models work. Calls that need
@@ -1562,6 +1564,47 @@ resolution: the judgement runs in memory over the shared read and the before
 snapshot. Only a subscriber that may have held the row resolves its principal
 afresh and runs the delete path's checks.
 
+### A stream that reads another model
+
+A stream's read rule or `where` can reach another model: `Comments.Post.Is(...)`
+in a filter, or a rule such as "readable when the post is published". When access
+to that other model changes, rows the stream already told the client about may
+stop qualifying, and no event for the stream's own model says so. golem ends the
+stream instead of leaving stale rows visible.
+
+- **What ends it.** The stream watches each model its rule or filter reaches, and
+  the target's own read rule is part of that reach. A change to a row of that
+  model ends the stream with `GOLEM_SUBSCRIPTION_RESYNC` and reason
+  `DEPENDENCY_CHANGED` (`events.ReasonOf`; over GraphQL `extensions.reason`) when
+  both hold: the update changed a field the stream's rule or filter reads, and
+  the subscriber could read that row before the change or can read it now. The
+  client reloads what it holds and subscribes again; a reload after the end
+  shows the revoked row gone.
+- **What does not.** An update that changes only fields the stream does not read
+  is ignored. So is a change to a row the subscriber could read neither before
+  nor after, because an unreadable row is indistinguishable from a missing one.
+  A row that is created or deleted ends the stream only when the stream reaches
+  that model through a to-many relation; for a to-one relation the child rows
+  that referenced it have their own events. An update whose before-image was not
+  kept (an oversize snapshot, or a change-data-capture update without a
+  before-image) cannot be narrowed and ends the stream when the subscriber can
+  read the row. The stream's own model is not watched this way.
+- **Every model it reaches needs `Subscriptions`.** A stream whose rule or filter
+  reaches a model without `golem.Subscriptions` is refused when it is opened with
+  `GOLEM_SUBSCRIPTION_INVALID` and reason `DEPENDENCY_UNOBSERVABLE`; the message
+  names the model. Add `Subscriptions` to that model or change the rule.
+- **Cost.** One internal member per model reached sits on that model's hub with
+  no output of its own. Each event of that model costs one judgement per such
+  member and shares the one snapshot read of the event (see [Who receives a
+  created or updated event](#who-receives-a-created-or-updated-event)).
+- **If it cannot be watched.** A source that fails or a read that fails ends the
+  stream with the code that failure carries (`RESYNC`, `SOURCE_CLOSED` or
+  `REVALIDATION`) rather than leaving it open and unwatched.
+- **`InvalidatePolicies`.** `application.InvalidatePolicies()` drops the policy
+  cache and ends every open event stream with `GOLEM_SUBSCRIPTION_RESYNC` and no
+  reason. A client reopens its streams and so picks up the new policies; this is
+  also how access that broadened reaches a stream.
+
 ### Row versions
 
 Every model with `Subscriptions` has a golem-owned version on each row. A write
@@ -1730,7 +1773,7 @@ code:
 | Code | Why | What the client does |
 |---|---|---|
 | `GOLEM_SUBSCRIPTION_CANCELLED` | you called `Close`, or the context passed to subscribe ended | nothing |
-| `GOLEM_SUBSCRIPTION_RESYNC` | events may have been missed: the transport dropped, or a delete or an exit could not be judged | reload the state you hold, then subscribe again |
+| `GOLEM_SUBSCRIPTION_RESYNC` | events may have been missed (the transport dropped, or a delete or an exit could not be judged), `InvalidatePolicies()` was called, or access to a model the stream reads changed (reason `DEPENDENCY_CHANGED`, see [A stream that reads another model](#a-stream-that-reads-another-model)) | reload the state you hold, then subscribe again |
 | `GOLEM_SUBSCRIPTION_OVERFLOW` | the subscriber fell behind and its queue (`EventLimits.SubscriberQueue`) filled | reload and subscribe again; read faster or raise the queue |
 | `GOLEM_SUBSCRIPTION_REVALIDATION` | the principal no longer resolves, or authorization could not be checked | re-authenticate, then subscribe again |
 | `GOLEM_SUBSCRIPTION_FORBIDDEN` | a re-check found the caller may no longer read this stream | stop; do not resubscribe with the same principal |
@@ -1738,7 +1781,8 @@ code:
 | `GOLEM_SUBSCRIPTION_SOURCE_CLOSED` | the server is shutting down, the event source failed, or an event did not match this application's event schema, such as one recorded by an older version | reconnect with backoff, reload, subscribe again |
 
 `GOLEM_SUBSCRIPTION_INVALID` refuses a malformed subscription when it is
-opened.
+opened. With reason `DEPENDENCY_UNOBSERVABLE` it refuses a stream whose rule or
+filter reaches a model that has no `Subscriptions`.
 
 A deadline or cancellation on the context passed to one `Recv` call does not
 end the stream. That `Recv` returns an error that wraps the context's error,

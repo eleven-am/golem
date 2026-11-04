@@ -245,20 +245,31 @@ func callerFrozenReadEvents[P, A, E any](ctx context.Context, caller *Caller[P, 
 		originalWhere: originalWhere, metadata: metadata, entitySelected: entitySelected,
 		judge: caller.app.newEventJudgeSpec(initial, model, metadata, originalWhere),
 	}
+	dependents, err := caller.app.openEventDependencies(ctx, initial, state)
+	if err != nil {
+		return nil, err
+	}
 	release, err := caller.app.reserveSubscription(principal)
 	if err != nil {
+		dependents.closeAll()
 		return nil, err
 	}
 	hub, err := caller.app.eventHub(model)
 	if err != nil {
 		release()
+		dependents.closeAll()
 		return nil, err
 	}
-	stream, err := hub.SubscribeWithState(ctx, key, state, func(any) { release() })
+	stream, err := hub.SubscribeWithState(ctx, key, state, func(any, error) {
+		release()
+		dependents.closeAll()
+	})
 	if err != nil {
 		release()
+		dependents.closeAll()
 		return nil, err
 	}
+	dependents.attach(stream)
 	caller.app.startEventRecheck(stream, state, recheck)
 	caller.app.reportSubscriberWithoutPublisher(ctx)
 	return &callerEventStream[E]{stream: stream}, nil
@@ -443,6 +454,9 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 			return app.prepareEventNotice(ctx, notice, metadata, retained)
 		},
 		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any, shared any) (subscription.Evaluation[any], error) {
+			if member, isDependency := retained.(*eventDependencyMember); isDependency && member != nil {
+				return app.evaluateDependency(member, shared)
+			}
 			state, ok := retained.(*callerEventSubscription[P])
 			if !ok || state == nil {
 				return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
@@ -915,4 +929,16 @@ func validateImmutablePrincipal(value reflect.Value, path string) error {
 		}
 		return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has unsupported kind %s; configure SnapshotPrincipal", path, kind)
 	})
+}
+
+func (app *App[P, A]) endEventStreams(failure error) {
+	app.eventMu.Lock()
+	hubs := make([]*subscription.ModelHub[any], 0, len(app.eventHubs))
+	for _, hub := range app.eventHubs {
+		hubs = append(hubs, hub)
+	}
+	app.eventMu.Unlock()
+	for _, hub := range hubs {
+		hub.EndAll(failure)
+	}
 }
