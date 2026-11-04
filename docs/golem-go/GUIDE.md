@@ -1928,7 +1928,16 @@ It exports `golemClientManifest` (`as const`) and its type
   semantic and full-text roots. `models` means "the models whose changes this
   root's result depends on": the owning model for a generated root (aggregate,
   groupBy and the many-row mutations included), and for an opaque root the
-  models whose rows the result holds, possibly none.
+  models whose rows the result holds, possibly none. `shape` is the result
+  shape the client patches the root with:
+  - `rows`: a list of model rows (`findMany`, and a custom root returning a list
+    of a model);
+  - `row`: one model row (`findOne`, `create`, `update`, `upsert`, `delete`, and
+    a custom root returning one model);
+  - `aggregate`: the `aggregate` root's result;
+  - `groupBy`: the `groupBy` and `relationGroupBy` roots' result;
+  - `updateMany` and `deleteMany`: the many-row mutations' counts;
+  - `value`: a custom root whose result is neither a model nor a list of one.
 
 The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 

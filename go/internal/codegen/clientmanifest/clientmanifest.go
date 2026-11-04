@@ -17,6 +17,14 @@ const (
 
 	RootGenerated = "generated"
 	RootOpaque    = "opaque"
+
+	ShapeRows       = "rows"
+	ShapeRow        = "row"
+	ShapeAggregate  = "aggregate"
+	ShapeGroupBy    = "groupBy"
+	ShapeUpdateMany = "updateMany"
+	ShapeDeleteMany = "deleteMany"
+	ShapeValue      = "value"
 )
 
 type Manifest struct {
@@ -42,6 +50,12 @@ type Relation struct {
 type Root struct {
 	Kind   string   `json:"kind"`
 	Models []string `json:"models"`
+	Shape  string   `json:"shape"`
+}
+
+type generatedRoot struct {
+	owner string
+	shape string
 }
 
 func Emit(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) ([]byte, error) {
@@ -73,7 +87,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 		contracts[value.ModelID] = value
 	}
 	result := Manifest{Contract: string(contract), Models: map[string]Model{}, Roots: map[string]Root{}}
-	generatedRoots := map[string]string{}
+	generatedRoots := map[string]generatedRoot{}
 	for _, modelContract := range compilation.Contract.Models {
 		if !modelContract.Exposed {
 			continue
@@ -87,13 +101,13 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 			return Manifest{}, err
 		}
 		result.Models[modelContract.GraphQLName] = entry
-		for _, name := range generatedRootNames(modelContract.Roots) {
-			generatedRoots[name] = modelContract.GraphQLName
+		for name, shape := range generatedRootShapes(modelContract.Roots) {
+			generatedRoots[name] = generatedRoot{owner: modelContract.GraphQLName, shape: shape}
 		}
 	}
-	opaqueRoots := map[string][]string{}
+	opaqueRoots := map[string]Root{}
 	for _, operation := range compilation.Contract.CustomOperations {
-		opaqueRoots[operation.Name] = resultModels(operation.Result)
+		opaqueRoots[operation.Name] = Root{Kind: RootOpaque, Models: resultModels(operation.Result), Shape: resultShape(operation.Result)}
 	}
 	roots, err := sdlRoots(sdl)
 	if err != nil {
@@ -101,11 +115,11 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 	}
 	for _, name := range roots {
 		if held, ok := opaqueRoots[name]; ok {
-			result.Roots[name] = Root{Kind: RootOpaque, Models: held}
+			result.Roots[name] = held
 			continue
 		}
 		if owner, ok := generatedRoots[name]; ok {
-			result.Roots[name] = Root{Kind: RootGenerated, Models: []string{owner}}
+			result.Roots[name] = Root{Kind: RootGenerated, Models: []string{owner.owner}, Shape: owner.shape}
 			continue
 		}
 		return Manifest{}, fmt.Errorf("client manifest: schema root %q is neither generated nor custom", name)
@@ -190,14 +204,37 @@ func visibleFieldName(contract ir.ModelContractIR, id *ir.FieldID) *string {
 	return nil
 }
 
-func generatedRootNames(roots ir.GraphQLRootNamesIR) []string {
-	var result []string
-	for _, name := range []string{roots.FindOne, roots.FindMany, roots.Create, roots.Update, roots.Upsert, roots.Delete, roots.UpdateMany, roots.DeleteMany, roots.Aggregate, roots.GroupBy, roots.RelationGroupBy} {
-		if name != "" {
-			result = append(result, name)
+func generatedRootShapes(roots ir.GraphQLRootNamesIR) map[string]string {
+	named := []struct{ name, shape string }{
+		{roots.FindOne, ShapeRow},
+		{roots.FindMany, ShapeRows},
+		{roots.Create, ShapeRow},
+		{roots.Update, ShapeRow},
+		{roots.Upsert, ShapeRow},
+		{roots.Delete, ShapeRow},
+		{roots.UpdateMany, ShapeUpdateMany},
+		{roots.DeleteMany, ShapeDeleteMany},
+		{roots.Aggregate, ShapeAggregate},
+		{roots.GroupBy, ShapeGroupBy},
+		{roots.RelationGroupBy, ShapeGroupBy},
+	}
+	result := map[string]string{}
+	for _, entry := range named {
+		if entry.name != "" {
+			result[entry.name] = entry.shape
 		}
 	}
 	return result
+}
+
+func resultShape(value ir.GraphQLTypeIR) string {
+	switch {
+	case value.Kind == ir.GraphQLTypeModel:
+		return ShapeRow
+	case value.Kind == ir.GraphQLTypeList && value.Element != nil && value.Element.Kind == ir.GraphQLTypeModel:
+		return ShapeRows
+	}
+	return ShapeValue
 }
 
 func resultModels(value ir.GraphQLTypeIR) []string {

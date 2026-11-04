@@ -52,201 +52,236 @@ export const golemClientManifest = {
   "roots": {
     "acceptInvite": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "cappedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "rows"
     },
     "createInvite": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "createTeam": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteInvite": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "deleteManyInvites": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteManyTeams": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "deleteMany"
     },
     "deleteTeam": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     },
     "firstInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "groupedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "value"
     },
     "invite": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "inviteMember": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "invites": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "rows"
     },
     "nestedTeamInvite": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "renewInvite": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "requiredInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "reviewInvite": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "searchInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "rows"
     },
     "searchTeams": {
       "kind": "opaque",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "rows"
     },
     "submitBlank": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "submitCappedInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "rows"
     },
     "submitInvite": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "submitInviteMaybe": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "submitInvites": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "rows"
     },
     "submitNested": {
       "kind": "opaque",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "submitTeam": {
       "kind": "opaque",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     },
     "team": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     },
     "teams": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "rows"
     },
     "transactionalInvite": {
       "kind": "opaque",
-      "models": []
+      "models": [],
+      "shape": "value"
     },
     "updateInvite": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "updateManyInvites": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateManyTeams": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "updateMany"
     },
     "updateTeam": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertInvite": {
       "kind": "generated",
       "models": [
         "Invite"
-      ]
+      ],
+      "shape": "row"
     },
     "upsertTeam": {
       "kind": "generated",
       "models": [
         "Team"
-      ]
+      ],
+      "shape": "row"
     }
   }
 } as const;
