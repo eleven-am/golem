@@ -5,7 +5,7 @@ import { GolemNotFoundError, GolemProtocolError, type GolemError } from './error
 import type { ClientManifest } from './manifest.js'
 import { applyRemoval, decideUpdate, EMPTY_MERGE_STATE, noteChange, parseVersion, resolveResponse, type MergeState } from './merge.js'
 import { backoffDelay } from './protocol.js'
-import { golemInfiniteQuery, lastPageOf, type Cursor, type PageSpec } from './pagination.js'
+import { golemInfiniteQuery, type Cursor, type PageSpec } from './pagination.js'
 import { Patcher, type EventIdentity, type RowKey } from './patcher.js'
 import type { StreamEnd, StreamHandlers, SubscriptionRequest } from './session.js'
 import type { ExecuteRequest } from './transport.js'
@@ -560,7 +560,7 @@ export class LiveSync {
         if (outcome.remove) {
           const removal = this.patcher.remove(data, new Set<RowKey>([key]), entry.meta.analysis.nullableRoots, frame.type === 'EXITED' ? within : undefined)
           this.write(entry, removal.data)
-          if (entry.meta.pagination !== undefined && lastPageOf(removal.data) !== lastPageOf(data)) {
+          if (removal.listed) {
             entry.coalescer.request()
           }
           if (removal.held.size > 0) {
@@ -672,22 +672,25 @@ export class LiveSync {
     })
     entry.merge = resolution.state
     const dropped = new Set<RowKey>()
-    const kept = new Set<RowKey>()
+    let stale = false
     for (const [key, decision] of resolution.rows) {
       if (decision === 'drop') {
         dropped.add(key)
       } else if (decision === 'keep-cached') {
-        kept.add(key)
+        stale = true
+      }
+    }
+    if (stale) {
+      entry.coalescer.request()
+      if (entry.meta.pagination === undefined) {
+        return cachedData
       }
     }
     let next = fresh
-    if (kept.size > 0) {
-      next = this.patcher.adopt(next, this.patcher.rows(cachedData), kept)
-    }
     if (dropped.size > 0) {
       const removal = this.patcher.remove(next, dropped, entry.meta.analysis.nullableRoots)
       next = removal.data
-      if (entry.meta.pagination !== undefined) {
+      if (removal.listed) {
         entry.coalescer.request()
       }
       if (removal.held.size > 0) {

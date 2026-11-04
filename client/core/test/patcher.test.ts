@@ -68,22 +68,6 @@ describe('Patcher rewriting', () => {
     expect(eviction.held.size).toBe(0)
     expect(store.remove(data, new Set(['Post:none']), new Set(['single'])).data).toBe(data)
   })
-
-  it('adopts cached scalars into a fresh row but never touches its relations', () => {
-    const cached = post('a', 'newer', '5', { comments: [comment('c', 'cached child', '5')] })
-    const fresh = post('a', 'older', '2', { comments: [comment('c', 'fresh child', '6'), comment('d', 'extra', '1')] })
-    const next = store.adopt({ post: fresh }, store.rows({ post: cached }), new Set(['Post:a'])) as { post: typeof fresh }
-    expect(next.post.title).toBe('newer')
-    expect(next.post._version).toBe('5')
-    expect(next.post.comments).toBe(fresh.comments)
-  })
-
-  it('also keeps an aliased relation, recognised by the rows it holds', () => {
-    const cached = post('a', 'newer', '5', { discussion: [comment('c', 'cached child', '5')] })
-    const fresh = post('a', 'older', '2', { discussion: [comment('c', 'fresh child', '6')] })
-    const next = store.adopt({ post: fresh }, store.rows({ post: cached }), new Set(['Post:a'])) as { post: typeof fresh }
-    expect(next.post.discussion).toBe(fresh.discussion)
-  })
 })
 
 describe('Patcher single slots', () => {

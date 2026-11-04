@@ -13,6 +13,7 @@ type Rewritten = unknown | typeof REMOVED
 interface Slots {
   readonly nullableRoots: ReadonlySet<string>
   readonly held: Set<RowKey>
+  listed: boolean
 }
 
 function isPlainObject(value: unknown): value is Row {
@@ -28,6 +29,7 @@ export type EventIdentity = string | Readonly<Record<string, unknown>>
 export interface Eviction {
   readonly data: unknown
   readonly held: ReadonlySet<RowKey>
+  readonly listed: boolean
 }
 
 export class Patcher {
@@ -89,14 +91,6 @@ export class Patcher {
     return found
   }
 
-  rows(data: unknown): Map<RowKey, Row> {
-    const found = new Map<RowKey, Row>()
-    this.each(data, undefined, (key, row) => {
-      found.set(key, row)
-    })
-    return found
-  }
-
   patch(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, within?: Occurrences): unknown {
     return this.rewrite(data, within, (candidate, candidateKey) => {
       if (candidateKey !== key) {
@@ -117,16 +111,9 @@ export class Patcher {
   }
 
   remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>, within?: Occurrences): Eviction {
-    const held = new Set<RowKey>()
-    const next = this.rewrite(data, within, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), { nullableRoots, held })
-    return { data: next, held }
-  }
-
-  adopt(fresh: unknown, cached: ReadonlyMap<RowKey, Row>, keys: ReadonlySet<RowKey>): unknown {
-    return this.rewrite(fresh, undefined, (candidate, candidateKey) => {
-      const source = cached.get(candidateKey)
-      return keys.has(candidateKey) && source !== undefined ? this.overlay(candidate, source) : candidate
-    })
+    const slots: Slots = { nullableRoots, held: new Set<RowKey>(), listed: false }
+    const next = this.rewrite(data, within, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), slots)
+    return { data: next, held: slots.held, listed: slots.listed }
   }
 
   private overlay(row: Row, source: Readonly<Record<string, unknown>>): Row {
@@ -214,6 +201,9 @@ export class Patcher {
         const rewritten = this.rewrite(item, within, transform, slots, depth + 1, path)
         if (rewritten === REMOVED) {
           changed = true
+          if (slots !== undefined) {
+            slots.listed = true
+          }
           continue
         }
         if (rewritten !== item) {

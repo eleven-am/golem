@@ -74,7 +74,7 @@ describe('composite primary keys on events', () => {
     view.emit('postTagEvents', { version: '2', type: 'DELETED', id: { tagName: 'a', postID: 'p' }, entity: null })
     expect((view.query.state.data as { postTags: Array<{ tagName: string }> }).postTags.map((row) => row.tagName)).toEqual(['b'])
     await sleep(150)
-    expect(view.transport.executes).toBe(1)
+    expect(view.transport.executes).toBe(2)
   })
 })
 

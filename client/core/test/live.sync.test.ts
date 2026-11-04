@@ -84,6 +84,26 @@ describe('ordering between responses and events', () => {
     expect(titles(view.data())).toEqual(titles(database))
   })
 
+  it('an older response that repeats a row across aliases never regresses a newer live title', async () => {
+    const w = await fresh()
+    const mine = token()
+    const id = await w.createPost(`${mine}-a`)
+    const document = 'query($t: String!) { titles: posts(where: { title: { contains: $t } }) { title } bodies: posts(where: { title: { contains: $t } }) { body } }'
+    const view = watch(w, document, { t: mine })
+    const shown = () => ((view.data() as { titles?: Array<{ title: string }> } | undefined)?.titles ?? []).map((row) => row.title)
+    await until(() => shown().length === 1)
+    await settled(view)
+    w.gate.hold()
+    const before = view.fetches()
+    void w.queryClient.refetchQueries({ queryKey: view.query.queryKey, exact: true })
+    await until(() => view.fetches() === before + 1)
+    await w.updatePost(id, { title: { set: `${mine}-b` } })
+    await until(() => shown()[0] === `${mine}-b`)
+    w.gate.release()
+    await sleep(800)
+    expect(shown()).toEqual([`${mine}-b`])
+  })
+
   it('direction B: delayed events landing after a newer refetch are ignored', async () => {
     const w = await fresh()
     const mine = token()

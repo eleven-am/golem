@@ -139,11 +139,6 @@ function takeValue(spec: PageSpec, variables: Readonly<Record<string, unknown>>)
   return value
 }
 
-export function lastPageOf(data: unknown): unknown {
-  const pages = typeof data === 'object' && data !== null ? (data as { pages?: unknown }).pages : undefined
-  return Array.isArray(pages) ? pages.at(-1) : undefined
-}
-
 export function golemInfiniteQuery(analysis: DocumentAnalysis, variables: Readonly<Record<string, unknown>>, manifest: ClientManifest): InfiniteQueryPlan {
   const spec = pageSpec(analysis, manifest)
   for (const owned of [CURSOR_VARIABLE, SKIP_VARIABLE]) {

@@ -65,7 +65,7 @@ describe('removal while every response is held', () => {
     await w.run(DELETE_COMMENT, { id: gone })
     await until(() => bodies().length === 1)
     expect(bodies()).toEqual(['stays'])
-    expect(view.fetches()).toBe(before)
+    await until(() => view.fetches() === before + 1)
     w.gate.release()
   })
 
@@ -82,7 +82,7 @@ describe('removal while every response is held', () => {
     await w.updatePost(leaving, { published: { set: false } })
     await until(() => names(view.data(), 'posts').length === 1)
     expect(names(view.data(), 'posts')).toEqual([`${mine}-stays`])
-    expect(view.fetches()).toBe(before)
+    await until(() => view.fetches() === before + 1)
     w.gate.release()
   })
 })
@@ -107,7 +107,7 @@ describe('ranked and custom results', () => {
     await alice.run(DELETE_POST, { id: gone })
     await until(() => names(view.data(), 'searchPosts').length === 1)
     expect(names(view.data(), 'searchPosts')).toEqual([`${mine}-stays`])
-    expect(view.fetches()).toBe(before)
+    await until(() => view.fetches() === before + 1)
     bob.gate.release()
   })
 
@@ -124,7 +124,7 @@ describe('ranked and custom results', () => {
     await alice.updatePost(hidden, { published: { set: false } })
     await until(() => names(view.data(), 'searchPosts').length === 1)
     expect(names(view.data(), 'searchPosts')).toEqual([`${mine}-stays`])
-    expect(view.fetches()).toBe(before)
+    await until(() => view.fetches() === before + 1)
     bob.gate.release()
   })
 
@@ -186,5 +186,25 @@ describe('ranked and custom results', () => {
     expect(view.fetches()).toBe(before)
     await w.updatePost(id, { priority: { set: 9 } })
     await until(() => view.fetches() === before + 1)
+  })
+})
+
+describe('bounded lists refill after a removal', () => {
+  const FIRST = 'query($t: String!) { posts(where: { title: { contains: $t }, published: { equals: true } }, take: 1, orderBy: [{ title: asc }]) { title } }'
+
+  it.each([
+    ['DELETED', (w: World, id: string) => w.run(DELETE_POST, { id })],
+    ['EXITED', (w: World, id: string) => w.updatePost(id, { published: { set: false } })],
+  ])('a %s row leaves a take of one and the next row refills it', async (_name, remove) => {
+    const w = await fresh()
+    const mine = token()
+    const first = await w.createPost(`${mine}-a`)
+    await w.createPost(`${mine}-b`)
+    const view = watch(w, FIRST, { t: mine })
+    await until(() => names(view.data(), 'posts').length === 1)
+    expect(names(view.data(), 'posts')).toEqual([`${mine}-a`])
+    await settled(view)
+    await remove(w, first)
+    await until(() => names(view.data(), 'posts')[0] === `${mine}-b`)
   })
 })
