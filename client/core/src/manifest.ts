@@ -12,8 +12,11 @@ export interface ManifestModel {
   readonly computed: Readonly<Record<string, ReadonlyArray<string>>>
 }
 
+export type RootShape = 'rows' | 'row' | 'aggregate' | 'groupBy' | 'updateMany' | 'deleteMany' | 'value'
+
 export interface ManifestRoot {
   readonly kind: 'generated' | 'opaque'
+  readonly shape: RootShape
   readonly models: ReadonlyArray<string>
 }
 

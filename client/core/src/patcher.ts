@@ -10,11 +10,23 @@ const REMOVED: unique symbol = Symbol('removed')
 
 type Rewritten = unknown | typeof REMOVED
 
+interface Slots {
+  readonly nullableRoots: ReadonlySet<string>
+  readonly held: Set<RowKey>
+}
+
 function isPlainObject(value: unknown): value is Row {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export class RowStore {
+export type EventIdentity = string | Readonly<Record<string, unknown>>
+
+export interface Eviction {
+  readonly data: unknown
+  readonly held: ReadonlySet<RowKey>
+}
+
+export class Patcher {
   private readonly manifest: ClientManifest
 
   constructor(manifest: ClientManifest) {
@@ -37,7 +49,7 @@ export class RowStore {
     return `${typename}:${parts.join('\u0001')}`
   }
 
-  eventKey(model: string, id: string, entity: Readonly<Record<string, unknown>> | null): RowKey {
+  eventKey(model: string, id: EventIdentity, entity: Readonly<Record<string, unknown>> | null): RowKey {
     const described = this.manifest.models[model]
     if (described === undefined) {
       throw new GolemProtocolError(`an event named the unknown model ${model}`)
@@ -49,10 +61,12 @@ export class RowStore {
       }
     }
     const [field] = described.primaryKey
-    if (described.primaryKey.length !== 1 || field === undefined) {
-      throw new GolemProtocolError(`an event for ${model} carries no entity and the model has a composite primary key`)
+    const source = typeof id === 'string' ? (described.primaryKey.length === 1 && field !== undefined ? { [field]: id } : undefined) : id
+    const key = source === undefined ? undefined : this.keyOf(model, source)
+    if (key === undefined) {
+      throw new GolemProtocolError(`an event for ${model} carries an identity that does not hold ${described.primaryKey.join(', ')}`)
     }
-    return this.keyOf(model, { [field]: id }) as RowKey
+    return key
   }
 
   versions(data: unknown): Map<RowKey, Version> {
@@ -88,8 +102,20 @@ export class RowStore {
     })
   }
 
-  remove(data: unknown, keys: ReadonlySet<RowKey>): unknown {
-    return this.rewrite(data, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate))
+  differs(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, names: ReadonlyArray<string>): boolean {
+    let found = false
+    this.each(data, (candidateKey, row) => {
+      if (candidateKey === key && names.some((name) => name in entity && entity[name] !== row[name])) {
+        found = true
+      }
+    })
+    return found
+  }
+
+  remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>): Eviction {
+    const held = new Set<RowKey>()
+    const next = this.rewrite(data, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), { nullableRoots, held })
+    return { data: next, held }
   }
 
   adopt(fresh: unknown, cached: ReadonlyMap<RowKey, Row>, keys: ReadonlySet<RowKey>): unknown {
@@ -149,12 +175,23 @@ export class RowStore {
     }
   }
 
-  private rewrite(value: unknown, transform: (row: Row, key: RowKey) => Rewritten): unknown {
+  private vacate(child: unknown, name: string, depth: number, slots: Slots | undefined): unknown {
+    if (slots !== undefined && depth === 0 && slots.nullableRoots.has(name)) {
+      return null
+    }
+    const key = this.identify(child)
+    if (slots !== undefined && key !== undefined) {
+      slots.held.add(key)
+    }
+    return child
+  }
+
+  private rewrite(value: unknown, transform: (row: Row, key: RowKey) => Rewritten, slots?: Slots, depth = 0): unknown {
     if (Array.isArray(value)) {
       let changed = false
       const next: unknown[] = []
       for (const item of value) {
-        const rewritten = this.rewrite(item, transform)
+        const rewritten = this.rewrite(item, transform, slots, depth + 1)
         if (rewritten === REMOVED) {
           changed = true
           continue
@@ -171,8 +208,8 @@ export class RowStore {
     }
     let copy: Row | undefined
     for (const [name, child] of Object.entries(value)) {
-      const rewritten = this.rewrite(child, transform)
-      const replacement = rewritten === REMOVED ? null : rewritten
+      const rewritten = this.rewrite(child, transform, slots, depth + 1)
+      const replacement = rewritten === REMOVED ? this.vacate(child, name, depth, slots) : rewritten
       if (replacement !== child) {
         copy ??= { ...value }
         copy[name] = replacement

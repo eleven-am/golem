@@ -25,13 +25,15 @@ import type { SubscriptionRequest } from './session.js'
 
 const VERSION_FIELD = '_version'
 const TYPENAME_FIELD = '__typename'
-const NON_ROW_GENERATED_ROOT = /^(aggregate|groupBy|relationGroupBy)[A-Z]/
+
+export type Ranking = ReadonlyArray<string> | 'any'
 
 export interface StreamPlan {
   readonly key: string
   readonly model: string
   readonly eventsRoot: string
   readonly slot: boolean
+  readonly rankedBy: Ranking
   readonly scope: 'exact' | 'policy-only'
   readonly query: string
   readonly variableNames: ReadonlyArray<string>
@@ -42,6 +44,7 @@ export interface DocumentAnalysis {
   readonly document: DocumentNode
   readonly query: string
   readonly streams: ReadonlyArray<StreamPlan>
+  readonly nullableRoots: ReadonlySet<string>
   readonly notLive: ReadonlyArray<GolemNotLiveError>
   readonly live: boolean
 }
@@ -67,7 +70,8 @@ interface StreamDraft {
   readonly key: string
   readonly model: string
   readonly eventsRoot: string
-  readonly slot: boolean
+  slot: boolean
+  ranking: Ranking
   readonly scope: Scope | null
   readonly order: number
   readonly fields: Map<string, FieldNode>
@@ -76,6 +80,7 @@ interface StreamDraft {
 interface Sink {
   readonly streams: Map<string, StreamDraft>
   readonly notLive: Map<string, GolemNotLiveError>
+  readonly nullable: Set<string>
   sequence: number
 }
 
@@ -89,6 +94,8 @@ interface Walk {
 type RowState = ReadonlyMap<string, Map<string, FieldNode>>
 
 type Scope = ObjectValueNode | VariableNode
+
+const NO_RANKING: Ranking = []
 
 const nameNode = (value: string) => ({ kind: Kind.NAME as const, value })
 
@@ -263,7 +270,7 @@ function visitField(field: FieldNode, models: ReadonlyArray<string>, scope: Scop
     if (field.selectionSet === undefined) {
       return field
     }
-    return { ...field, selectionSet: rows(field.selectionSet, computed, null, true, walk) }
+    return { ...field, selectionSet: rows(field.selectionSet, computed, null, true, NO_RANKING, walk) }
   }
   fields.set(responseKey(field), field)
   return field
@@ -295,24 +302,61 @@ function visitRelation(field: FieldNode, owner: string, relation: { readonly tar
     inverseFilter = objectValue({ [relation.inverse]: objectValue({ [inverse.list ? 'some' : 'is']: scope }) })
   }
   const childScope = conjunction(filterScope(argument(field, 'where')?.value), inverseFilter)
-  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, rankingOf(field, target), walk) }
 }
 
-function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, walk: Walk): SelectionSetNode {
+function rankingOf(field: FieldNode, model: ManifestModel): Ranking {
+  const value = argument(field, 'orderBy')?.value
+  if (value === undefined || value.kind === Kind.NULL) {
+    return NO_RANKING
+  }
+  const names = new Set<string>()
+  const read = (node: ValueNode): boolean => {
+    if (node.kind === Kind.VARIABLE) {
+      return false
+    }
+    if (node.kind === Kind.OBJECT) {
+      for (const entry of node.fields) {
+        if (!(entry.name.value in model.relations) && !(entry.name.value in model.computed)) {
+          names.add(entry.name.value)
+        }
+      }
+      return true
+    }
+    return node.kind === Kind.LIST ? node.values.every(read) : true
+  }
+  return read(value) ? [...names] : 'any'
+}
+
+function mergeRanking(left: Ranking, right: Ranking): Ranking {
+  if (left === 'any' || right === 'any') {
+    return 'any'
+  }
+  return [...new Set([...left, ...right])]
+}
+
+function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, walk: Walk): SelectionSetNode {
   const order = walk.sink === null ? 0 : walk.sink.sequence++
   const state: RowState = new Map(models.map((model) => [model, new Map<string, FieldNode>()]))
   let selections = visitSet(set, models, scope, state, walk)
   const single = models.length === 1 ? walk.manifest.models[models[0] ?? ''] : undefined
   if (single !== undefined) {
-    selections = ensure(selections, injections(single))
+    const ranked = ranking === 'any' ? [] : ranking
+    selections = ensure(selections, [...injections(single), ...ranked])
+    const known = state.get(models[0] ?? '')
+    for (const name of ranked) {
+      if (known !== undefined && !known.has(name)) {
+        known.set(name, bareField(name))
+      }
+    }
   } else {
     selections = ensure(selections, [TYPENAME_FIELD])
   }
-  register(models, scope, slot, order, state, walk)
+  register(models, scope, slot, ranking, order, state, walk)
   return { ...set, selections }
 }
 
-function register(models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, order: number, state: RowState, walk: Walk): void {
+function register(models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, order: number, state: RowState, walk: Walk): void {
   const sink = walk.sink
   if (sink === null) {
     return
@@ -334,8 +378,11 @@ function register(models: ReadonlyArray<string>, scope: Scope | null, slot: bool
     const key = `${model.events}|${scope === null ? '' : print(scope)}`
     let draft = sink.streams.get(key)
     if (draft === undefined) {
-      draft = { key, model: name, eventsRoot: model.events, slot, scope, order, fields: new Map() }
+      draft = { key, model: name, eventsRoot: model.events, slot, ranking, scope, order, fields: new Map() }
       sink.streams.set(key, draft)
+    } else {
+      draft.slot ||= slot
+      draft.ranking = mergeRanking(draft.ranking, ranking)
     }
     for (const [responseName, field] of fields) {
       draft.fields.set(responseName, field)
@@ -360,7 +407,11 @@ function finish(draft: StreamDraft, manifest: ClientManifest, operation: Operati
   }
   const entity = ensure([...draft.fields.values()], injections(model)) as FieldNode[]
   const entitySet: SelectionSetNode = { kind: Kind.SELECTION_SET, selections: entity }
-  const eventFields: SelectionNode[] = ['eventID', 'version', 'type', 'id'].map(bareField)
+  const identity: FieldNode =
+    model.primaryKey.length > 1
+      ? { ...bareField('id'), selectionSet: { kind: Kind.SELECTION_SET, selections: model.primaryKey.map(bareField) } }
+      : bareField('id')
+  const eventFields: SelectionNode[] = [...['eventID', 'version', 'type'].map(bareField), identity]
   eventFields.push({ ...bareField('entity'), selectionSet: entitySet })
   const root: FieldNode = {
     ...bareField(draft.eventsRoot),
@@ -389,6 +440,7 @@ function finish(draft: StreamDraft, manifest: ClientManifest, operation: Operati
     model: draft.model,
     eventsRoot: draft.eventsRoot,
     slot: draft.slot,
+    rankedBy: draft.ranking,
     scope: draft.scope === null ? 'policy-only' : 'exact',
     query: print(document),
     variableNames: [...used].sort(),
@@ -431,10 +483,10 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     if (modelName === undefined || model === undefined) {
       throw new GolemDocumentError(`the manifest root ${name} names no model`)
     }
-    if (NON_ROW_GENERATED_ROOT.test(name)) {
+    if (root.shape !== 'rows' && root.shape !== 'row') {
       record(
         walk.sink,
-        new GolemNotLiveError('non-row-root', name, `${name} is not live: it returns an aggregate, not model rows`),
+        new GolemNotLiveError('non-row-root', name, `${name} is not live: its result shape is ${root.shape}, not model rows`),
         `non-row-root|${name}`,
       )
       return field
@@ -444,7 +496,10 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     }
     const where = argument(field, 'where')?.value
     const scope = argument(field, 'where') === undefined ? null : isUniqueStyle(where) ? uniqueScope(model, where, walk) : filterScope(where)
-    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, walk) }
+    if (root.shape === 'row' && walk.sink !== null) {
+      walk.sink.nullable.add(responseKey(field))
+    }
+    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, false, rankingOf(field, model), walk) }
   }
   if (root.models.length === 0 || field.selectionSet === undefined) {
     record(
@@ -454,7 +509,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     )
     return field
   }
-  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, true, walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, true, NO_RANKING, walk) }
 }
 
 function isUniqueStyle(value: ValueNode | undefined): boolean {
@@ -476,7 +531,7 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   if (walk.manifest.models[condition] === undefined) {
     return definition
   }
-  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, walk) }
+  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, NO_RANKING, walk) }
 }
 
 function analyse(document: DocumentNode, operationName: string | undefined, manifest: ClientManifest): DocumentAnalysis {
@@ -495,7 +550,7 @@ function analyse(document: DocumentNode, operationName: string | undefined, mani
     }
   }
   const variables = new Map((operation.variableDefinitions ?? []).map((definition) => [definition.variable.name.value, definition] as const))
-  const sink: Sink = { streams: new Map(), notLive: new Map(), sequence: 0 }
+  const sink: Sink = { streams: new Map(), notLive: new Map(), nullable: new Set(), sequence: 0 }
   const live: Walk = { manifest, fragments, variables, sink }
   const silent: Walk = { manifest, fragments, variables, sink: null }
   const rewrittenOperation: OperationDefinitionNode = {
@@ -517,6 +572,7 @@ function analyse(document: DocumentNode, operationName: string | undefined, mani
     operationName: operation.name?.value,
     document: rewritten,
     query: print(rewritten),
+    nullableRoots: sink.nullable,
     streams: notLive.length > 0 ? [] : [...sink.streams.values()].sort((left, right) => left.order - right.order).map((draft) => finish(draft, manifest, operation)),
     notLive,
     live: notLive.length === 0,
