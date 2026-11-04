@@ -9,6 +9,13 @@ Live GraphQL for golem backends in TypeScript. Two packages:
 
 A golem live query is an ordinary TanStack Query. You write a plain GraphQL query, the client opens the matching subscriptions behind it, and creates, updates, deletes and rows leaving a result patch the TanStack cache by themselves. Your components never write to the cache.
 
+When the client patches and when it refetches:
+
+- An UPDATED event is patched in place only when the stream's selection is plain: a top-level list or single-row root, arguments limited to `where`, no `orderBy`, `distinct`, `take`, `skip` or cursor, and only scalar fields selected, with no relation or computed fields at any depth.
+- Every other UPDATED event refetches the query: ordered, windowed or distinct lists, custom roots, and any selection that reaches a relation.
+- CREATED events refetch the query.
+- DELETED and EXITED events remove the row from the cache at once, and the query refetches when the removal changes a list or empties a single slot.
+
 License: GPL-3.0.
 
 ## Install

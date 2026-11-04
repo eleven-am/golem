@@ -148,22 +148,42 @@ describe('rows held only inside a nested relation', () => {
   })
 })
 
+describe('selections that are not plain', () => {
+  it('refetches an UPDATED comment that moved between posts instead of keeping its old post', async () => {
+    let moved = false
+    const view = await mount(socialManifest, '{ comments { body post { title } } }', () => ({
+      comments: [{ __typename: 'Comment', id: 'c', _version: moved ? '2' : '1', body: 'x', post: post(moved ? 'b' : 'a', '1') }],
+    }))
+    moved = true
+    view.emit('commentEvents', { version: '2', type: 'UPDATED', id: 'c', entity: { __typename: 'Comment', id: 'c', _version: '2', body: 'x' } }, 0)
+    await until(() => view.transport.executes === 2)
+    const comments = (view.query.state.data as { comments: Array<{ post: { id: string } }> }).comments
+    expect(comments[0]?.post.id).toBe('b')
+  })
+
+  it('refetches an UPDATED row of a distinct selection instead of leaving two representatives', async () => {
+    let flipped = false
+    const view = await mount(socialManifest, '{ posts(distinct: [published]) { title published } }', () => ({
+      posts: flipped
+        ? [post('a', '2', { published: true })]
+        : [post('a', '1', { published: true }), post('b', '1', { published: false })],
+    }))
+    flipped = true
+    view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'b', entity: post('b', '2', { published: true }) })
+    await until(() => view.transport.executes === 2)
+    const posts = (view.query.state.data as { posts: Array<{ published: boolean }> }).posts
+    expect(posts.map((row) => row.published)).toEqual([true])
+  })
+})
+
 describe('events that also refetch', () => {
   const list = (priority: number) => () => ({ posts: [post('a', '1', { priority })] })
 
-  it('an UPDATED that changes an orderBy field patches and refetches', async () => {
+  it('an UPDATED on an ordered list refetches and does not patch', async () => {
     const view = await mount(socialManifest, '{ posts(orderBy: { priority: asc }) { title } }', list(1))
     view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: post('a', '2', { priority: 9 }) })
-    expect((view.query.state.data as { posts: Array<{ priority: number }> }).posts[0]?.priority).toBe(9)
+    expect((view.query.state.data as { posts: Array<{ priority: number }> }).posts[0]?.priority).toBe(1)
     await until(() => view.transport.executes === 2)
-  })
-
-  it('an UPDATED that leaves the orderBy field alone patches and does not refetch', async () => {
-    const view = await mount(socialManifest, '{ posts(orderBy: { priority: asc }) { title } }', list(1))
-    view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: post('a', '2', { priority: 1, title: 'renamed' }) })
-    expect((view.query.state.data as { posts: Array<{ title: string }> }).posts[0]?.title).toBe('renamed')
-    await sleep(250)
-    expect(view.transport.executes).toBe(1)
   })
 
   it('an UPDATED on an unordered list never refetches', async () => {
@@ -173,10 +193,10 @@ describe('events that also refetch', () => {
     expect(view.transport.executes).toBe(1)
   })
 
-  it('an UPDATED of a row in a custom result slot patches and refetches', async () => {
+  it('an UPDATED of a row in a custom result slot refetches and does not patch', async () => {
     const view = await mount(socialManifest, '{ searchPosts(take: 5, where: {}) { title } }', () => ({ searchPosts: [post('a', '1')] }))
     view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: post('a', '2', { title: 'changed' }) })
-    expect((view.query.state.data as { searchPosts: Array<{ title: string }> }).searchPosts[0]?.title).toBe('changed')
+    expect((view.query.state.data as { searchPosts: Array<{ title: string }> }).searchPosts[0]?.title).toBe('t-a')
     await until(() => view.transport.executes === 2)
   })
 

@@ -141,7 +141,7 @@ describe('stream set', () => {
     const analysis = social.analyze('{ searchPosts(take: 3, where: { title: { contains: "a" } }) { title } }')
     expect(analysis.live).toBe(true)
     const [stream] = analysis.streams
-    expect(stream?.slot).toBe(true)
+    expect(stream?.patchable).toBe(false)
     expect(stream?.scope).toBe('policy-only')
     expect(stream?.query).toBe(
       normal(`subscription { postEvents { eventID version type id entity { title id _version __typename } } }`),
@@ -152,9 +152,9 @@ describe('stream set', () => {
   it('opens the slot stream for a computed field that returns model rows', () => {
     const analyzer = new DocumentAnalyzer(teamsManifest)
     const analysis = analyzer.analyze('{ teams { name openInvites { email } } }')
-    expect(analysis.streams.map((stream) => [stream.eventsRoot, stream.slot, stream.scope])).toEqual([
+    expect(analysis.streams.map((stream) => [stream.eventsRoot, stream.patchable, stream.scope])).toEqual([
       ['teamEvents', false, 'policy-only'],
-      ['inviteEvents', true, 'policy-only'],
+      ['inviteEvents', false, 'policy-only'],
     ])
     const team = analysis.streams[0]
     expect(team?.query).not.toContain('openInvites')
@@ -334,43 +334,36 @@ describe('document handling', () => {
   })
 })
 
-describe('ranking, slots and nullable roots', () => {
-  it('collects the orderBy fields of a list root, adds them to the query and to the stream, and keeps others out', () => {
-    const analysis = social.analyze('{ posts(orderBy: [{ priority: asc }, { title: desc }]) { body } }')
-    expect(analysis.streams[0]?.rankedBy).toEqual(['priority', 'title'])
-    const selection = flat(analysis.query).split(') {')[1] ?? ''
-    expect(selection).toContain('priority')
-    expect(selection).toContain('title')
-    const entity = flat(analysis.streams[0]?.query).split('entity {')[1] ?? ''
-    expect(entity).toContain('priority')
-    expect(entity).toContain('title')
+describe('patchable streams and nullable roots', () => {
+  const patchable = (document: string, model = 'Post') => social.analyze(document).streams.find((stream) => stream.model === model)?.patchable
+
+  it('patches a plain list, a where-scoped list and a single row', () => {
+    expect(patchable('{ posts { title } }')).toBe(true)
+    expect(patchable('{ posts(where: { published: { equals: true } }) { title } }')).toBe(true)
+    expect(patchable('{ post(where: { ID: "a" }) { title } }')).toBe(true)
   })
 
-  it('ranks a nested list by its own orderBy', () => {
-    const analysis = social.analyze('{ posts { comments(orderBy: { body: asc }) { id } } }')
-    const comments = analysis.streams.find((stream) => stream.model === 'Comment')
-    expect(comments?.rankedBy).toEqual(['body'])
-    expect(analysis.streams.find((stream) => stream.model === 'Post')?.rankedBy).toEqual([])
+  it.each([
+    ['orderBy', '{ posts(orderBy: { priority: asc }) { title } }'],
+    ['distinct', '{ posts(distinct: [published]) { title published } }'],
+    ['take', '{ posts(take: 2) { title } }'],
+    ['skip', '{ posts(skip: 1) { title } }'],
+    ['cursor', '{ posts(cursor: { ID: "a" }) { title } }'],
+    ['a custom root', '{ searchPosts(take: 5, where: {}) { title } }'],
+  ])('refetches a stream under %s', (_name, document) => {
+    expect(patchable(document)).toBe(false)
   })
 
-  it('treats an orderBy variable as ranked by anything', () => {
-    const analysis = social.analyze('query($by: [PostOrderByInput!]) { posts(orderBy: $by) { title } }')
-    expect(analysis.streams[0]?.rankedBy).toBe('any')
+  it('refetches the stream of a row that selects a relation, and of the relation itself', () => {
+    const analysis = social.analyze('{ comments { body post { title } } }')
+    expect(analysis.streams.map((stream) => [stream.model, stream.patchable])).toEqual([
+      ['Comment', false],
+      ['Post', false],
+    ])
   })
 
-  it('keeps a shared policy-only stream a slot when a plain list reads it first', () => {
-    const analysis = social.analyze('{ posts { title } searchPosts(take: 5, where: {}) { title } }')
-    expect(analysis.streams).toHaveLength(1)
-    expect(analysis.streams[0]?.slot).toBe(true)
-  })
-
-  it('has no ranking without orderBy', () => {
-    expect(social.analyze('{ posts { title } }').streams[0]?.rankedBy).toEqual([])
-  })
-
-  it('marks the policy-only stream of a custom root as a slot, and a plain list as not', () => {
-    expect(social.analyze('{ searchPosts(take: 5, where: {}) { title } }').streams[0]?.slot).toBe(true)
-    expect(social.analyze('{ posts { title } }').streams[0]?.slot).toBe(false)
+  it('refetches a shared stream when any occurrence of it is not plain', () => {
+    expect(patchable('{ posts { title } searchPosts(take: 5, where: {}) { title } }')).toBe(false)
   })
 
   it('reports the response keys of generated single roots as nullable, aliases included', () => {

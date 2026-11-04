@@ -535,19 +535,13 @@ export class LiveSync {
           entry.merge = noteChange(entry.merge, key, receivedAt)
         }
         const decision = decideUpdate(held, version)
-        if (decision === 'invalidate') {
-          entry.coalescer.request()
-        } else if (decision === 'patch' && this.heldNested(stream, entry, data, key)) {
+        if (decision === 'invalidate' || (decision === 'patch' && !stream.plan.patchable)) {
           entry.coalescer.request()
         } else if (decision === 'patch') {
           if (frame.entity === null) {
             throw new GolemProtocolError(`an UPDATED event for the held row ${key} carried no entity`)
           }
-          const reorders = stream.plan.slot || stream.plan.rankedBy === 'any' || this.patcher.differs(data, key, frame.entity, stream.plan.rankedBy, within)
           this.write(entry, this.patcher.patch(data, key, frame.entity, within))
-          if (reorders) {
-            entry.coalescer.request()
-          }
         }
         return
       }
@@ -573,12 +567,6 @@ export class LiveSync {
       default:
         throw new GolemProtocolError(`an event frame carried the unknown type ${JSON.stringify(frame.type)}`)
     }
-  }
-
-  private heldNested(stream: StreamState, entry: Entry, data: unknown, key: RowKey): boolean {
-    const prefix = entry.meta.pagination === undefined ? '' : 'pages.'
-    const nested = stream.plan.paths.filter((path) => path.includes('.')).map((path) => `${prefix}${path}`)
-    return nested.length > 0 && this.patcher.versions(data, nested).has(key)
   }
 
   private markNotFound(entry: Entry, keys: ReadonlySet<RowKey>): void {

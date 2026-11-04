@@ -100,16 +100,6 @@ export class Patcher {
     })
   }
 
-  differs(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, names: ReadonlyArray<string>, within?: Occurrences): boolean {
-    let found = false
-    this.each(data, within, (candidateKey, row) => {
-      if (candidateKey === key && names.some((name) => name in entity && entity[name] !== row[name])) {
-        found = true
-      }
-    })
-    return found
-  }
-
   remove(data: unknown, keys: ReadonlySet<RowKey>, nullableRoots: ReadonlySet<string>, within?: Occurrences): Eviction {
     const slots: Slots = { nullableRoots, held: new Set<RowKey>(), listed: false }
     const next = this.rewrite(data, within, (candidate, candidateKey) => (keys.has(candidateKey) ? REMOVED : candidate), slots)

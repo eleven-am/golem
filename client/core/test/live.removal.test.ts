@@ -172,7 +172,7 @@ describe('ranked and custom results', () => {
     await until(() => names(view.data(), 'searchPosts')[0] === `${mine}-new`)
   })
 
-  it('an UPDATED that touches an orderBy field refetches, and one that does not never does', async () => {
+  it('every UPDATED on an ordered list refetches', async () => {
     const w = await fresh()
     const mine = token()
     const id = await w.createPost(`${mine}-a`)
@@ -181,11 +181,10 @@ describe('ranked and custom results', () => {
     await settled(view)
     const before = view.fetches()
     await w.updatePost(id, { title: { set: `${mine}-b` } })
-    await until(() => names(view.data(), 'posts')[0] === `${mine}-b`)
-    await sleep(1200)
-    expect(view.fetches()).toBe(before)
-    await w.updatePost(id, { priority: { set: 9 } })
     await until(() => view.fetches() === before + 1)
+    await until(() => names(view.data(), 'posts')[0] === `${mine}-b`)
+    await w.updatePost(id, { priority: { set: 9 } })
+    await until(() => view.fetches() === before + 2)
   })
 })
 

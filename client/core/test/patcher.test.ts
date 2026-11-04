@@ -116,15 +116,3 @@ describe('Patcher single slots', () => {
     expect(next.single).toBe(data.single)
   })
 })
-
-describe('Patcher differs', () => {
-  const data = { posts: [post('a', 'x', '1', { priority: 3 })] }
-
-  it('is true only when the entity carries a different value of a named field', () => {
-    expect(store.differs(data, 'Post:a', { priority: 4 }, ['priority'])).toBe(true)
-    expect(store.differs(data, 'Post:a', { priority: 3 }, ['priority'])).toBe(false)
-    expect(store.differs(data, 'Post:a', { title: 'z' }, ['priority'])).toBe(false)
-    expect(store.differs(data, 'Post:zzz', { priority: 4 }, ['priority'])).toBe(false)
-    expect(store.differs(data, 'Post:a', { priority: 4 }, [])).toBe(false)
-  })
-})
