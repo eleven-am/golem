@@ -93,6 +93,27 @@ export class GolemConfigurationError extends Error {
   }
 }
 
+export type NotLiveReason = 'model-without-events' | 'opaque-root-without-models' | 'hidden-inverse' | 'non-row-root'
+
+export class GolemNotLiveError extends Error {
+  readonly reason: NotLiveReason
+  readonly subject: string
+
+  constructor(reason: NotLiveReason, subject: string, message: string) {
+    super(message)
+    this.name = 'GolemNotLiveError'
+    this.reason = reason
+    this.subject = subject
+  }
+}
+
+export class GolemDocumentError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GolemDocumentError'
+  }
+}
+
 export function toGolemError(shape: GraphQLErrorShape): GolemError {
   switch (shape.extensions?.code) {
     case CODE_PROTOCOL_MISMATCH:
