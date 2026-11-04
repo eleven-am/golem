@@ -83,7 +83,7 @@ func DeriveNodeImages(request NodeImageRequest) (mutationir.ImageRequirements, m
 			return mutationir.ImageRequirements{}, mutationir.ImageRequirements{}, err
 		}
 	}
-	if node.Operation == mutationir.Delete || node.Operation == mutationir.DeleteMany {
+	if BeforeSnapshotOperation(node.Operation) {
 		before.addFields(request.PrivateDeleteSnapshot...)
 	}
 	if request.Result.ModelID() != (policyir.ModelID{}) {

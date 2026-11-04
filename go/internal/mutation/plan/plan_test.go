@@ -165,6 +165,48 @@ func TestSubscribedDeleteAlwaysCarriesTheCompilerInventory(t *testing.T) {
 	}
 }
 
+func TestSubscribedUpdateCarriesTheCompilerInventoryInItsBeforeImage(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	inputs := boundInputs(t, fixture)
+	predicate := boundBatchPredicate(t, fixture)
+	for name, test := range map[string]struct {
+		operation mutationir.Operation
+		configure func(*RootRequest)
+	}{
+		"update":      {mutationir.Update, func(request *RootRequest) { request.Target, request.Update = &inputs.target, &inputs.update }},
+		"update-many": {mutationir.UpdateMany, func(request *RootRequest) { request.Predicate, request.Update = &predicate, &inputs.updateMany }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := baseRequest(t, fixture, nil, mutationir.System, test.operation)
+			test.configure(&request)
+			planned, err := BuildRoot(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, _ := planned.Graph().Root()
+			fact := root.Fact()
+			if fact.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(fact.PrivateDeleteSnapshot()) == 0 {
+				t.Fatalf("update snapshot state=%d fields=%x", fact.DeleteSnapshotState(), fact.PrivateDeleteSnapshot())
+			}
+			for _, field := range fact.PrivateDeleteSnapshot() {
+				if !containsField(root.BeforeRequirements().Fields(), field) {
+					t.Fatalf("before image omitted private snapshot field %x", field)
+				}
+			}
+		})
+	}
+	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Create)
+	request.Create = &inputs.create
+	planned, err := BuildRoot(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := planned.Graph().Root()
+	if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotNotApplicable || len(root.Fact().PrivateDeleteSnapshot()) != 0 {
+		t.Fatal("a create took a before snapshot")
+	}
+}
+
 func TestBuildRootCoversEverySystemScalarMutationShape(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)

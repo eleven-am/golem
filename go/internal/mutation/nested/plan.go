@@ -318,12 +318,16 @@ func (builder *builder) decorateWith(node mutationir.NodeInput, position *policy
 			}
 			var fact mutationir.FactRequirement
 			var factErr error
-			if action == mutationir.FactDeleted {
+			if action == mutationir.FactDeleted || action == mutationir.FactUpdated {
 				state := mutationir.DeleteSnapshotUnverifiable
 				if snapshot != nil {
 					state = mutationir.DeleteSnapshotStoredScalars
 				}
-				fact, factErr = mutationir.NewDeleteFactRequirement(before, state, snapshot)
+				if action == mutationir.FactDeleted {
+					fact, factErr = mutationir.NewDeleteFactRequirement(before, state, snapshot)
+				} else {
+					fact, factErr = mutationir.NewUpdateFactRequirement(before, after, state, snapshot)
+				}
 			} else {
 				fact, factErr = mutationir.NewFactRequirement(action, before, after, nil)
 			}

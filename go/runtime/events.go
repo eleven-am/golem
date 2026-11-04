@@ -480,13 +480,20 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 	if envelope.ResolvedEventSchemaDigest() != state.metadata.EventSchemaDigest() || envelope.ModelID() != state.metadata.ModelID() {
 		return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
+	exited := false
 	if state.judge != nil && (envelope.Action() == golem.EventCreated || envelope.Action() == golem.EventUpdated) {
 		verdict, verdictErr := shared.verdict(state.judge)
 		if verdictErr != nil {
 			return subscription.Evaluation[any]{}, verdictErr
 		}
 		if verdict == deleteFalse {
-			return subscription.Suppress[any](events.SuppressionFiltered), nil
+			if envelope.Action() != golem.EventUpdated {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
+			if app.exitUnseen(shared, state) {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
+			exited = true
 		}
 	}
 	fresh, err := app.ForPrincipal(eventContext, state.principal)
@@ -510,20 +517,34 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 	}
 	var entity *golem.RuntimeModelRow
 	version := fact.RowVersion()
+	action := envelope.Action()
 	switch envelope.Action() {
 	case golem.EventCreated, golem.EventUpdated:
-		row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
-		if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
-			return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
+		if !exited {
+			row, delivered, readErr := app.readEventEntity(eventContext, fresh, state, identity)
+			if errors.Is(readErr, policyruntime.ErrPolicyUnavailable) {
+				return subscription.Evaluation[any]{}, events.Failure(events.CodeSubscriptionRevalidation)
+			}
+			if readErr != nil {
+				return subscription.Evaluation[any]{}, readErr
+			}
+			if delivered && state.entitySelected {
+				entity = &row
+			}
+			exited = !delivered && envelope.Action() == golem.EventUpdated
+			if !delivered && !exited {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
 		}
-		if readErr != nil {
-			return subscription.Evaluation[any]{}, readErr
-		}
-		if !delivered {
-			return subscription.Suppress[any](events.SuppressionFiltered), nil
-		}
-		if state.entitySelected {
-			entity = &row
+		if exited {
+			action = golem.EventExited
+			_, delivered, exitErr := app.evaluateDeletedEvent(eventContext, fresh, state, fact, identity)
+			if exitErr != nil {
+				return subscription.Evaluation[any]{}, exitErr
+			}
+			if !delivered {
+				return subscription.Suppress[any](events.SuppressionFiltered), nil
+			}
 		}
 	case golem.EventDeleted:
 		suppressed, delivered, deleteErr := app.evaluateDeletedEvent(eventContext, fresh, state, fact, identity)
@@ -538,7 +559,7 @@ func (app *App[P, A]) evaluateEvent(ctx context.Context, state *callerEventSubsc
 	}
 	wireSchema := envelope.EventSchemaDigest()
 	validated, err := typedvalue.New(typedvalue.Metadata{
-		EventID: envelope.EventID(), Action: envelope.Action(), CausationID: envelope.CausationID(),
+		EventID: envelope.EventID(), Action: action, CausationID: envelope.CausationID(),
 		Ordinal: envelope.TransactionOrdinal(), RecordedAt: envelope.RecordedAt(),
 		Generation: envelope.GenerationDigest(), EventSchema: wireSchema, HasEventSchema: true, Version: version,
 		ResolvedEventSchema: envelope.ResolvedEventSchemaDigest(), ModelID: envelope.ModelID(),

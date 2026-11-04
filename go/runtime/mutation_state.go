@@ -366,7 +366,7 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	var oversized *mutationDeleteSnapshotOversize
 	defer func() {
 		if oversized != nil {
-			events.Observe(oversized.observer, ctx, oversized.model, golem.EventDeleted, events.ObservationDeleteSnapshotOversize, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, oversized.limit, 0, int64(oversized.bytes))
+			events.Observe(oversized.observer, ctx, oversized.model, oversized.action, events.ObservationDeleteSnapshotOversize, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, oversized.limit, 0, int64(oversized.bytes))
 		}
 	}()
 	state.mu.Lock()
@@ -403,7 +403,11 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	}
 	var dropped *mutationDeleteSnapshotOversize
 	if limit := state.deleteSnapshotLimit(); len(row.DeleteSnapshot) > limit {
-		dropped = &mutationDeleteSnapshotOversize{observer: state.observer, model: golem.ModelID(envelope.ModelID()), limit: limit, bytes: len(row.DeleteSnapshot)}
+		action := golem.EventDeleted
+		if envelope.Action() == mutationir.FactUpdated {
+			action = golem.EventUpdated
+		}
+		dropped = &mutationDeleteSnapshotOversize{observer: state.observer, model: golem.ModelID(envelope.ModelID()), action: action, limit: limit, bytes: len(row.DeleteSnapshot)}
 		if envelope, err = envelope.WithUnverifiableDeleteSnapshot(); err != nil {
 			return mutationfact.OutboxRow{}, err
 		}
@@ -438,6 +442,7 @@ func factRowVersion(registry *schema.Registry, requirement mutationir.FactRequir
 type mutationDeleteSnapshotOversize struct {
 	observer events.Observer
 	model    golem.ModelID
+	action   golem.EventAction
 	limit    int
 	bytes    int
 }

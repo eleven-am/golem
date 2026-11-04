@@ -83,17 +83,21 @@ type deleteVerdict struct {
 
 func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P, A], state *callerEventSubscription[P], fact mutationfact.Envelope, identity mutationdecode.Identity) (subscription.Evaluation[any], bool, error) {
 	model := policyir.ModelID(state.model)
+	action := golem.EventDeleted
+	if fact.Action() == mutationir.FactUpdated {
+		action = golem.EventExited
+	}
 	policy, present := caller.policies.Policy(model)
 	if !present {
 		return subscription.Suppress[any](events.SuppressionUnauthorized), false, nil
 	}
 	raw, err := policyresolve.RowConstraint(policy, policyir.ActionRead, model)
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	allowed, err := policyresolve.ActionAllowed(raw)
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	if !allowed {
 		return subscription.Suppress[any](events.SuppressionUnauthorized), false, nil
@@ -107,7 +111,7 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 		return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if err != nil {
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 	verdict := deleteVerdict{policy: evaluator.truth(row)}
 	if verdict.policy == deleteFalse {
@@ -161,14 +165,17 @@ func (app *App[P, A]) evaluateDeletedEvent(ctx context.Context, caller *Caller[P
 		case deleteFalse:
 			return subscription.Suppress[any](events.SuppressionDeleteFiltered), false, nil
 		default:
-			events.Observe(app.eventObserver, ctx, state.model, golem.EventDeleted, events.ObservationDelivery, events.OutcomeSuccess, events.SuppressionDeleteOverDelivered, 0, 0, 0, 0, 1)
+			if action == golem.EventExited {
+				return app.unverifiableDelete(ctx, state, action)
+			}
+			events.Observe(app.eventObserver, ctx, state.model, action, events.ObservationDelivery, events.OutcomeSuccess, events.SuppressionDeleteOverDelivered, 0, 0, 0, 0, 1)
 			return subscription.Evaluation[any]{}, true, nil
 		}
 	default:
 		if verdict.filter == deleteFalse {
 			return subscription.Suppress[any](events.SuppressionDeleteFiltered), false, nil
 		}
-		return app.unverifiableDelete(ctx, state)
+		return app.unverifiableDelete(ctx, state, action)
 	}
 }
 
@@ -203,8 +210,8 @@ func (app *App[P, A]) resolveDeleteEvidence(ctx context.Context, caller *Caller[
 	return nil
 }
 
-func (app *App[P, A]) unverifiableDelete(ctx context.Context, state *callerEventSubscription[P]) (subscription.Evaluation[any], bool, error) {
-	events.Observe(app.eventObserver, ctx, state.model, golem.EventDeleted, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, 0, 0, 1)
+func (app *App[P, A]) unverifiableDelete(ctx context.Context, state *callerEventSubscription[P], action golem.EventAction) (subscription.Evaluation[any], bool, error) {
+	events.Observe(app.eventObserver, ctx, state.model, action, events.ObservationSuppression, events.OutcomeSuppressed, events.SuppressionDeletionUnverifiable, 0, 0, 0, 0, 1)
 	return subscription.Evaluation[any]{}, false, events.Failure(events.CodeSubscriptionResync)
 }
 

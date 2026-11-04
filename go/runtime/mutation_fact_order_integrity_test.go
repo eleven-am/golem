@@ -99,7 +99,7 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	index, matched, err := nextNestedFactIndex([]mutationfact.Envelope{first, second}, make([]bool, 2), model, mutationir.FactUpdated, expected)
+	index, matched, err := nextNestedFactIndex([]mutationfact.Envelope{first, second}, make([]bool, 2), model, mutationir.FactUpdated, expected, nil)
 	if err != nil || !matched || index != 0 {
 		t.Fatalf("equivalent repeated candidates index=%d matched=%t err=%v", index, matched, err)
 	}
@@ -124,7 +124,7 @@ func TestRepeatedIdenticalFactCandidatesAreEquivalentOrRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := nextNestedFactIndex([]mutationfact.Envelope{left, right}, make([]bool, 2), model, mutationir.FactUpdated, sharedIdentity); err == nil || !strings.Contains(err.Error(), "ambiguous non-equivalent") {
+	if _, _, err := nextNestedFactIndex([]mutationfact.Envelope{left, right}, make([]bool, 2), model, mutationir.FactUpdated, sharedIdentity, nil); err == nil || !strings.Contains(err.Error(), "ambiguous non-equivalent") {
 		t.Fatalf("non-equivalent repeated candidates error=%v", err)
 	}
 }

@@ -152,6 +152,30 @@ before delivery, the event keeps its own version and the selected entity carries
 the `_version` it was read at. `golem.EventMetadata` gains `Version() int64`. Use it to ignore an event
 older than a row you already hold.
 
+**Rows that leave a list are delivered as `EXITED`.** An update that moves a row
+out of a stream's `EventWhere` filter or read rule used to be silent. A
+subscriber that held the row now receives an event with action
+`golem.EventExited` (`type: EXITED` over GraphQL), the row's key, the version of
+the update and a null entity; a subscriber that never held the row still
+receives nothing. Every update fact stores a before snapshot, the row as it was
+before the update, with the delete snapshot's field set and size limit, and
+golem judges the subscriber's rule and filter against it. When it cannot decide
+(a filter or read hook outside the snapshot, a to-many relation, a before
+snapshot over `MutationLimits.MaxDeleteSnapshotBytes`, or a CDC update recorded
+without a `Before` image) the stream ends with `GOLEM_SUBSCRIPTION_RESYNC`.
+A client that switches on `Metadata().Action()` must handle the new action;
+treat it like a delete for the list you hold. `golem generate` adds `EXITED` to
+the GraphQL `GolemEventType` enum: regenerate your application. Update facts in
+the outbox grow by the snapshot, which for most models is the primary key,
+foreign keys and bounded scalars of the row. See "Rows that leave a list" in the
+guide.
+
+**For CDC adapter authors: an update's `Before` image is optional.** With it, the
+fact stores the before snapshot and the subscribers that held the row receive
+`EXITED`. Without it, every subscriber that cannot be ruled out from the new row
+ends with `RESYNC`, so give the `Before` image whenever your source log has it.
+`events.CDCChangeInput.Before` is still required for deletes.
+
 **For CDC adapter authors: row images carry `golem_version`.** The exact images
 an adapter hands to `Emit` hold every stored scalar of the model, and that now
 includes `golem_version` (the value your source database holds). When the

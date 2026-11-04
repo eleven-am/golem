@@ -547,6 +547,9 @@ func assertPostFactSequence(t testing.TB, fixture mutationResultFixture, action 
 		} else if envelope.CausationID() != causation {
 			t.Fatalf("fact[%d] causation changed", index)
 		}
+		if envelope.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
+			t.Fatalf("fact[%d] snapshot state = %d, want stored scalars", index, envelope.DeleteSnapshotState())
+		}
 		before, beforeOK := envelope.BeforeIdentity()
 		if !beforeOK {
 			t.Fatalf("fact[%d] has no before identity", index)

@@ -566,15 +566,15 @@ func validateFact(operation Operation, fact FactRequirement) error {
 	if fact.action != expected {
 		return fmt.Errorf("P4_MUTATION_IR_FACT: fact action does not match actual row operation")
 	}
-	if fact.action == FactDeleted {
+	if fact.action == FactDeleted || fact.action == FactUpdated {
 		if fact.deleteSnapshotState != DeleteSnapshotUnverifiable && fact.deleteSnapshotState != DeleteSnapshotStoredScalars {
-			return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: delete fact has no verification decision")
+			return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: delete or update fact has no verification decision")
 		}
 		if fact.deleteSnapshotState == DeleteSnapshotUnverifiable && len(fact.privateDeleteSnapshot) != 0 {
-			return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: unverifiable delete fact carries snapshot fields")
+			return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: unverifiable fact carries snapshot fields")
 		}
 	} else if fact.deleteSnapshotState != DeleteSnapshotNotApplicable || len(fact.privateDeleteSnapshot) != 0 {
-		return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: non-delete fact carries snapshot semantics")
+		return fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: created fact carries snapshot semantics")
 	}
 	return nil
 }

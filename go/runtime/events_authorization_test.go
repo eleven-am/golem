@@ -477,7 +477,11 @@ func (fixture p7EventRuntimeFixture) noticeWithDeleteState(t *testing.T, action 
 			factAction = mutationir.FactUpdated
 			before = []policyir.FieldID{policyir.FieldID(fixture.schema.PostID)}
 		}
-		requirement, err = mutationir.NewFactRequirement(factAction, before, []policyir.FieldID{policyir.FieldID(fixture.schema.PostID)}, nil)
+		if action == golem.EventUpdated {
+			requirement, err = updateFactRequirement(fixture.schema.Registry, policyir.ModelID(fixture.schema.Post), before)
+		} else {
+			requirement, err = mutationir.NewFactRequirement(factAction, before, []policyir.FieldID{policyir.FieldID(fixture.schema.PostID)}, nil)
+		}
 	}
 	if err != nil {
 		t.Fatal(err)

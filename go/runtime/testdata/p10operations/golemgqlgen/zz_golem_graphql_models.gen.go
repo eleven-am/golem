@@ -259,17 +259,19 @@ const (
 	GolemEventTypeCreated GolemEventType = "CREATED"
 	GolemEventTypeUpdated GolemEventType = "UPDATED"
 	GolemEventTypeDeleted GolemEventType = "DELETED"
+	GolemEventTypeExited  GolemEventType = "EXITED"
 )
 
 var AllGolemEventType = []GolemEventType{
 	GolemEventTypeCreated,
 	GolemEventTypeUpdated,
 	GolemEventTypeDeleted,
+	GolemEventTypeExited,
 }
 
 func (e GolemEventType) IsValid() bool {
 	switch e {
-	case GolemEventTypeCreated, GolemEventTypeUpdated, GolemEventTypeDeleted:
+	case GolemEventTypeCreated, GolemEventTypeUpdated, GolemEventTypeDeleted, GolemEventTypeExited:
 		return true
 	}
 	return false

@@ -153,9 +153,9 @@ func assertP7NestedFactSchema(t testing.TB, node mutationir.Node, fixture schema
 	if _, present := fact.EventSchema(); !present {
 		t.Fatalf("nested fact %d silently fell back to V1", node.Ordinal())
 	}
-	if node.Operation() != mutationir.Delete && node.Operation() != mutationir.DeleteMany {
+	if node.Operation() == mutationir.Create {
 		if fact.DeleteSnapshotState() != mutationir.DeleteSnapshotNotApplicable {
-			t.Fatalf("non-delete nested fact carries delete snapshot state %d", fact.DeleteSnapshotState())
+			t.Fatalf("created nested fact carries a before snapshot state %d", fact.DeleteSnapshotState())
 		}
 		return
 	}

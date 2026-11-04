@@ -70,7 +70,7 @@ func TestEventHookRunsOncePerCandidateNotOncePerSubscriber(t *testing.T) {
 func TestEventNarrowingHookDeliversExactlyWhatTheExactReadDelivers(t *testing.T) {
 	policies := deleteEvalPolicies{
 		hook: func(fields deleteEvalFields) golem.Predicate[deleteEvalComment] {
-			return fields.commentBody.Eq("hi")
+			return fields.commentPID.Eq(deleteEvalUUID(deleteEvalDraft))
 		},
 	}
 	runDeleteEvalProfiles(t, policies, func(t *testing.T, fixture deleteEvalFixture) {
@@ -114,14 +114,14 @@ func TestEventToManyPolicyIsUndecidedAndTheExactReadDecides(t *testing.T) {
 		trace.reset()
 		fixture.publishPostEvent(t, golem.EventUpdated, 2, deleteEvalUUID(deleteEvalDraft), deleteEvalUUID(deleteEvalBob), "draft")
 		delivered, suppressed = fixture.awaitSettled(t, golem.EventUpdated, 2*subscribers)
-		if delivered != subscribers || suppressed != subscribers {
+		if delivered != 2*subscribers || suppressed != 0 {
 			t.Fatalf("delivered %d suppressed %d after the draft", delivered, suppressed)
 		}
 		if reads := len(eventFanoutReads(trace)); reads < subscribers {
 			t.Fatalf("only %d reads for %d subscribers whose policy the judge cannot decide", reads, subscribers)
 		}
 		for _, stream := range streams {
-			expectStreamSilent(t, stream)
+			expectStreamEnds(t, stream, events.CodeSubscriptionResync)
 		}
 	})
 }
@@ -262,7 +262,7 @@ func TestEventUnplannableSnapshotLeavesEveryMemberToTheExactRead(t *testing.T) {
 	})
 }
 
-func TestEventForARowThatNoLongerExistsSuppressesEveryMemberWithoutAnotherRead(t *testing.T) {
+func TestEventForARowThatNoLongerExistsCostsOneSharedReadAndExitsOnlyItsHolder(t *testing.T) {
 	runTracedEventProfiles(t, eventFanoutPolicies(), func(t *testing.T, fixture deleteEvalFixture, trace *p5SQLTrace) {
 		fixture.seedOwners(t, 3)
 		streams := make([]golem.EventStream[p7EventOracleValue], 3)
@@ -274,13 +274,16 @@ func TestEventForARowThatNoLongerExistsSuppressesEveryMemberWithoutAnotherRead(t
 		trace.reset()
 		fixture.publishPostEvent(t, golem.EventUpdated, 1, eventFanoutUUID(0), eventFanoutUUID(0), "edited")
 		delivered, suppressed := fixture.awaitSettled(t, golem.EventUpdated, 3)
-		if delivered != 0 || suppressed != 3 {
-			t.Fatalf("delivered %d suppressed %d, want all three suppressed", delivered, suppressed)
+		if delivered != 1 || suppressed != 2 {
+			t.Fatalf("delivered %d suppressed %d, want the holder exited and two suppressed", delivered, suppressed)
 		}
 		if reads := eventFanoutReads(trace); len(reads) != 1 {
 			t.Fatalf("%d reads for a vanished row, want only the shared read: %q", len(reads), reads)
 		}
-		for _, stream := range streams {
+		if event := receiveP7Event(t, streams[0]); event.validated.Metadata().Action() != golem.EventExited {
+			t.Fatalf("the holder of the vanished row received %q", event.validated.Metadata().Action())
+		}
+		for _, stream := range streams[1:] {
 			expectStreamSilent(t, stream)
 		}
 	})

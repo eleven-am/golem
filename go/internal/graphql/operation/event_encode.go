@@ -107,7 +107,7 @@ func encodeEventMetadata(name string, metadata golem.EventMetadata) (any, error)
 		return strconv.FormatInt(metadata.Version(), 10), nil
 	case "type":
 		value := strings.ToUpper(string(metadata.Action()))
-		if value != "CREATED" && value != "UPDATED" && value != "DELETED" {
+		if value != "CREATED" && value != "UPDATED" && value != "DELETED" && value != "EXITED" {
 			return nil, fmt.Errorf("P7_ENCODE_EVENT: event action is unknown")
 		}
 		return value, nil

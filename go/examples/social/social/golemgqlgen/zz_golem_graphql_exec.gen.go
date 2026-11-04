@@ -3812,6 +3812,7 @@ enum GolemEventType {
   CREATED
   UPDATED
   DELETED
+  EXITED
 }
 
 type CommentEvent {

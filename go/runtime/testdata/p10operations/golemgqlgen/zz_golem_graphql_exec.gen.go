@@ -1420,6 +1420,7 @@ enum GolemEventType {
   CREATED
   UPDATED
   DELETED
+  EXITED
 }
 
 type InviteEvent {

@@ -670,7 +670,7 @@ func renderRoots(views []modelView, compilation ir.CompilationIR) (string, strin
 }
 
 func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) ([]string, error) {
-	sections := []string{"enum GolemEventType {\n  CREATED\n  UPDATED\n  DELETED\n}"}
+	sections := []string{"enum GolemEventType {\n  CREATED\n  UPDATED\n  DELETED\n  EXITED\n}"}
 	for _, view := range views {
 		if !view.contract.Subscriptions {
 			continue

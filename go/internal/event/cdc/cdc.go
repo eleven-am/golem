@@ -184,7 +184,7 @@ func validChangeShape(change events.CDCChangeInput) bool {
 	case golem.EventCreated:
 		return change.Before == nil && change.After != nil
 	case golem.EventUpdated:
-		return change.Before != nil && change.After != nil
+		return change.After != nil
 	case golem.EventDeleted:
 		return change.Before != nil && change.After == nil
 	default:
