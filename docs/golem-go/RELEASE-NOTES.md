@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.1
+go get github.com/eleven-am/golem/go@v0.8.2
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -14,7 +14,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ---
 
-## go/v0.8.2 / Unreleased.
+## go/v0.8.2
 
 **The client manifest names each root's result shape.** Every entry of `roots` in `zz_golem_client.gen.ts` gains `shape`: `rows`, `row`, `deletedRow` (a generated delete root, which returns the row it removes), `aggregate`, `groupBy`, `updateMany`, `deleteMany`, or `value` (a custom root whose result is not a model or a list of one). A client reads it instead of guessing from the root name. Regenerate to get it.
 
