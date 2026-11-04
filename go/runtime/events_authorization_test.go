@@ -44,6 +44,35 @@ type p7SignalledTransport struct {
 	events.EventTransport
 	once       sync.Once
 	subscribed chan struct{}
+	silent     sync.Map
+	failing    sync.Map
+}
+
+type p7FailingStream struct{ err error }
+
+func (stream p7FailingStream) Recv(context.Context) (events.Notice, error) {
+	return events.Notice{}, stream.err
+}
+
+func (p7FailingStream) Close() error { return nil }
+
+func (transport *p7SignalledTransport) fail(model golem.ModelID, err error) {
+	transport.failing.Store(model, err)
+}
+
+type p7SilentStream struct{}
+
+func (p7SilentStream) Recv(ctx context.Context) (events.Notice, error) {
+	<-ctx.Done()
+	return events.Notice{}, ctx.Err()
+}
+
+func (p7SilentStream) Close() error { return nil }
+
+func (transport *p7SignalledTransport) silence(models ...golem.ModelID) {
+	for _, model := range models {
+		transport.silent.Store(model, struct{}{})
+	}
 }
 
 type p7EventObserver struct{ suppressed chan observe.Observation }
@@ -58,6 +87,12 @@ func (observer p7EventObserver) ObserveGolem(_ context.Context, observation obse
 }
 
 func (transport *p7SignalledTransport) Subscribe(ctx context.Context, request events.Subscription) (events.Stream, error) {
+	if _, silenced := transport.silent.Load(request.ModelID()); silenced {
+		return p7SilentStream{}, nil
+	}
+	if failure, failing := transport.failing.Load(request.ModelID()); failing {
+		return p7FailingStream{err: failure.(error)}, nil
+	}
 	stream, err := transport.EventTransport.Subscribe(ctx, request)
 	if err == nil {
 		transport.once.Do(func() { close(transport.subscribed) })

@@ -739,7 +739,15 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: publicErrorExtensions(failure)}
 	}
 	if code, ok := events.CodeOf(err); ok {
-		return Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
+		presented := Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
+		if reason, reasoned := events.ReasonOf(err); reasoned {
+			presented.Extensions["reason"] = string(reason)
+			var failure *events.Error
+			if errors.As(err, &failure) && failure.Detail() != "" {
+				presented.Message = string(code) + ": " + failure.Detail()
+			}
+		}
+		return presented
 	}
 	if report != nil && err != nil {
 		report(ctx, err)

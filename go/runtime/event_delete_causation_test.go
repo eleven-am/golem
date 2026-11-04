@@ -208,7 +208,7 @@ func deleteEvalPublishedPolicy() deleteEvalPolicies {
 }
 
 func TestDeleteEventCascadedParentSnapshotDecides(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		fixture.commit(t, 100,
@@ -228,7 +228,7 @@ func TestDeleteEventCascadedParentSnapshotDecides(t *testing.T) {
 }
 
 func TestDeleteEventNegatedPolicyOverCascadedParentUsesSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, actor deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			owner := deleteEvalUUID(deleteEvalAlice)
 			if actor.Name == "bob" {
@@ -256,7 +256,7 @@ func TestDeleteEventNegatedPolicyOverCascadedParentUsesSnapshot(t *testing.T) {
 }
 
 func TestDeleteEventCascadedParentFactFromAnotherCausationResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		fixture.commit(t, 130, fixture.postFact(t, 131, 1, deleteEvalPublished, deleteEvalAlice, "published"))
@@ -267,7 +267,7 @@ func TestDeleteEventCascadedParentFactFromAnotherCausationResyncs(t *testing.T) 
 }
 
 func TestDeleteEventCascadedParentFactRetainedAwayResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		rows := fixture.factRows(t, 134,
@@ -283,7 +283,7 @@ func TestDeleteEventCascadedParentFactRetainedAwayResyncs(t *testing.T) {
 }
 
 func TestDeleteEventCascadedParentUnverifiableSnapshotResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		parent := fixture.postFact(t, 141, 1, deleteEvalPublished, deleteEvalAlice, "published")
@@ -338,7 +338,7 @@ func TestDeleteEventCascadedParentDeletedTwiceResyncs(t *testing.T) {
 }
 
 func TestDeleteEventMultiLevelCascadeUsesEachSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return fields.commentPost.Is(fields.postAuthor.Is(fields.userID.Eq(deleteEvalUUID(deleteEvalAlice)))), true
 		},
@@ -364,7 +364,7 @@ func TestDeleteEventMultiLevelCascadeUsesEachSnapshot(t *testing.T) {
 }
 
 func TestDeleteEventNegatedMultiLevelCascadeUsesEachSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return golem.Not(fields.commentPost.Is(fields.postAuthor.Is(fields.userID.Eq(deleteEvalUUID(deleteEvalAlice))))), true
 		},
@@ -406,7 +406,7 @@ func TestDeleteEventNegatedNestedHopWithoutNestedFactResyncs(t *testing.T) {
 }
 
 func TestDeleteEventNegatedNestedHopOverPresentTargetUsesSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return golem.Not(fields.commentPost.Is(fields.postAuthor.Is(fields.userName.Eq("alice")))), true
 		},
@@ -442,7 +442,7 @@ func (fixture deleteEvalFixture) postUpdate(t *testing.T, eventID uint16, ordina
 }
 
 func TestDeleteEventNegatedPolicyOverParentUpdatedInSameTransactionResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return golem.Not(fields.commentPost.Is(fields.postTitle.Eq("published"))), true
 		},
@@ -463,7 +463,7 @@ func TestDeleteEventNegatedPolicyOverParentUpdatedInSameTransactionResyncs(t *te
 }
 
 func TestDeleteEventPolicyOverParentUpdatedInSameTransactionResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPublishedPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPublishedPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		if !fixture.liveCommentVisible(t, "alice", deleteEvalOnPub) {
 			t.Fatal("live read hides a comment under the published post")
@@ -521,7 +521,7 @@ func TestDeleteEventHopTargetPolicyUnavailableEndsStream(t *testing.T) {
 		broken.Store(false)
 		stream := fixture.subscribeComments(t, "alice")
 		broken.Store(true)
-		fixture.app.InvalidatePolicies()
+		fixture.app.policyCache.invalidate()
 		fixture.removeComment(t, deleteEvalOnPub)
 		fixture.commit(t, 230, fixture.commentFact(t, 231, 1, deleteEvalOnPub, deleteEvalPublished))
 		expectStreamEnds(t, stream, events.CodeSubscriptionRevalidation)
@@ -595,7 +595,7 @@ func TestDeleteEventRelationalFilterOverCascadedParent(t *testing.T) {
 		return golem.EventWhere[deleteEvalComment](fixture.fields.commentPost.Is(fixture.fields.postAuthorID.Eq(deleteEvalUUID(deleteEvalAlice))))
 	}
 	t.Run("without-parent-fact-over-delivers", func(t *testing.T) {
-		runDeleteEvalProfiles(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
+		runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
 			stream := fixture.subscribeComments(t, "alice", filter(fixture))
 			fixture.cascadePost(t, deleteEvalDraft)
 			fixture.commit(t, 250, fixture.commentFact(t, 251, 1, deleteEvalOnDraft, deleteEvalDraft))
@@ -619,7 +619,7 @@ func TestDeleteEventRelationalFilterOverCascadedParent(t *testing.T) {
 		})
 	})
 	t.Run("with-parent-fact-filters-exactly", func(t *testing.T) {
-		runDeleteEvalProfiles(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
+		runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{}, func(t *testing.T, fixture deleteEvalFixture) {
 			stream := fixture.subscribeComments(t, "alice", filter(fixture))
 			fixture.cascadePost(t, deleteEvalDraft)
 			fixture.commit(t, 255,

@@ -219,7 +219,7 @@ func expectCDCDeleteDelivered(t *testing.T, stream golem.EventStream[p7EventOrac
 }
 
 func TestCDCDeleteNegatedPolicyOverParentUpdatedInSourceTransactionResyncs(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalPolicies{
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalPolicies{
 		comment: func(fields deleteEvalFields, _ deleteEvalActor) (golem.Predicate[deleteEvalComment], bool) {
 			return golem.Not(fields.commentPost.Is(fields.postTitle.Eq("published"))), true
 		},
@@ -277,7 +277,7 @@ func TestCDCDeleteOverUnchangedParentIsDecidedExactly(t *testing.T) {
 }
 
 func TestCDCDeleteJudgesParentDeletedInSourceTransactionFromItsSnapshot(t *testing.T) {
-	runDeleteEvalProfiles(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
+	runDeleteEvalWithoutDependencyNotices(t, deleteEvalAuthorPolicy(), func(t *testing.T, fixture deleteEvalFixture) {
 		stream := fixture.subscribeComments(t, "alice")
 		fixture.cascadePost(t, deleteEvalPublished)
 		fixture.emitCDC(t, "cdc-cascade-allowed",

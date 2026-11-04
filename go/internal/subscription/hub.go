@@ -82,7 +82,7 @@ type member[T any] struct {
 	once    sync.Once
 	err     error
 	state   any
-	drop    func(any)
+	drop    func(any, error)
 	cancels []context.CancelFunc
 }
 
@@ -154,14 +154,14 @@ func (hub *ModelHub[T]) Subscribe(ctx context.Context, key SubscriberKey) (*Stre
 // unshareable key: without a security-equivalence proof one member's retained
 // principal/request must never evaluate another member's notice. drop runs
 // exactly once when membership is removed for any reason.
-func (hub *ModelHub[T]) SubscribeWithState(ctx context.Context, key SubscriberKey, state any, drop func(any)) (*Stream[T], error) {
+func (hub *ModelHub[T]) SubscribeWithState(ctx context.Context, key SubscriberKey, state any, drop func(any, error)) (*Stream[T], error) {
 	if state == nil || hub.config.EvaluateState == nil || key.shareable {
 		return nil, events.Failure(events.CodeSubscriptionInvalid)
 	}
 	return hub.subscribe(ctx, key, state, drop)
 }
 
-func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state any, drop func(any)) (*Stream[T], error) {
+func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state any, drop func(any, error)) (*Stream[T], error) {
 	if ctx == nil || ctx.Err() != nil || key.generation != hub.config.Generation || key.model != hub.config.Model {
 		return nil, events.Failure(events.CodeSubscriptionInvalid)
 	}
@@ -483,7 +483,7 @@ func (hub *ModelHub[T]) removeLocked(item *member[T], failure error) func() {
 		}
 		item.cancels = nil
 		if drop != nil {
-			cleanup = func() { drop(state) }
+			cleanup = func() { drop(state, failure) }
 		}
 		close(item.done)
 	})

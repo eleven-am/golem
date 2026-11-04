@@ -70,9 +70,6 @@ func deriveFactInventory(registry *schema.Registry, model policyir.ModelID) (fac
 	return inventory, nil
 }
 
-// beforeSnapshotFor is the operation-shaped half of the decision. The update
-// and delete families carry a private pre-change scalar snapshot, and that is
-// mechanically derivable from the node's own operation.
 func (inventory factInventory) beforeSnapshotFor(operation mutationir.Operation) []policyir.FieldID {
 	if !inventory.capture || !BeforeSnapshotOperation(operation) {
 		return nil

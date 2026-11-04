@@ -252,8 +252,6 @@ func NewDeleteFactRequirement(beforeIdentity []policyir.FieldID, state DeleteSna
 	return newBeforeSnapshotFactRequirement(FactDeleted, beforeIdentity, nil, state, storedScalars)
 }
 
-// NewUpdateFactRequirement gives an update the same explicit before-snapshot
-// decision as a delete, so one inventory and one size limit serve both.
 func NewUpdateFactRequirement(beforeIdentity, afterIdentity []policyir.FieldID, state DeleteSnapshotState, storedScalars []policyir.FieldID) (FactRequirement, error) {
 	return newBeforeSnapshotFactRequirement(FactUpdated, beforeIdentity, afterIdentity, state, storedScalars)
 }

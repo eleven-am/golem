@@ -56,6 +56,7 @@ type deleteEvalPolicies struct {
 	postUnavailable *atomic.Bool
 	postTitleRule   func(deleteEvalFields, deleteEvalActor) golem.Predicate[deleteEvalPost]
 	resolveFails    *atomic.Bool
+	hookFails       *atomic.Bool
 }
 
 type deleteEvalFixture struct {
@@ -124,6 +125,14 @@ func runDeleteEvalProfiles(t *testing.T, policies deleteEvalPolicies, run func(*
 			run(t, newDeleteEvalFixture(t, database, golem.PostgreSQL, schemaFixture, policies))
 		})
 	}
+}
+
+func runDeleteEvalWithoutDependencyNotices(t *testing.T, policies deleteEvalPolicies, run func(*testing.T, deleteEvalFixture)) {
+	t.Helper()
+	runDeleteEvalProfiles(t, policies, func(t *testing.T, fixture deleteEvalFixture) {
+		fixture.transport.silence(fixture.schema.User, fixture.schema.Post)
+		run(t, fixture)
+	})
 }
 
 func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provider, schemaFixture schematest.GraphFixture, policies deleteEvalPolicies) deleteEvalFixture {
@@ -203,6 +212,9 @@ func newDeleteEvalFixture(t *testing.T, database *sqlx.DB, provider golem.Provid
 	var hooks []golem.HookBinding[deleteEvalActor]
 	if policies.hook != nil {
 		hooks = append(hooks, golem.GeneratedBeforeHookBinding[deleteEvalActor, deleteEvalComment, golem.FindManyHookRequest[deleteEvalComment]](schemaFixture.Comment, golem.HookFindMany, func(_ context.Context, request *golem.FindManyHookRequest[deleteEvalComment]) error {
+			if policies.hookFails != nil && policies.hookFails.Load() {
+				return errors.New("read hook refused")
+			}
 			request.AppendOptions(golem.Where(policies.hook(fields)))
 			return nil
 		}))
