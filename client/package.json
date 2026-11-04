@@ -1,0 +1,14 @@
+{
+  "name": "golem-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core"
+  ],
+  "scripts": {
+    "build": "npm run build -w @eleven-am/golem-client",
+    "test": "npm run test -w @eleven-am/golem-client"
+  },
+  "license": "GPL-3.0"
+}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -448,15 +449,32 @@ func principalMiddleware(application *social.App[social.Principal], next http.Ha
 			return
 		}
 		ctx := context.WithValue(request.Context(), principalContextKey{}, principal)
-		if expiresAt.IsZero() {
-			ctx = golem.WithoutCredentialExpiry(ctx)
-		} else {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, expiresAt)
-			defer cancel()
+		unbounded := false
+		if principal.Development && os.Getenv("GOLEM_ALLOW_INSECURE_HEADER_AUTH") == "1" {
+			expiresAt, unbounded = testCredentialWindow(request, expiresAt)
+		}
+		if !unbounded {
+			if expiresAt.IsZero() {
+				ctx = golem.WithoutCredentialExpiry(ctx)
+			} else {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, expiresAt)
+				defer cancel()
+			}
 		}
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
+}
+
+func testCredentialWindow(request *http.Request, expiresAt time.Time) (time.Time, bool) {
+	if strings.TrimSpace(request.Header.Get("X-Golem-Test-Unbounded")) == "1" {
+		return time.Time{}, true
+	}
+	milliseconds, err := strconv.Atoi(strings.TrimSpace(request.Header.Get("X-Golem-Test-Deadline-Ms")))
+	if err != nil || milliseconds <= 0 {
+		return expiresAt, false
+	}
+	return time.Now().Add(time.Duration(milliseconds) * time.Millisecond), false
 }
 
 func authenticate(ctx context.Context, application *social.App[social.Principal], request *http.Request) (social.Principal, time.Time, error) {
