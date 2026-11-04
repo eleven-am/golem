@@ -130,6 +130,24 @@ describe('single slots', () => {
   })
 })
 
+describe('rows held only inside a nested relation', () => {
+  const comment = (id: string, body: string, version: string) => ({ __typename: 'Comment', id, _version: version, body })
+
+  it('refetches an UPDATED comment instead of patching it under its old post', async () => {
+    let moved = false
+    const view = await mount(socialManifest, '{ posts { comments { body } } }', () => ({
+      posts: moved
+        ? [post('p1', '1', { comments: [] }), post('p2', '1', { comments: [comment('c', 'edited', '2')] })]
+        : [post('p1', '1', { comments: [comment('c', 'hello', '1')] }), post('p2', '1', { comments: [] })],
+    }))
+    moved = true
+    view.emit('commentEvents', { version: '2', type: 'UPDATED', id: 'c', entity: comment('c', 'edited', '2') }, 1)
+    await until(() => view.transport.executes === 2)
+    const posts = (view.query.state.data as { posts: Array<{ id: string; comments: unknown[] }> }).posts
+    expect(posts.map((row) => [row.id, row.comments.length])).toEqual([['p1', 0], ['p2', 1]])
+  })
+})
+
 describe('events that also refetch', () => {
   const list = (priority: number) => () => ({ posts: [post('a', '1', { priority })] })
 

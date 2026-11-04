@@ -83,7 +83,7 @@ Every hook takes a GraphQL document, as a string or as a gql.tada typed document
 |---|---|
 | `useGolemQuery(doc, variables?, options?)` | `useQuery` over `client.queryOptions`. The query is live: its streams are open while the component is mounted, and the cache follows the server. |
 | `useGolemInfiniteQuery(doc, variables?, options?)` | `useInfiniteQuery` over a list query with a `take`. Pages stay live. You never write `cursor` or `skip`; the client adds them from the manifest. `hasNextPage` is true while the last page is full. |
-| `useGolemMutation(doc, options?)` | `useMutation` over `client.mutate`. A returned row is merged into every cached result holding it, and a deleted row leaves them. |
+| `useGolemMutation(doc, options?)` | `useMutation` over `client.mutate`. A committed mutation marks every cached query over the models it touches as stale, so the live event or the refetch brings it up to date; the mutation result is never written into the cache. |
 | `useGolemStatus(doc, variables?, { infinite? })` | The live status of a query (below), or `undefined` before the query exists. |
 | `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` for a document that cannot be live (aggregates, group-by, counts, update-many roots). Fetched once, never patched. |
 
@@ -125,7 +125,7 @@ All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) o
 - `GolemProtocolMismatchError`, `GolemContractMismatchError`: the client and server disagree on the live protocol or the contract. Regenerate the manifest.
 - `GolemDeadlineRequiredError` (`GOLEM_PRINCIPAL_DEADLINE_REQUIRED`): the server refused a live socket because the principal has no deadline. This is a server fix.
 - `GolemUnauthenticatedError`, `GolemHttpError`.
-- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated for you.
+- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated for you, as they are after every committed mutation.
 
 Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError` (a document the client cannot run, for example one that sets `cursor` or `skip` itself) and its subclass `GolemMultipleOperationsError` (a document with more than one operation), `GolemNotLiveError`, `GolemNotFoundError`, `GolemProtocolError`.
 

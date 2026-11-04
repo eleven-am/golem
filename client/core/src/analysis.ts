@@ -338,6 +338,16 @@ function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope
   return { ...set, selections }
 }
 
+function disagrees(draft: StreamDraft, fields: ReadonlyMap<string, FieldNode>): boolean {
+  for (const [responseName, field] of fields) {
+    const known = draft.fields.get(responseName)
+    if (known !== undefined && print(known) !== print(field)) {
+      return true
+    }
+  }
+  return false
+}
+
 function register(models: ReadonlyArray<string>, scope: Scope | null, slot: boolean, ranking: Ranking, order: number, path: string, state: RowState, walk: Walk): void {
   const sink = walk.sink
   if (sink === null) {
@@ -357,8 +367,13 @@ function register(models: ReadonlyArray<string>, scope: Scope | null, slot: bool
       )
       continue
     }
-    const key = `${model.events}|${scope === null ? '' : print(scope)}`
+    const base = `${model.events}|${scope === null ? '' : print(scope)}`
+    let key = base
     let draft = sink.streams.get(key)
+    for (let copy = 1; draft !== undefined && disagrees(draft, fields); copy++) {
+      key = `${base}#${copy}`
+      draft = sink.streams.get(key)
+    }
     if (draft === undefined) {
       draft = { key, model: name, eventsRoot: model.events, slot, ranking, scope, order, fields: new Map(), paths: new Set() }
       sink.streams.set(key, draft)
@@ -595,66 +610,28 @@ export class DocumentAnalyzer {
   }
 }
 
-export type MutationEffect = 'merge' | 'delete' | 'invalidate' | 'none'
-
-export interface MutationRoot {
-  readonly key: string
-  readonly name: string
-  readonly effect: MutationEffect
-  readonly models: ReadonlyArray<string>
-}
-
 export interface MutationAnalysis {
   readonly query: string
-  readonly roots: ReadonlyArray<MutationRoot>
-}
-
-function mutationRoot(field: FieldNode, walk: Walk): { readonly field: FieldNode; readonly root: MutationRoot } {
-  const name = field.name.value
-  const key = responseKey(field)
-  if (name.startsWith('__')) {
-    return { field, root: { key, name, effect: 'none', models: [] } }
-  }
-  const described = walk.manifest.roots[name]
-  if (described === undefined) {
-    throw new GolemDocumentError(`${name} is not a root in the manifest`)
-  }
-  const none = { field, root: { key, name, effect: 'none' as const, models: described.models } }
-  if (described.kind === 'generated' && (described.shape === 'updateMany' || described.shape === 'deleteMany')) {
-    return { ...none, root: { ...none.root, effect: 'invalidate' } }
-  }
-  const holdsRows = field.selectionSet !== undefined && described.models.length > 0 && (described.kind === 'opaque' || described.shape === 'row' || described.shape === 'deletedRow')
-  if (!holdsRows || field.selectionSet === undefined) {
-    return none
-  }
-  const effect = described.kind === 'generated' && described.shape === 'deletedRow' ? 'delete' : 'merge'
-  return {
-    field: { ...field, selectionSet: rows(field.selectionSet, described.models, null, false, NO_RANKING, responseKey(field), walk) },
-    root: { key, name, effect, models: described.models },
-  }
+  readonly roots: ReadonlyArray<{ readonly name: string; readonly models: ReadonlyArray<string> }>
 }
 
 export function analyzeMutation(document: DocumentNode | string, manifest: ClientManifest): MutationAnalysis {
   const parsed = typeof document === 'string' ? parse(document) : document
   const operation = operationOf(parsed, OperationTypeNode.MUTATION)
-  const walk: Walk = { manifest, fragments: fragmentsOf(parsed), sink: null }
-  const roots: MutationRoot[] = []
-  const selections = operation.selectionSet.selections.map((selection) => {
+  const roots: Array<{ readonly name: string; readonly models: ReadonlyArray<string> }> = []
+  for (const selection of operation.selectionSet.selections) {
     if (selection.kind !== Kind.FIELD) {
       throw new GolemDocumentError('a mutation document selects its roots directly; fragments at the mutation root are not supported')
     }
-    const analysed = mutationRoot(selection, walk)
-    roots.push(analysed.root)
-    return analysed.field
-  })
-  const definitions = parsed.definitions.map((definition) => {
-    if (definition === operation) {
-      return { ...operation, selectionSet: { ...operation.selectionSet, selections } }
+    const name = selection.name.value
+    if (name.startsWith('__')) {
+      continue
     }
-    if (definition.kind === Kind.FRAGMENT_DEFINITION && walk.manifest.models[definition.typeCondition.name.value] !== undefined) {
-      return rewriteFragment(definition, walk)
+    const described = manifest.roots[name]
+    if (described === undefined) {
+      throw new GolemDocumentError(`${name} is not a root in the manifest`)
     }
-    return definition
-  })
-  return { query: print({ ...parsed, definitions }), roots }
+    roots.push({ name, models: described.models })
+  }
+  return { query: print(parsed), roots }
 }

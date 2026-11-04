@@ -106,16 +106,6 @@ export class Patcher {
     })
   }
 
-  lags(data: unknown, key: RowKey, version: Version): boolean {
-    let found = false
-    this.each(data, undefined, (candidateKey, row) => {
-      if (candidateKey === key && (typeof row._version !== 'string' || parseVersion(row._version) < version)) {
-        found = true
-      }
-    })
-    return found
-  }
-
   differs(data: unknown, key: RowKey, entity: Readonly<Record<string, unknown>>, names: ReadonlyArray<string>, within?: Occurrences): boolean {
     let found = false
     this.each(data, within, (candidateKey, row) => {

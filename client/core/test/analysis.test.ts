@@ -180,6 +180,14 @@ describe('stream set', () => {
     expect(flat(analysis.streams[0]?.query)).toContain('where: $w')
   })
 
+  it('gives one response key that names different fields a stream of its own', () => {
+    const streams = social.analyze('{ titles: posts { label: title } bodies: posts { label: body } }').streams
+    const entities = streams.map((stream) => flat(stream.query).split('entity {')[1] ?? '')
+    expect(entities).toHaveLength(2)
+    expect(entities.some((entity) => entity.includes('label: title') && !entity.includes('label: body'))).toBe(true)
+    expect(entities.some((entity) => entity.includes('label: body') && !entity.includes('label: title'))).toBe(true)
+  })
+
   it('merges the selections of repeated occurrences of one stream', () => {
     const analysis = social.analyze('{ a: posts { title } b: posts { body } }')
     expect(analysis.streams).toHaveLength(1)

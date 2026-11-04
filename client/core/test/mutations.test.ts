@@ -1,4 +1,4 @@
-import { QueryClient, QueryObserver } from '@tanstack/query-core'
+import { InfiniteQueryObserver, QueryClient, QueryObserver, type InfiniteData } from '@tanstack/query-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DocumentAnalyzer, GolemCommitUnknownError, GolemError, GolemPartialCommitError, LiveSync, Mutations, Transport, type Credentials } from '../src/index.js'
 import { HttpGate, sleep, until } from './harness/live.js'
@@ -7,6 +7,8 @@ import { actor, CREATE_POST, headerSocket, manifest, postInput, signUp, socialUr
 const analyzer = new DocumentAnalyzer(manifest)
 
 const LIST = 'query($t: String!) { posts(where: { title: { contains: $t } }) { title } }'
+const ORDERED = 'query($t: String!) { posts(where: { title: { contains: $t } }, orderBy: [{ title: asc }]) { title } }'
+const PAGED = 'query($t: String!, $take: Int!) { posts(where: { title: { contains: $t } }, orderBy: [{ title: asc }], take: $take) { title } }'
 const SINGLE = 'query($id: UUID!) { post(where: { ID: $id }) { title } }'
 const RENAME = 'mutation($id: UUID!, $title: String!) { updatePost(where: { ID: $id }, data: { title: { set: $title } }) { title } }'
 const REMOVE = 'mutation($id: UUID!) { deletePost(where: { ID: $id }) { title } }'
@@ -22,6 +24,10 @@ interface Env {
   readonly gated: Transport
   readonly who: { readonly id: string; readonly credentials: () => Credentials }
 }
+
+type Page = { posts: Array<{ id: string; title: string }> }
+
+const titles = (data: unknown): string[] => ((data as { posts?: Array<{ title: string }> } | undefined)?.posts ?? []).map((row) => row.title)
 
 const open: Array<() => void> = []
 
@@ -65,49 +71,39 @@ function cached(world: Env, document: string, variables: Record<string, unknown>
 }
 
 describe('mutations on the real social server', () => {
-  it('merges a returned row into every cached query holding the key', async () => {
+  it('marks every cached query over the model stale after a row mutation and refetches the active ones in server order', async () => {
     const world = await env()
     const tag = `m-${world.who.id}`
     const id = await createPost(world, `${tag}-a`)
-    const list = cached(world, LIST, { t: tag })
-    const single = cached(world, SINGLE, { id })
-    await list.load()
-    await single.load()
-    const before = (single.data() as { post: { _version: string } }).post._version
-    const result = await world.mutations.execute<{ updatePost: { title: string; _version: string } }>(RENAME, { id, title: `${tag}-b` })
-    expect(BigInt(result.updatePost._version)).toBeGreaterThan(BigInt(before))
-    expect((list.data() as { posts: Array<{ title: string; _version: string }> }).posts.map((row) => row.title)).toEqual([`${tag}-b`])
-    expect((single.data() as { post: { title: string; _version: string } }).post).toMatchObject({ title: `${tag}-b`, _version: result.updatePost._version })
+    await createPost(world, `${tag}-b`)
+    const ordered = cached(world, ORDERED, { t: tag })
+    const idle = cached(world, SINGLE, { id })
+    const observer = new QueryObserver(world.queryClient, ordered.options)
+    open.push(observer.subscribe(() => undefined))
+    await until(() => ordered.data() !== undefined)
+    await idle.load()
+    await world.mutations.execute(RENAME, { id, title: `${tag}-z` })
+    await until(() => titles(ordered.data()).join() === `${tag}-b,${tag}-z`, 3000)
+    expect(idle.state()?.isInvalidated).toBe(true)
   })
 
-  it('keeps a cached row that is newer than the returned one', async () => {
+  it('refetches the pages of an infinite query after a delete instead of shortening one', async () => {
     const world = await env()
-    const tag = `k-${world.who.id}`
-    const id = await createPost(world, `${tag}-a`)
-    const list = cached(world, LIST, { t: tag })
-    await list.load()
-    world.gate.hold()
-    const pending = world.mutations.execute(RENAME, { id, title: `${tag}-old` })
-    await until(() => world.gate.calls.some((call) => call.query.includes('updatePost')))
-    await sleep(100)
-    await world.direct.execute({ query: RENAME, variables: { id, title: `${tag}-new` } })
-    await world.queryClient.fetchQuery({ ...list.options, staleTime: 0 })
-    expect((list.data() as { posts: Array<{ title: string }> }).posts.map((row) => row.title)).toEqual([`${tag}-new`])
-    world.gate.release()
-    await pending
-    expect((list.data() as { posts: Array<{ title: string }> }).posts.map((row) => row.title)).toEqual([`${tag}-new`])
-  })
-
-  it('removes the row a delete root returns from every cached query', async () => {
-    const world = await env()
-    const tag = `d-${world.who.id}`
-    const id = await createPost(world, `${tag}-a`)
-    const keep = await createPost(world, `${tag}-b`)
-    const list = cached(world, LIST, { t: tag })
-    await list.load()
-    expect((list.data() as { posts: unknown[] }).posts).toHaveLength(2)
-    await world.mutations.execute(REMOVE, { id })
-    expect((list.data() as { posts: Array<{ id: string }> }).posts.map((row) => row.id)).toEqual([keep])
+    const tag = `i-${world.who.id}`
+    const ids: string[] = []
+    for (const name of ['1', '2', '3', '4', '5']) {
+      ids.push(await createPost(world, `${tag}-${name}`))
+    }
+    const analysis = analyzer.analyze(PAGED)
+    const options = world.live.infiniteOptions(analysis, { t: tag, take: 3 })
+    const observer = new InfiniteQueryObserver<Page, Error, InfiniteData<Page, unknown>, readonly unknown[], unknown>(world.queryClient, options as never)
+    open.push(observer.subscribe(() => undefined))
+    const shape = () => (observer.getCurrentResult().data?.pages ?? []).map((page) => page.posts.map((row) => row.title.slice(-1)))
+    await until(() => shape().length === 1)
+    await observer.fetchNextPage()
+    expect(shape()).toEqual([['1', '2', '3'], ['4', '5']])
+    await world.mutations.execute(REMOVE, { id: ids[1] })
+    await until(() => JSON.stringify(shape()) === JSON.stringify([['1', '3', '4'], ['5']]), 3000)
   })
 
   it('raises a partial commit and refetches the queries over the committed models', async () => {
