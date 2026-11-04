@@ -2422,7 +2422,8 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 				if identityErr != nil {
 					return identityErr
 				}
-				index, matched, matchErr := nextNestedFactIndex(envelopes, used, value.Node().ModelID(), action, expected)
+				batchBefore := batchRow
+				index, matched, matchErr := nextNestedFactIndex(envelopes, used, value.Node().ModelID(), action, expected, &batchBefore)
 				if matchErr != nil {
 					return fmt.Errorf("P4_RUNTIME_NESTED_FACT: batch node %d: %w", value.Node().Ordinal(), matchErr)
 				}
@@ -2437,7 +2438,11 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 		if identityErr != nil {
 			return identityErr
 		}
-		index, matched, matchErr := nextNestedFactIndex(envelopes, used, value.Node().ModelID(), action, expected)
+		var nodeBefore *mutationdecode.Row
+		if before, present := value.Result().Before(); present {
+			nodeBefore = &before
+		}
+		index, matched, matchErr := nextNestedFactIndex(envelopes, used, value.Node().ModelID(), action, expected, nodeBefore)
 		if matchErr != nil {
 			return fmt.Errorf("P4_RUNTIME_NESTED_FACT: node %d: %w", value.Node().Ordinal(), matchErr)
 		}
@@ -2486,13 +2491,13 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 // deterministic without inventing a node tag in the public fact ABI, while a
 // future codec payload (or a private delete snapshot) cannot be silently
 // attached to the wrong logical node.
-func nextNestedFactIndex(envelopes []mutationfact.Envelope, used []bool, model policyir.ModelID, action mutationir.FactAction, expected mutationdecode.Identity) (int, bool, error) {
+func nextNestedFactIndex(envelopes []mutationfact.Envelope, used []bool, model policyir.ModelID, action mutationir.FactAction, expected mutationdecode.Identity, before *mutationdecode.Row) (int, bool, error) {
 	if len(envelopes) != len(used) {
 		return 0, false, fmt.Errorf("fact inventory and usage bitmap differ")
 	}
 	selected := -1
 	for index, envelope := range envelopes {
-		if used[index] || envelope.ModelID() != model || envelope.Action() != action || !envelopeMatchesIdentity(envelope, action, expected) {
+		if used[index] || envelope.ModelID() != model || envelope.Action() != action || !envelopeMatchesIdentity(envelope, action, expected) || !envelopeMatchesBefore(envelope, before) {
 			continue
 		}
 		if selected < 0 {
@@ -2536,6 +2541,23 @@ func nestedFactOrderingEquivalent(left, right mutationfact.Envelope) bool {
 	leftSnapshot, leftSnapshotOK := left.PrivateDeleteSnapshot()
 	rightSnapshot, rightSnapshotOK := right.PrivateDeleteSnapshot()
 	return leftSnapshotOK == rightSnapshotOK && (!leftSnapshotOK || mutationdecode.EqualRow(leftSnapshot, rightSnapshot))
+}
+
+func envelopeMatchesBefore(envelope mutationfact.Envelope, before *mutationdecode.Row) bool {
+	if before == nil {
+		return true
+	}
+	snapshot, present := envelope.PrivateDeleteSnapshot()
+	if !present {
+		return true
+	}
+	for _, cell := range snapshot.Cells() {
+		other, found := before.Cell(cell.FieldID())
+		if !found || !mutationdecode.EqualCell(cell, other) {
+			return false
+		}
+	}
+	return true
 }
 
 func nestedFactIdentity(registry *schema.Registry, applied mutationnested.AppliedNode, requirement mutationir.FactRequirement, action mutationir.FactAction) (mutationdecode.Identity, error) {

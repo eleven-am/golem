@@ -133,6 +133,29 @@ func TestCDCValidatesOrdinalsActionsModelsAndImagesBeforeEncoding(t *testing.T) 
 	}
 }
 
+func TestCDCAcceptsAnUpdateWithoutABeforeImage(t *testing.T) {
+	input := clonePublicBatch(validBatch(t))
+	input.Changes[1].Before = nil
+	encoder := &fakeEncoder{}
+	transport := &captureTransport{}
+	if err := testEmitter(t, transport, encoder, &fakeCorrelator{}).Emit(context.Background(), input); err != nil {
+		t.Fatalf("an update without a before image was refused: %v", err)
+	}
+	updates := 0
+	for _, encoded := range encoder.snapshot() {
+		if encoded.Action != golem.EventUpdated {
+			continue
+		}
+		updates++
+		if encoded.Before != nil {
+			t.Fatal("the encoder was handed a before image the adapter never supplied")
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("the encoder saw %d updates, want 1", updates)
+	}
+}
+
 func TestCDCEmitterOwnsCursorAndChangeSlices(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	correlator := &fakeCorrelator{entered: entered, release: release}

@@ -68,7 +68,7 @@ func New(metadata Metadata, identity []any, entity *golem.RuntimeModelRow) (Vali
 	}
 	result := ValidatedEvent{metadata: public, resolvedEventSchema: metadata.ResolvedEventSchema, identity: owned}
 	if entity != nil {
-		if entity.ModelID() != metadata.ModelID || metadata.Action == golem.EventDeleted {
+		if entity.ModelID() != metadata.ModelID || metadata.Action == golem.EventDeleted || metadata.Action == golem.EventExited {
 			return ValidatedEvent{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated event entity disagrees with metadata")
 		}
 		result.entity, result.hasEntity = *entity, true

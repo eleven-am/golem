@@ -1432,7 +1432,7 @@ for {
 		if row, ok := event.Entity(); ok {
 			apply(event.ID(), row)
 		}
-	case golem.EventDeleted:
+	case golem.EventDeleted, golem.EventExited:
 		forget(event.ID())
 	}
 }
@@ -1450,7 +1450,10 @@ for {
   with masked fields absent. It is not the values the write wrote: two updates
   in quick succession can both deliver the later state. When the row no longer
   exists or no longer matches by then, the event is not delivered.
-- **Deleted events** carry only `ID()`. Over GraphQL their `entity` is null.
+- **Deleted and exited events** carry only `ID()`. Over GraphQL their `entity`
+  is null. An exited event (`golem.EventExited`, `EXITED`) means the row left
+  your stream because of an update: the row still exists, but it no longer
+  matches your filter or your read rule. See "Rows that leave a list".
 
 An event that your policy or your filter excludes is not delivered, and
 nothing tells you it existed.
@@ -1519,6 +1522,46 @@ If the shared read itself fails, the streams that needed it end with
 `GOLEM_SUBSCRIPTION_REVALIDATION`. A row that no longer exists when the event
 is judged is not delivered to anyone.
 
+### Rows that leave a list
+
+An update can move a row out of a stream: the title no longer matches the
+`EventWhere`, or the row no longer passes the caller's read rule (a post was
+unpublished, a row changed owner). The exact read for that update then finds no
+row. golem used to say nothing, and a subscriber that held the row kept it. It
+now delivers an **exited** event: action `golem.EventExited` (`EXITED` in the
+GraphQL `type` field), the row's key, the version of the update, and no entity.
+Remove the row from the list you hold exactly as for a delete, but the row has
+not been deleted and can come back (it then arrives as a created or updated
+event, or as `RESYNC`).
+
+Every update fact stores a **before snapshot**: the row as it was before the
+update, with the same field set as the delete snapshot (see "The delete
+snapshot") and under the same size limit. When an updated event finds no row
+for a subscriber, golem judges the subscriber's read rule and stream filter
+against that before snapshot, with the results of a delete:
+
+| Before snapshot, rule and filter | Result |
+|---|---|
+| both true | `EXITED` is delivered |
+| either false | nothing: the subscriber never held the row |
+| either unknown | the stream ends with `GOLEM_SUBSCRIPTION_RESYNC` |
+
+Unlike a delete, a filter that cannot be decided (a filter or read hook on a
+field outside the snapshot) ends the stream with `RESYNC` and does not deliver:
+an exit names a row the caller's hooks may hide, so golem does not guess.
+Unknown also covers a to-many relation, a before snapshot that was too large to
+store (`events.ObservationDeleteSnapshotOversize`, now reported for updates too,
+with action `updated`), and a change recorded from an external source without a
+`Before` image. A to-one relation in the rule is answered from the same shared
+read as a created or updated event when the update did not change the row's key
+to it; when the update did change that key, it is decided with the delete
+path's checks against the relation's old target.
+
+A subscriber that never held the row costs no read and no principal
+resolution: the judgement runs in memory over the shared read and the before
+snapshot. Only a subscriber that may have held the row resolves its principal
+afresh and runs the delete path's checks.
+
 ### Row versions
 
 Every model with `Subscriptions` has a golem-owned version on each row. A write
@@ -1553,7 +1596,8 @@ last held. A delete keeps the row's last version.
 - **Events.** Every event type has `version: String!`. It is always the version of
   the write that produced the event, taken from the stored fact (for a delete,
   the row's last version, which the fact keeps even when its delete snapshot was
-  too large to keep). A later write can land before the event is delivered; the
+  too large to keep; for an exited event, the version of the update that moved the
+  row out). A later write can land before the event is delivered; the
   event still carries its own version, and the entity you select carries the
   `_version` it was read at. Compare versions as integers. `golem.EventMetadata`
   has `Version() int64`.
@@ -1562,7 +1606,11 @@ last held. A delete keeps the row's last version.
   same transaction as the fact, and the event carries it. Between the external
   commit and the recording, a client can hold the external content at the old
   version. The images an adapter hands to `Emit` hold `golem_version` like any
-  other stored scalar. A delete takes its version from the `Before` image. A row
+  other stored scalar. A delete takes its version from the `Before` image. An
+  update's `Before` image is optional: with it the event stores a before
+  snapshot and subscribers that held the row receive `EXITED`; without it,
+  every subscriber that cannot be ruled out from the new row ends with
+  `RESYNC`. A row
   that was inserted and deleted outside golem between two batches was never
   stamped, so its delete is published at version 0, which hides nothing a client
   held. A `Before` image without the `golem_version` column fails with
@@ -1636,6 +1684,10 @@ events are.
 
 ### The delete snapshot
 
+Every update fact stores the same snapshot, taken from the row before the
+update (see "Rows that leave a list"). Everything below, the field set, the
+`DeleteSnapshot` declaration and the size limit, applies to updates as well.
+
 The snapshot always holds the primary key and the foreign keys of the model's
 forward to-one relations. When the model declares nothing else, it also holds
 every bounded scalar: booleans, numbers, decimals, dates, times, datetimes,
@@ -1678,7 +1730,7 @@ code:
 | Code | Why | What the client does |
 |---|---|---|
 | `GOLEM_SUBSCRIPTION_CANCELLED` | you called `Close`, or the context passed to subscribe ended | nothing |
-| `GOLEM_SUBSCRIPTION_RESYNC` | events may have been missed: the transport dropped, or a delete could not be judged | reload the state you hold, then subscribe again |
+| `GOLEM_SUBSCRIPTION_RESYNC` | events may have been missed: the transport dropped, or a delete or an exit could not be judged | reload the state you hold, then subscribe again |
 | `GOLEM_SUBSCRIPTION_OVERFLOW` | the subscriber fell behind and its queue (`EventLimits.SubscriberQueue`) filled | reload and subscribe again; read faster or raise the queue |
 | `GOLEM_SUBSCRIPTION_REVALIDATION` | the principal no longer resolves, or authorization could not be checked | re-authenticate, then subscribe again |
 | `GOLEM_SUBSCRIPTION_FORBIDDEN` | a re-check found the caller may no longer read this stream | stop; do not resubscribe with the same principal |

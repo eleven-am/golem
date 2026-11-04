@@ -612,13 +612,17 @@ func factFor(request RootRequest, operation mutationir.Operation) (mutationir.Fa
 	}
 	var fact mutationir.FactRequirement
 	var err error
-	if action == mutationir.FactDeleted {
-		snapshot := request.facts.deleteSnapshotFor(operation)
+	if action == mutationir.FactDeleted || action == mutationir.FactUpdated {
+		snapshot := request.facts.beforeSnapshotFor(operation)
 		state := mutationir.DeleteSnapshotUnverifiable
 		if snapshot != nil {
 			state = mutationir.DeleteSnapshotStoredScalars
 		}
-		fact, err = mutationir.NewDeleteFactRequirement(before, state, snapshot)
+		if action == mutationir.FactDeleted {
+			fact, err = mutationir.NewDeleteFactRequirement(before, state, snapshot)
+		} else {
+			fact, err = mutationir.NewUpdateFactRequirement(before, after, state, snapshot)
+		}
 	} else {
 		fact, err = mutationir.NewFactRequirement(action, before, after, nil)
 	}
@@ -692,9 +696,7 @@ func imagesFor(request RootRequest, node mutationir.NodeInput, row policyir.Cond
 			}
 		}
 	}
-	if node.Operation == mutationir.Delete || node.Operation == mutationir.DeleteMany {
-		before.addFields(request.facts.deleteSnapshotFor(node.Operation)...)
-	}
+	before.addFields(request.facts.beforeSnapshotFor(node.Operation)...)
 	if node.Operation == mutationir.Delete {
 		if err := before.addImage(request.Result); err != nil {
 			return mutationir.ImageRequirements{}, mutationir.ImageRequirements{}, err

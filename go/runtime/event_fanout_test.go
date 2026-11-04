@@ -164,7 +164,12 @@ func (fixture deleteEvalFixture) publishRowEvent(t *testing.T, action golem.Even
 	if action == golem.EventUpdated {
 		beforeFields = []policyir.FieldID{policyir.FieldID(identity)}
 	}
-	requirement, err := mutationir.NewFactRequirement(factAction, beforeFields, []policyir.FieldID{policyir.FieldID(identity)}, nil)
+	var requirement mutationir.FactRequirement
+	if action == golem.EventUpdated {
+		requirement, err = updateFactRequirement(fixture.schema.Registry, policyir.ModelID(model), beforeFields)
+	} else {
+		requirement, err = mutationir.NewFactRequirement(factAction, beforeFields, []policyir.FieldID{policyir.FieldID(identity)}, nil)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -296,7 +296,7 @@ func TestGeneratedSubscriptionSDLMatchesClosedEventABIGolden(t *testing.T) {
 	for _, value := range eventType.EnumValues {
 		eventValues = append(eventValues, value.Name)
 	}
-	if strings.Join(eventValues, ",") != "CREATED,UPDATED,DELETED" {
+	if strings.Join(eventValues, ",") != "CREATED,UPDATED,DELETED,EXITED" {
 		t.Fatalf("event enum = %v", eventType.EnumValues)
 	}
 	event := requireDefinition(t, parsed, "PostEvent")

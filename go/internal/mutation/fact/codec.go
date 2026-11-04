@@ -497,15 +497,15 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 	if action < mutationir.FactCreated || action > mutationir.FactDeleted {
 		return Envelope{}, nil, d.fail("invalid fact action %d", action)
 	}
-	if action == mutationir.FactDeleted {
+	if action == mutationir.FactDeleted || action == mutationir.FactUpdated {
 		if deleteState != mutationir.DeleteSnapshotUnverifiable && deleteState != mutationir.DeleteSnapshotStoredScalars {
-			return Envelope{}, nil, d.fail("invalid delete snapshot state %d", deleteState)
+			return Envelope{}, nil, d.fail("invalid before snapshot state %d", deleteState)
 		}
 		if deleteState == mutationir.DeleteSnapshotUnverifiable && len(snapshotFields) != 0 {
-			return Envelope{}, nil, d.fail("unverifiable delete carries snapshot fields")
+			return Envelope{}, nil, d.fail("unverifiable fact carries snapshot fields")
 		}
 	} else if deleteState != mutationir.DeleteSnapshotNotApplicable {
-		return Envelope{}, nil, d.fail("non-delete fact carries delete snapshot state")
+		return Envelope{}, nil, d.fail("created fact carries a before snapshot state")
 	}
 	if rowVersion == 0 && action != mutationir.FactDeleted {
 		return Envelope{}, nil, d.fail("a %s fact carries no stamped row version", actionText(action))
@@ -682,18 +682,18 @@ func validateFactShape(action mutationir.FactAction, before, after *mutationdeco
 	default:
 		return fmt.Errorf("unknown fact action")
 	}
-	if action != mutationir.FactDeleted && len(snapshotFields) != 0 {
-		return fmt.Errorf("private snapshot fields are valid only for delete")
+	if action == mutationir.FactCreated && len(snapshotFields) != 0 {
+		return fmt.Errorf("private snapshot fields are valid only for update and delete")
 	}
-	if action == mutationir.FactDeleted {
+	if action == mutationir.FactDeleted || action == mutationir.FactUpdated {
 		if deleteState != mutationir.DeleteSnapshotUnverifiable && deleteState != mutationir.DeleteSnapshotStoredScalars {
-			return fmt.Errorf("delete snapshot verification state is invalid")
+			return fmt.Errorf("before snapshot verification state is invalid")
 		}
 		if deleteState == mutationir.DeleteSnapshotUnverifiable && len(snapshotFields) != 0 {
-			return fmt.Errorf("unverifiable delete carries private snapshot fields")
+			return fmt.Errorf("unverifiable fact carries private snapshot fields")
 		}
 	} else if deleteState != mutationir.DeleteSnapshotNotApplicable {
-		return fmt.Errorf("non-delete fact carries delete snapshot verification state")
+		return fmt.Errorf("created fact carries before snapshot verification state")
 	}
 	for index, fieldID := range snapshotFields {
 		if fieldID == (policyir.FieldID{}) || index > 0 && bytes.Compare(snapshotFields[index-1][:], fieldID[:]) >= 0 {

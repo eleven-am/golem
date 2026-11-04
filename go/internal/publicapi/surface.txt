@@ -1992,6 +1992,7 @@ golem.EventAction comparable
 golem.EventAction type string
 golem.EventCreated const EventAction = "created"
 golem.EventDeleted const EventAction = "deleted"
+golem.EventExited const EventAction = "exited"
 golem.EventID comparable
 golem.EventID type [16]uint8
 golem.EventMetadata comparable

@@ -95,8 +95,11 @@ func New(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventI
 			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: created fact requires only an after image")
 		}
 	case mutationir.FactUpdated:
-		if len(beforeFields) == 0 || len(afterFields) == 0 || before == nil || after == nil {
-			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact requires before and after images")
+		if len(beforeFields) == 0 || len(afterFields) == 0 || after == nil {
+			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact requires an after image")
+		}
+		if before == nil && (requirement.DeleteSnapshotState() != mutationir.DeleteSnapshotUnverifiable || len(snapshotFields) != 0) {
+			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: updated fact without a before image must be unverifiable")
 		}
 	case mutationir.FactDeleted:
 		if len(beforeFields) == 0 || len(afterFields) != 0 || before == nil || after != nil {
@@ -119,7 +122,11 @@ func New(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventI
 		deleteState:    requirement.DeleteSnapshotState(),
 	}
 	if len(beforeFields) != 0 {
-		identity, err := mutationdecode.ExtractOrderedIdentity(registry, *before, beforeFields)
+		source := before
+		if source == nil {
+			source = after
+		}
+		identity, err := mutationdecode.ExtractOrderedIdentity(registry, *source, beforeFields)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("P4_FACT_INPUT: before identity: %w", err)
 		}
@@ -184,8 +191,8 @@ func (envelope Envelope) DeleteSnapshotState() mutationir.DeleteSnapshotState {
 	return envelope.deleteState
 }
 func (envelope Envelope) WithUnverifiableDeleteSnapshot() (Envelope, error) {
-	if envelope.action != mutationir.FactDeleted {
-		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: only a deleted fact can drop its private snapshot")
+	if envelope.action != mutationir.FactDeleted && envelope.action != mutationir.FactUpdated {
+		return Envelope{}, fmt.Errorf("P7_FACT_INPUT: only an updated or deleted fact can drop its private snapshot")
 	}
 	envelope.deleteState = mutationir.DeleteSnapshotUnverifiable
 	envelope.snapshotFields = nil

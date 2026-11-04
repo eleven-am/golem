@@ -175,6 +175,50 @@ func TestDeclaredDeleteSnapshotOversizeIsUnverifiableAndObserved(t *testing.T) {
 	}
 }
 
+func TestDeclaredUpdateSnapshotOversizeIsUnverifiableAndObserved(t *testing.T) {
+	ctx := context.Background()
+	fixture := openMutationResultFixture(t, schematest.NewSubscribedIndexedWithFullDeleteSnapshot(t), MutationLimits{}, nil, nil, nil, true)
+	capture := &deleteSnapshotObservations{}
+	fixture.app.eventObserver = capture
+	system := fixture.app.System()
+	huge := strings.Repeat("h", 100*1024)
+	for _, row := range []struct {
+		id    byte
+		title string
+	}{{231, huge}, {232, "small"}} {
+		if _, err := SystemCreate(ctx, system, fixture.postDescriptor, fixture.createPost(row.id, golem.UUID{15: 1}, row.title)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clearDeleteSnapshotFacts(t, fixture)
+	for _, id := range []byte{231, 232} {
+		if _, err := SystemUpdate(ctx, system, fixture.postDescriptor, fixture.target(id), fixture.updateTitle("changed")); err != nil {
+			t.Fatalf("update %d failed: %v", id, err)
+		}
+	}
+	stored := deleteSnapshotFacts(t, fixture)
+	if len(stored) != 2 {
+		t.Fatalf("facts=%d", len(stored))
+	}
+	wantStates := []mutationir.DeleteSnapshotState{mutationir.DeleteSnapshotUnverifiable, mutationir.DeleteSnapshotStoredScalars}
+	for index, row := range stored {
+		envelope, err := decodeCurrentMutationFact(fixture.schema.Registry, policyir.ModelID(fixture.schema.Post), row.Metadata, row.DeleteSnapshot)
+		if err != nil {
+			t.Fatalf("fact %d: %v", index, err)
+		}
+		if envelope.Action() != mutationir.FactUpdated || envelope.DeleteSnapshotState() != wantStates[index] {
+			t.Fatalf("fact %d action=%d state=%d, want updated with state %d", index, envelope.Action(), envelope.DeleteSnapshotState(), wantStates[index])
+		}
+	}
+	observed := capture.kind(events.ObservationDeleteSnapshotOversize)
+	if len(observed) != 1 {
+		t.Fatalf("oversize observations=%d", len(observed))
+	}
+	if value := observed[0]; value.ModelID() != fixture.schema.Post || value.Action() != golem.EventUpdated || value.QueueLimit() != DefaultMutationDeleteSnapshotBytes || value.AggregateCount() <= int64(len(huge)) {
+		t.Fatalf("oversize observation=%#v", value)
+	}
+}
+
 func TestDeleteAuthorizationOutsideSnapshotResyncsAndReportsCoverage(t *testing.T) {
 	title := func(schemaFixture schematest.Fixture) golem.TextField[p7EventPost, string] {
 		return golem.GeneratedTextField[p7EventPost, string](schemaFixture.PostTitle)

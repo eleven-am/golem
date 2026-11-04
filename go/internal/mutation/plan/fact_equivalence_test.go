@@ -78,9 +78,7 @@ func legacyPrepareSites() []legacyFactBlock {
 						t.Fatal(err)
 					}
 					facts.capture, facts.codec, facts.eventSchema = true, factCodec, eventSchema
-					if operation == mutationir.Delete {
-						facts.snapshot = snapshot
-					}
+					facts.snapshot = snapshot
 				}
 				return facts
 			},
@@ -92,11 +90,11 @@ func legacyPrepareSites() []legacyFactBlock {
 				var facts legacyFacts
 				modelFact, _ := registry.Model(golem.ModelID(model))
 				if modelFact.SubscriptionsEnabled() {
-					factCodec, eventSchema, _, err := legacyMutationEventSchema(registry, model)
+					factCodec, eventSchema, snapshot, err := legacyMutationEventSchema(registry, model)
 					if err != nil {
 						t.Fatal(err)
 					}
-					facts.capture, facts.codec, facts.eventSchema = true, factCodec, eventSchema
+					facts.capture, facts.codec, facts.eventSchema, facts.snapshot = true, factCodec, eventSchema, snapshot
 				}
 				return facts
 			},
@@ -113,9 +111,7 @@ func legacyPrepareSites() []legacyFactBlock {
 						t.Fatal(err)
 					}
 					facts.capture, facts.codec, facts.eventSchema = true, factCodec, eventSchema
-					if operation == mutationir.DeleteMany {
-						facts.snapshot = snapshot
-					}
+					facts.snapshot = snapshot
 				}
 				return facts
 			},
@@ -131,9 +127,7 @@ func legacyPrepareSites() []legacyFactBlock {
 						t.Fatal(err)
 					}
 					facts.capture, facts.codec, facts.eventSchema = true, codec, eventSchema
-					if operation == mutationir.Delete {
-						facts.snapshot = snapshot
-					}
+					facts.snapshot = snapshot
 				}
 				return facts
 			},
@@ -167,9 +161,7 @@ func legacyPrepareSites() []legacyFactBlock {
 					facts.capture, facts.codec, facts.eventSchema = true, codec, eventSchema
 					deleteSnapshot = snapshot
 				}
-				if operation == mutationir.Delete {
-					facts.snapshot = deleteSnapshot
-				}
+				facts.snapshot = deleteSnapshot
 				return facts
 			},
 		},
@@ -269,6 +261,10 @@ func expectedPlanFactShape(t testing.TB, fixture schematest.Fixture, model polic
 			entry.Action, entry.After = mutationir.FactCreated, identity
 		case mutationir.Update, mutationir.UpdateMany:
 			entry.Action, entry.Before, entry.After = mutationir.FactUpdated, identity, identity
+			entry.SnapshotState, entry.Snapshot = mutationir.DeleteSnapshotUnverifiable, nil
+			if facts.snapshot != nil {
+				entry.SnapshotState, entry.Snapshot = mutationir.DeleteSnapshotStoredScalars, facts.snapshot
+			}
 		case mutationir.Delete, mutationir.DeleteMany:
 			entry.Action, entry.Before = mutationir.FactDeleted, identity
 			entry.SnapshotState, entry.Snapshot = mutationir.DeleteSnapshotUnverifiable, nil

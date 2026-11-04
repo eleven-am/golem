@@ -59,7 +59,7 @@ func (encoder *cdcEventEncoder) EncodeCDC(ctx context.Context, input eventcdc.En
 	}
 
 	modelID := policyir.ModelID(input.Model)
-	requirement, eventSchema, err := cdcFactRequirement(encoder.registry, modelID, input.Action)
+	requirement, eventSchema, err := cdcFactRequirement(encoder.registry, modelID, input.Action, input.Before != nil)
 	if err != nil {
 		return eventcdc.Encoded{}, err
 	}
@@ -131,8 +131,8 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 			return fmt.Errorf("P7_CDC_ENCODER_INPUT: create requires only an after image")
 		}
 	case golem.EventUpdated:
-		if input.Before == nil || input.After == nil {
-			return fmt.Errorf("P7_CDC_ENCODER_INPUT: update requires before and after images")
+		if input.After == nil {
+			return fmt.Errorf("P7_CDC_ENCODER_INPUT: update requires an after image")
 		}
 	case golem.EventDeleted:
 		if input.Before == nil || input.After != nil {
@@ -144,7 +144,7 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 	return nil
 }
 
-func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, action golem.EventAction) (mutationir.FactRequirement, [32]byte, error) {
+func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, action golem.EventAction, hasBefore bool) (mutationir.FactRequirement, [32]byte, error) {
 	_, eventSchema, deleteSnapshot, err := mutationplan.ModelEventSchema(registry, modelID)
 	if err != nil {
 		return mutationir.FactRequirement{}, [32]byte{}, err
@@ -162,7 +162,11 @@ func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, act
 	case golem.EventCreated:
 		requirement, err = mutationir.NewFactRequirement(mutationir.FactCreated, nil, identity, nil)
 	case golem.EventUpdated:
-		requirement, err = mutationir.NewFactRequirement(mutationir.FactUpdated, identity, identity, nil)
+		if hasBefore {
+			requirement, err = mutationir.NewUpdateFactRequirement(identity, identity, mutationir.DeleteSnapshotStoredScalars, deleteSnapshot)
+		} else {
+			requirement, err = mutationir.NewUpdateFactRequirement(identity, identity, mutationir.DeleteSnapshotUnverifiable, nil)
+		}
 	case golem.EventDeleted:
 		requirement, err = mutationir.NewDeleteFactRequirement(identity, mutationir.DeleteSnapshotStoredScalars, deleteSnapshot)
 	default:

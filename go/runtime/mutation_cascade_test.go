@@ -279,8 +279,16 @@ func assertCascadeFacts(t *testing.T, profile mutationProviderAcceptanceFixture,
 		if !strings.EqualFold(row.ModelID, hex.EncodeToString(post[:])) {
 			t.Fatalf("unexpected fact for model %s action %s", row.ModelID, row.Action)
 		}
-		if _, err := decodeRuntimeMutationFact(profile.fixture.app.registry, row); err != nil {
+		envelope, err := decodeRuntimeMutationFact(profile.fixture.app.registry, row)
+		if err != nil {
 			t.Fatalf("cascade fact does not decode: %v", err)
+		}
+		if row.Action == "updated" {
+			snapshot, present := envelope.PrivateDeleteSnapshot()
+			author, authorPresent := snapshot.Cell(policyir.FieldID(profile.fixture.schema.AuthorID))
+			if !present || !authorPresent || author.IsNull() {
+				t.Fatalf("a cleared reference must carry the author it had before: snapshot=%v author=%v", present, authorPresent)
+			}
 		}
 		payload := row.BeforeIdentity
 		if row.Action != "deleted" && len(payload) == 0 {

@@ -132,7 +132,7 @@ func validSuppressionReason(reason SuppressionReason) bool {
 
 func validObservationAction(action golem.EventAction) bool {
 	switch action {
-	case "", golem.EventCreated, golem.EventUpdated, golem.EventDeleted:
+	case "", golem.EventCreated, golem.EventUpdated, golem.EventDeleted, golem.EventExited:
 		return true
 	default:
 		return false

@@ -2,11 +2,14 @@ package runtime
 
 import (
 	"context"
+	"sync"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	eventcodec "github.com/eleven-am/golem/go/internal/event/codec"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
+	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/policy/dependency"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -23,6 +26,8 @@ type eventNoticeShared struct {
 	failed      bool
 	snapshot    *eventSnapshot
 	snapshotErr error
+	beforeOnce  sync.Once
+	before      *eventSnapshot
 }
 
 type eventSnapshot struct {
@@ -171,6 +176,71 @@ func (shared *eventNoticeShared) verdict(spec *eventJudgeSpec) (deleteTruth, err
 		return deleteUnknown, nil
 	}
 	return shared.snapshot.judge(spec), nil
+}
+
+func (app *App[P, A]) exitUnseen(shared *eventNoticeShared, state *callerEventSubscription[P]) bool {
+	shared.beforeOnce.Do(func() { shared.before = app.newExitSnapshot(shared, policyir.ModelID(state.model)) })
+	return shared.before != nil && shared.before.judge(state.judge) == deleteFalse
+}
+
+func (app *App[P, A]) newExitSnapshot(shared *eventNoticeShared, model policyir.ModelID) *eventSnapshot {
+	fact := shared.envelope.Fact()
+	if fact.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
+		return nil
+	}
+	identity, present := fact.AfterIdentity()
+	if !present {
+		return nil
+	}
+	evaluator, err := app.newDeleteEvaluator(model, fact, identity)
+	if err != nil {
+		return nil
+	}
+	exact := &eventSnapshot{found: true, evaluator: evaluator}
+	after := shared.snapshot
+	if after == nil || !after.found {
+		return exact
+	}
+	hops := app.unchangedHops(model, evaluator.cells, after.evaluator.cells)
+	record := evaluator.record.WithRelations(after.evaluator.record, hops)
+	rebased := &deleteEvaluator{model: model, cells: evaluator.cells, record: record, shared: &deleteEvaluation{providers: app.providers, fromRecord: true}}
+	return &eventSnapshot{found: true, evaluator: rebased}
+}
+
+func (app *App[P, A]) unchangedHops(model policyir.ModelID, before, after map[policyir.FieldID]mutationdecode.Cell) map[policyir.FieldID]struct{} {
+	metadata, present := app.registry.Model(golem.ModelID(model))
+	if !present {
+		return nil
+	}
+	kept := make(map[policyir.FieldID]struct{})
+	for _, fieldID := range metadata.Fields() {
+		field, found := app.registry.Field(golem.ModelID(model), fieldID)
+		if !found || field.Kind() != compilerir.FieldRelation {
+			continue
+		}
+		relationID, found := field.RelationID()
+		if !found {
+			continue
+		}
+		endpoint, forward := app.registry.ForwardToOneRelation(golem.ModelID(model), relationID)
+		if !forward || endpoint.FieldID() != fieldID || len(endpoint.Correlation()) == 0 {
+			continue
+		}
+		unchanged := true
+		for _, pair := range endpoint.Correlation() {
+			parent := policyir.FieldID(pair.ParentFieldID())
+			left, leftFound := before[parent]
+			right, rightFound := after[parent]
+			if !leftFound || !rightFound || !mutationdecode.EqualCell(left, right) {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			kept[policyir.FieldID(fieldID)] = struct{}{}
+		}
+	}
+	return kept
 }
 
 func (snapshot *eventSnapshot) judge(spec *eventJudgeSpec) deleteTruth {

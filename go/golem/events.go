@@ -16,6 +16,7 @@ const (
 	EventCreated EventAction = "created"
 	EventUpdated EventAction = "updated"
 	EventDeleted EventAction = "deleted"
+	EventExited  EventAction = "exited"
 )
 
 type EventID [16]byte
@@ -51,7 +52,7 @@ func RuntimeValidatedEventMetadata(value metadatavalue.Value) (EventMetadata, er
 	if eventID == (EventID{}) || causation == (CausationID{}) || ordinal == 0 || recordedAt.IsZero() || generation == (SchemaDigest{}) || model == (ModelID{}) {
 		return EventMetadata{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated metadata is incomplete")
 	}
-	if action != EventCreated && action != EventUpdated && action != EventDeleted {
+	if action != EventCreated && action != EventUpdated && action != EventDeleted && action != EventExited {
 		return EventMetadata{}, fmt.Errorf("GOLEM_EVENT_CODEC: validated metadata action is unknown")
 	}
 	version := value.Version()

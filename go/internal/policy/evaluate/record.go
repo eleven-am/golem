@@ -139,6 +139,16 @@ func NewRecord(model ir.ModelID, fields ...Field) (Record, error) {
 
 func (record Record) ModelID() ir.ModelID { return record.model }
 
+func (record Record) WithRelations(from Record, keep map[ir.FieldID]struct{}) Record {
+	result := record.clone()
+	for id, field := range from.fields {
+		if _, kept := keep[id]; kept && field.kind == fieldRelation {
+			result.fields[id] = field.clone()
+		}
+	}
+	return result
+}
+
 func (field Field) clone() Field {
 	field.rows = cloneRecords(field.rows)
 	field.list = append([]listElement(nil), field.list...)
