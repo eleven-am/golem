@@ -98,9 +98,10 @@ describe('document analysis against the real social server', () => {
     const seen = collector()
     const stop = client.subscribe(streamRequest(analysis.streams[0]!), seen.handlers)
     await seen.until(() => seen.acks() === 1)
-    await client.execute({ query: CREATE_POST, variables: { data: postInput('slot') } })
-    await seen.until(() => seen.events.length === 1)
-    const event = seen.events[0] as { postEvents: { entity: Row & { title: string } } }
+    const created = await client.execute<{ createPost: { id: string } }>({ query: CREATE_POST, variables: { data: postInput('slot') } })
+    const mine = () => (seen.events as Array<{ postEvents: { id: string; entity: Row & { title: string } } }>).filter((one) => one.postEvents.id === created.createPost.id)
+    await seen.until(() => mine().length === 1)
+    const event = mine()[0] as { postEvents: { entity: Row & { title: string } } }
     expect(event.postEvents.entity).toMatchObject({ title: 'slot', __typename: 'Post' })
     stop()
     client.dispose()

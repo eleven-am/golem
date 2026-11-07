@@ -63,7 +63,7 @@ export function collector(): Collector {
         ends.push(end)
       },
     },
-    async until(predicate, milliseconds = 10_000) {
+    async until(predicate, milliseconds = 20_000) {
       const deadline = Date.now() + milliseconds
       while (!predicate()) {
         if (Date.now() > deadline) {
