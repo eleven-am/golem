@@ -22,6 +22,7 @@ type failRecorder struct {
 	mutex sync.Mutex
 	calls []failCall
 	react func(call int, record queueprovider.Record, code string) error
+	hold  func(ctx context.Context, call int)
 }
 
 func (recorder *failRecorder) fail(ctx context.Context, record queueprovider.Record, code string) (bool, error) {
@@ -29,6 +30,9 @@ func (recorder *failRecorder) fail(ctx context.Context, record queueprovider.Rec
 	recorder.calls = append(recorder.calls, failCall{record: record, code: code})
 	call := len(recorder.calls)
 	recorder.mutex.Unlock()
+	if recorder.hold != nil {
+		recorder.hold(ctx, call)
+	}
 	if recorder.react != nil {
 		if err := recorder.react(call, record, code); err != nil {
 			return false, &CallbackError{Err: err}
@@ -240,5 +244,46 @@ func TestCancelStopsAFailingCallback(t *testing.T) {
 	}
 	if calls := recorder.snapshot(); len(calls) != 1 {
 		t.Fatalf("callback kept running after cancel: %d calls", len(calls))
+	}
+}
+
+func TestCallbackContextEndsBeforeTheLeaseDoes(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.failed.bound", MaxAttempts: 5,
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return queue.Terminal(errors.New("poison")) },
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	type observation struct {
+		deadline time.Time
+		lease    time.Time
+		err      error
+	}
+	observed := make(chan observation, 1)
+	recorder := &failRecorder{store: fixture.store}
+	recorder.hold = func(ctx context.Context, call int) {
+		if call != 1 {
+			return
+		}
+		deadline, _ := ctx.Deadline()
+		lease := time.Time{}
+		if until := fixture.inspect(t, identity).LeaseUntil; until != nil {
+			lease = *until
+		}
+		<-ctx.Done()
+		observed <- observation{deadline: deadline, lease: lease, err: ctx.Err()}
+	}
+	startFailing(t, fixture, registry, gateLimits(), recorder)
+	record := awaitState(t, fixture, identity, queueprovider.StateFailed)
+	result := <-observed
+	if !errors.Is(result.err, context.DeadlineExceeded) {
+		t.Fatalf("callback context error=%v", result.err)
+	}
+	if result.lease.IsZero() || result.deadline.IsZero() || result.deadline.After(result.lease) {
+		t.Fatalf("callback deadline %v outlasts the lease %v", result.deadline, result.lease)
+	}
+	if calls := recorder.snapshot(); len(calls) != 2 || !calls[1].record.Finalize || record.LastCode != "terminal" {
+		t.Fatalf("calls=%#v job=%#v", calls, record)
 	}
 }
