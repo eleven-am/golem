@@ -516,6 +516,10 @@ export class LiveSync {
   }
 
   private onEvent(entry: Entry, stream: StreamState, frame: EventFrame): void {
+    if (stream.plan.derived) {
+      entry.coalescer.request()
+      return
+    }
     const key = this.patcher.eventKey(stream.plan.model, frame.id, frame.entity)
     const version = parseVersion(frame.version)
     const receivedAt = this.clock()
