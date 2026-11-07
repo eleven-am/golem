@@ -188,6 +188,29 @@ func TestCallbackFailureDefersTheTerminalDecisionAndRetriesAfterLeaseExpiry(t *t
 	}
 }
 
+func TestTerminalIntentIsPersistedBeforeTheCallbackRuns(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.failed.intent", MaxAttempts: 5,
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return queue.Terminal(errors.New("poison")) },
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	var observed atomic.Value
+	recorder := &failRecorder{store: fixture.store, react: func(call int, _ queueprovider.Record, _ string) error {
+		if call == 1 {
+			observed.Store(fixture.inspect(t, identity).LastCode)
+			return errors.New("callback refused")
+		}
+		return nil
+	}}
+	startFailing(t, fixture, registry, gateLimits(), recorder)
+	awaitState(t, fixture, identity, queueprovider.StateFailed)
+	if code, _ := observed.Load().(string); code != "terminal" {
+		t.Fatalf("last code before the callback=%q", code)
+	}
+}
+
 func TestCancelStopsAFailingCallback(t *testing.T) {
 	fixture := newHarness(t)
 	registry := queue.NewRegistry()

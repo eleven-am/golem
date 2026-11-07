@@ -569,6 +569,78 @@ func DeferFailureIsFencedAndSurvivesLeaseExpiry(t testing.TB, fixture Fixture) {
 	}
 }
 
+func ReleasedFinalizerStaysFinalizer(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	for _, name := range []string{"exhausted", "terminal"} {
+		jobType := "gate.release.finalizer." + name
+		maxAttempts := 1
+		if name == "terminal" {
+			maxAttempts = 5
+		}
+		identity := enqueue(t, fixture, jobType, request{maxAttempts: maxAttempts})
+		crashed := claimOne(t, fixture, jobType, longLease)
+		if name == "terminal" {
+			if changed, err := fixture.Store.DeferFailure(ctx, identity, crashed.LeaseToken, queueprovider.CodeTerminal); err != nil || !changed {
+				t.Fatalf("%s defer changed=%v error=%v", name, changed, err)
+			}
+		}
+		expireLeases(t, fixture, identity)
+		finalizer := claimOne(t, fixture, jobType, longLease)
+		if !finalizer.Finalize {
+			t.Fatalf("%s claim was not a finalizer %#v", name, finalizer)
+		}
+		if changed, err := fixture.Store.Release(ctx, identity, finalizer.LeaseToken); err != nil || !changed {
+			t.Fatalf("%s release changed=%v error=%v", name, changed, err)
+		}
+		again := claimOne(t, fixture, jobType, longLease)
+		if again.ID != identity || !again.Finalize || again.AttemptCount != 1 || again.LeaseToken == finalizer.LeaseToken {
+			t.Fatalf("%s released finalizer reran as %#v", name, again)
+		}
+		if changed, err := fixture.Store.Fail(ctx, nil, identity, again.LeaseToken, queueprovider.CodeTerminal); err != nil || !changed {
+			t.Fatalf("%s fail changed=%v error=%v", name, changed, err)
+		}
+	}
+}
+
+func ReleasedOrdinaryLeaseStaysPending(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	identity := enqueue(t, fixture, "gate.release.ordinary", request{maxAttempts: 1})
+	lease := claimOne(t, fixture, "gate.release.ordinary", longLease)
+	if changed, err := fixture.Store.Release(ctx, identity, lease.LeaseToken); err != nil || !changed {
+		t.Fatalf("release changed=%v error=%v", changed, err)
+	}
+	if record := inspect(t, fixture, identity); record.State != queueprovider.StatePending {
+		t.Fatalf("released ordinary lease=%#v", record)
+	}
+}
+
+func FinalizerHonorsExclusiveKeys(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	finalizing := enqueue(t, fixture, "gate.finalize.exclusive.a", request{maxAttempts: 1, exclusive: "finalize-key"})
+	crashed := claimOne(t, fixture, "gate.finalize.exclusive.a", longLease)
+	expireLeases(t, fixture, finalizing)
+	waiting := enqueue(t, fixture, "gate.finalize.exclusive.b", request{exclusive: "finalize-key"})
+	records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.finalize.exclusive.a", "gate.finalize.exclusive.b"}, Limit: 2, LeaseDuration: longLease})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != finalizing || !records[0].Finalize || records[0].LeaseToken == crashed.LeaseToken {
+		t.Fatalf("batch leased past the finalizer %#v", records)
+	}
+	if blocked := claim(t, fixture, "gate.finalize.exclusive.b", longLease, 1); len(blocked) != 0 {
+		t.Fatalf("pending job leased beside the finalizer %#v", blocked)
+	}
+	if changed, err := fixture.Store.Fail(ctx, nil, finalizing, records[0].LeaseToken, queueprovider.CodeAttemptsExhausted); err != nil || !changed {
+		t.Fatalf("finalizer fail changed=%v error=%v", changed, err)
+	}
+	if released := claimOne(t, fixture, "gate.finalize.exclusive.b", longLease); released.ID != waiting {
+		t.Fatalf("key stayed blocked %#v", released)
+	}
+}
+
 // ExpiredCanceledLeaseIsTerminalWithoutReexecution proves durable
 // cancellation survives a crash even on the final attempt.
 func ExpiredCanceledLeaseIsTerminalWithoutReexecution(t testing.TB, fixture Fixture) {

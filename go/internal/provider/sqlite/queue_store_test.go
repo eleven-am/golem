@@ -262,3 +262,15 @@ func TestFailOnExecutorCommitsAndRollsBackWithTransaction(t *testing.T) {
 func TestDeferFailureIsFencedAndSurvivesLeaseExpiry(t *testing.T) {
 	providertest.DeferFailureIsFencedAndSurvivesLeaseExpiry(t, newQueueFixture(t))
 }
+
+func TestReleasedFinalizerStaysFinalizer(t *testing.T) {
+	providertest.ReleasedFinalizerStaysFinalizer(t, newQueueFixture(t))
+}
+
+func TestReleasedOrdinaryLeaseStaysPending(t *testing.T) {
+	providertest.ReleasedOrdinaryLeaseStaysPending(t, newQueueFixture(t))
+}
+
+func TestFinalizerHonorsExclusiveKeys(t *testing.T) {
+	providertest.FinalizerHonorsExclusiveKeys(t, newQueueFixture(t))
+}

@@ -34,6 +34,16 @@ func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, re
 	book, cancel := worker.bookkeeping(ctx)
 	defer cancel()
 	started := time.Now()
+	if worker.fail != nil && !record.Finalize {
+		persisted, err := worker.store.DeferFailure(book, record.ID, record.LeaseToken, code)
+		if err != nil {
+			worker.emit(observer, record, observe.PhaseCommit, observe.OutcomeFailure, observe.ReasonProvider, time.Since(started))
+			return
+		}
+		if !persisted {
+			return
+		}
+	}
 	changed, err := worker.callFail(book, record, code)
 	var callback *CallbackError
 	switch {
@@ -43,9 +53,6 @@ func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, re
 			afterReason = observe.ReasonPanic
 		}
 		worker.emit(observer, record, observe.PhaseAfter, observe.OutcomeFailure, afterReason, time.Since(started))
-		worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
-			return worker.store.DeferFailure(book, record.ID, record.LeaseToken, code)
-		})
 	case err != nil:
 		worker.emit(observer, record, observe.PhaseCommit, observe.OutcomeFailure, observe.ReasonProvider, time.Since(started))
 	case changed:
