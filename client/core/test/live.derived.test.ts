@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Transport } from '../src/index.js'
 import { DELETE_POST, sleep, until, watch, world, type World } from './harness/live.js'
 import { actor, CREATE_POST, headerSocket, manifest, postInput, signUp, socialUrl } from './harness/social.js'
@@ -84,6 +84,22 @@ describe('a live aggregate', () => {
     await w.run(CREATE_POST, { data: postInput(`${mine}-two`) })
     await until(() => count(view.data()) === '2', 15_000)
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE')
+  })
+
+  it('refetches once more when an event lands while the first response is still held', async () => {
+    const w = await fresh()
+    const mine = token()
+    const requested = vi.spyOn(w.queryClient, 'refetchQueries')
+    w.gate.hold()
+    const view = watch(w, COUNT, { t: mine })
+    await until(() => view.fetches() === 1)
+    await until(() => w.live.statusOf(view.query)?.state === 'LIVE')
+    await w.createPost(`${mine}-one`)
+    await until(() => requested.mock.calls.length > 0)
+    w.gate.release()
+    await until(() => count(view.data()) === '1')
+    await until(() => view.fetches() === 2)
+    expect(view.fetches()).toBe(2)
   })
 
   it('does not refetch for a post the viewer cannot read', async () => {

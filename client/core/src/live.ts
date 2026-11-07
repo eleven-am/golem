@@ -76,6 +76,7 @@ interface Entry {
   readonly waiters: Set<() => void>
   merge: MergeState
   inFlight: number
+  derivedStale: boolean
   outage: boolean
   bypass: boolean
   everLive: boolean
@@ -245,6 +246,7 @@ export class LiveSync {
       waiters: new Set(),
       merge: EMPTY_MERGE_STATE,
       inFlight: 0,
+      derivedStale: false,
       outage: query.state.dataUpdatedAt !== 0,
       bypass: false,
       everLive: false,
@@ -517,6 +519,7 @@ export class LiveSync {
 
   private onEvent(entry: Entry, stream: StreamState, frame: EventFrame): void {
     if (stream.plan.derived) {
+      entry.derivedStale = entry.inFlight > 0
       entry.coalescer.request()
       return
     }
@@ -631,6 +634,7 @@ export class LiveSync {
     const issuedAt = this.clock()
     if (live !== undefined) {
       live.inFlight++
+      live.derivedStale = false
     }
     try {
       const data = await this.transport.execute({ ...request, signal: context.signal })
@@ -648,6 +652,10 @@ export class LiveSync {
         live.inFlight--
         if (live.inFlight === 0) {
           live.merge = EMPTY_MERGE_STATE
+          if (live.derivedStale) {
+            live.derivedStale = false
+            live.coalescer.request()
+          }
         }
       }
     }
