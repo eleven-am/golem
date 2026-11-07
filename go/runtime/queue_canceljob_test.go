@@ -5,7 +5,9 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
+	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	"github.com/eleven-am/golem/go/queue"
 )
 
@@ -145,4 +147,99 @@ func TestCancelJobReportsFalseForAnUnknownID(t *testing.T) {
 			t.Fatalf("cancel = %v, %v", canceled, err)
 		}
 	})
+}
+
+func TestCancelJobReachesARunningHandlerAfterCommit(t *testing.T) {
+	eachFailedProvider(t, func(t *testing.T, kind string) {
+		started := make(chan struct{})
+		stopped := make(chan error, 1)
+		var once sync.Once
+		registry, jobType := failedRegistry(t, "cancel.running", 3, func(ctx context.Context, _ queue.Job[queueGatePayload]) error {
+			once.Do(func() { close(started) })
+			<-ctx.Done()
+			stopped <- context.Cause(ctx)
+			return ctx.Err()
+		})
+		fixture := openFailedFixture(t, kind, &QueueConfig{Registry: registry, Limits: failedLimits()}, nil)
+		identity, err := fixture.app.Enqueue(context.Background(), newQueueGatePending(t, jobType))
+		if err != nil {
+			t.Fatal(err)
+		}
+		runFailedWorker(t, fixture.app)
+		<-started
+		ctx := context.Background()
+		err = SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[testPrincipal, testActor]) error {
+			if canceled, err := SystemTxCancelJob(ctx, transaction, identity); err != nil || !canceled {
+				return errors.Join(errors.New("cancel did not report true"), err)
+			}
+			select {
+			case cause := <-stopped:
+				return errors.New("handler was canceled before commit: " + cause.Error())
+			default:
+				return nil
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-stopped:
+		case <-time.After(30 * time.Second):
+			t.Fatal("running handler was never canceled after commit")
+		}
+		status, err := fixture.app.QueueOperator().Inspect(ctx, identity)
+		if err != nil || !status.CancelRequested {
+			t.Fatalf("status=%#v err=%v", status, err)
+		}
+	})
+}
+
+func TestCancelJobRacingARenewWaitsForCommitAndMatchesTheOperator(t *testing.T) {
+	registry, jobType := failedRegistry(t, "cancel.renew", 3, func(context.Context, queue.Job[queueGatePayload]) error { return nil })
+	fixture := openFailedFixture(t, "postgresql", &QueueConfig{Registry: registry, Limits: failedLimits()}, nil)
+	ctx := context.Background()
+	identity, err := fixture.app.Enqueue(ctx, newQueueGatePending(t, jobType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := fixture.app.queueStore.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"cancel.renew"}, Limit: 1, LeaseDuration: time.Minute})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	renewed := make(chan queueprovider.Renewal, 1)
+	renewErr := make(chan error, 1)
+	err = SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[testPrincipal, testActor]) error {
+		if canceled, err := SystemTxCancelJob(ctx, transaction, identity); err != nil || !canceled {
+			return errors.Join(errors.New("cancel did not report true"), err)
+		}
+		go func() {
+			renewal, err := fixture.app.queueStore.Renew(ctx, claimed[0].ID, claimed[0].LeaseToken, time.Minute)
+			renewed <- renewal
+			renewErr <- err
+		}()
+		select {
+		case <-renewed:
+			return errors.New("renew finished while the cancel was uncommitted")
+		case <-time.After(300 * time.Millisecond):
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case renewal := <-renewed:
+		if err := <-renewErr; err != nil || !renewal.Renewed || !renewal.CancelRequested {
+			t.Fatalf("renewal=%#v err=%v", renewal, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("renew never finished after commit")
+	}
+	status, err := fixture.app.QueueOperator().Inspect(ctx, identity)
+	if err != nil || status.State != queue.StateLeased || !status.CancelRequested {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+	if again, err := fixture.app.QueueOperator().Cancel(ctx, identity); err != nil || again {
+		t.Fatalf("operator cancel after tx cancel = %v, %v", again, err)
+	}
 }
