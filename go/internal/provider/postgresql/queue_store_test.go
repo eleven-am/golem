@@ -381,3 +381,27 @@ func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
 		providertest.LegacySchemaUpgradesInPlace(t, fixture, "legacy-live", "legacy-done")
 	})
 }
+
+func TestFinalizeLeaseHoldsNoResourceBudget(t *testing.T) {
+	runQueueGate(t, providertest.FinalizeLeaseHoldsNoResourceBudget)
+}
+
+func TestFailOnExecutorCommitsAndRollsBackWithTransaction(t *testing.T) {
+	runQueueGate(t, providertest.FailOnExecutorCommitsAndRollsBackWithTransaction)
+}
+
+func TestDeferFailureIsFencedAndSurvivesLeaseExpiry(t *testing.T) {
+	runQueueGate(t, providertest.DeferFailureIsFencedAndSurvivesLeaseExpiry)
+}
+
+func TestReleasedFinalizerStaysFinalizer(t *testing.T) {
+	runQueueGate(t, providertest.ReleasedFinalizerStaysFinalizer)
+}
+
+func TestReleasedOrdinaryLeaseStaysPending(t *testing.T) {
+	runQueueGate(t, providertest.ReleasedOrdinaryLeaseStaysPending)
+}
+
+func TestFinalizerHonorsExclusiveKeys(t *testing.T) {
+	runQueueGate(t, providertest.FinalizerHonorsExclusiveKeys)
+}

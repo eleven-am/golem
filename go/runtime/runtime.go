@@ -76,6 +76,7 @@ type Config[P, A any] struct {
 	// Queue enables the durable job queue. When omitted, no job storage is
 	// created and every queue entry point refuses with CodeConfigInvalid.
 	Queue                    *QueueConfig
+	QueueFailed              []JobFailed[P, A]
 	PolicyCache              PolicyCacheConfig
 	PolicyCacheKey           func(A) (string, bool)
 	SubscriptionPrincipalKey func(P) (string, bool)
@@ -320,7 +321,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err
 	}
-	if err := app.initializeQueueRuntime(ctx, config.Queue); err != nil {
+	if err := app.initializeQueueRuntime(ctx, config.Queue, config.QueueFailed); err != nil {
 		return nil, err
 	}
 	if err := app.startSemanticJobs(ctx); err != nil {

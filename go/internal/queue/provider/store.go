@@ -36,6 +36,7 @@ const (
 	MaximumIdentityBytes  = 64
 	CodeAttemptsExhausted = "attempts_exhausted"
 	CodeCanceled          = "canceled"
+	CodeTerminal          = "terminal"
 )
 
 // ErrNotFound reports an inspection of an absent job.
@@ -59,6 +60,7 @@ type Record struct {
 	DedupeKey       string
 	ExclusiveKey    string
 	CancelRequested bool
+	Finalize        bool
 	LastCode        string
 	EnqueuedAt      time.Time
 	FinishedAt      *time.Time
@@ -216,7 +218,8 @@ type Store interface {
 	Claim(ctx context.Context, options ClaimOptions) ([]Record, error)
 	Renew(ctx context.Context, id, token string, duration time.Duration) (Renewal, error)
 	Succeed(ctx context.Context, id, token, code string) (bool, error)
-	Fail(ctx context.Context, id, token, code string) (bool, error)
+	Fail(ctx context.Context, executor Executor, id, token, code string) (bool, error)
+	DeferFailure(ctx context.Context, id, token, code string) (bool, error)
 	RetryAt(ctx context.Context, id, token string, delay time.Duration, code string, uncounted bool) (bool, error)
 	MarkCanceled(ctx context.Context, id, token, code string) (bool, error)
 	Release(ctx context.Context, id, token string) (bool, error)
