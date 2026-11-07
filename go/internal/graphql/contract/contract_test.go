@@ -411,3 +411,42 @@ func TestNormalizeAcceptsDeclaredListBoundsAtEveryLevel(t *testing.T) {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }
+
+func TestInternalRequiredFieldNeedsANonClientOwnerWhenCreateIsExposed(t *testing.T) {
+	modelID := ir.ModelID("10000000000000000000000000000030")
+	keyField := ir.FieldID("10000000000000000000000000000031")
+	hashField := ir.FieldID("10000000000000000000000000000032")
+	build := func(modes []ir.FieldMode, operations []ir.Operation, hashScalar ir.ScalarFieldIR) ir.CompilationIR {
+		return ir.CompilationIR{
+			Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{ID: modelID, Fields: []ir.FieldIR{
+				{ID: keyField, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+				{ID: hashField, Kind: ir.FieldScalar, Scalar: &hashScalar},
+			}, PrimaryKey: &ir.KeyIR{ID: "k", Kind: ir.KeyPrimary, Fields: []ir.FieldID{keyField}}}}},
+			Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{
+				ModelID: modelID, GraphQLName: "Key", Exposed: true, Operations: operations,
+				Fields: []ir.FieldContractIR{{FieldID: keyField, GraphQLName: "id", Modes: []ir.FieldMode{ir.ModeVisible}}, {FieldID: hashField, GraphQLName: "keyHash", Modes: modes}},
+			}}},
+		}
+	}
+	required := ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString}}
+	create := []ir.Operation{ir.OperationFindOne, ir.OperationCreate}
+	if diagnostics := ValidateInternalFields(build([]ir.FieldMode{ir.ModeInternal}, create, required)); !hasDiagnostic(diagnostics, "P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED") {
+		t.Fatalf("unsafe internal field diagnostics=%#v", diagnostics)
+	}
+	if diagnostics := ValidateInternalFields(build([]ir.FieldMode{ir.ModeInternal, ir.ModeSystem}, create, required)); len(diagnostics) != 0 {
+		t.Fatalf("system internal field diagnostics=%#v", diagnostics)
+	}
+	if diagnostics := ValidateInternalFields(build([]ir.FieldMode{ir.ModeInternal}, []ir.Operation{ir.OperationFindOne}, required)); len(diagnostics) != 0 {
+		t.Fatalf("no create root diagnostics=%#v", diagnostics)
+	}
+	nullable := required
+	nullable.Nullable = true
+	if diagnostics := ValidateInternalFields(build([]ir.FieldMode{ir.ModeInternal}, create, nullable)); len(diagnostics) != 0 {
+		t.Fatalf("nullable internal field diagnostics=%#v", diagnostics)
+	}
+	defaulted := required
+	defaulted.Default = &ir.DefaultIR{}
+	if diagnostics := ValidateInternalFields(build([]ir.FieldMode{ir.ModeInternal}, create, defaulted)); len(diagnostics) != 0 {
+		t.Fatalf("defaulted internal field diagnostics=%#v", diagnostics)
+	}
+}

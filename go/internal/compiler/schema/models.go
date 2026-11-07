@@ -22,7 +22,7 @@ var (
 	fieldAllowed = tags.Allowed{
 		"id": true, "type": true, "pk": true, "unique": true, "default": true,
 		"updated": true, "readonly": true, "writeonly": true, "immutable": true, "system": true,
-		"hidden": true, "graphql": true, "renameFrom": true,
+		"hidden": true, "internal": true, "graphql": true, "renameFrom": true,
 		"relation": true, "name": true, "fields": true, "references": true,
 		"through": true, "source": true, "target": true,
 	}
@@ -344,6 +344,11 @@ func (c *compiler) validateFieldAttributes(pkg *load.Package, field *ast.Field, 
 		switch attr.Name {
 		case "pk", "unique", "updated", "readonly", "writeonly", "immutable", "hidden":
 			c.requireFlag(pkg, field, attr)
+		case "internal":
+			c.requireFlag(pkg, field, attr)
+			if hasAttribute(attrs, "relation") {
+				c.error(pkg, "P1_GOLEM_TAG_INTERNAL_RELATION", "internal is a scalar field mode and cannot be declared on a relation", field)
+			}
 		case "system":
 			c.requireFlag(pkg, field, attr)
 			if hasAttribute(attrs, "relation") {

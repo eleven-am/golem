@@ -1,6 +1,7 @@
 package clientmanifest
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -266,5 +267,27 @@ func TestRelationGroupByRootListsReachedModels(t *testing.T) {
 	got := manifest.Roots["relationGroupByPost"].Models
 	if strings.Join(got, ",") != "Post,Author" {
 		t.Fatalf("models = %v, want [Post Author]", got)
+	}
+}
+
+func TestInternalFieldNeverReachesTheManifestAndAnInternalPrimaryKeyIsRefused(t *testing.T) {
+	compilation := shapeCompilation()
+	contract := &compilation.Contract.Models[0]
+	contract.Fields = append(contract.Fields, ir.FieldContractIR{FieldID: "hash", GraphQLName: "keyHash", Modes: []ir.FieldMode{ir.ModeInternal}})
+	contract.Selectors = append(contract.Selectors, ir.SelectorContractIR{Kind: ir.KeyUnique, Name: "keyHash", Fields: []ir.FieldID{"hash"}})
+	manifest, err := Build(compilation, "contract", shapeSDL)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "keyHash") {
+		t.Fatalf("manifest mentions the internal field: %s", encoded)
+	}
+	contract.Fields[0].Modes = []ir.FieldMode{ir.ModeInternal}
+	if _, err := Build(compilation, "contract", shapeSDL); err == nil {
+		t.Fatal("internal primary key was accepted")
 	}
 }

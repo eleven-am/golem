@@ -227,3 +227,46 @@ func reverseEnums(values []ir.RawEnumDecl) {
 		values[left], values[right] = values[right], values[left]
 	}
 }
+
+func TestBaseInternalComposesWithEveryModeButHidden(t *testing.T) {
+	cases := map[string]struct {
+		attributes []string
+		conflict   bool
+	}{
+		"hidden":    {[]string{"internal", "hidden"}, true},
+		"writeonly": {[]string{"internal", "writeonly"}, false},
+		"immutable": {[]string{"internal", "immutable"}, false},
+		"system":    {[]string{"internal", "system"}, false},
+		"alone":     {[]string{"internal"}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rawResult := schema.Extract(context.Background(), schema.Config{Dir: "testdata/social", Pattern: "."})
+			if len(rawResult.Diagnostics) != 0 {
+				t.Fatalf("schema diagnostics: %#v", rawResult.Diagnostics)
+			}
+			raw := rawResult.Raw
+			for modelIndex := range raw.Models {
+				for fieldIndex := range raw.Models[modelIndex].Fields {
+					field := &raw.Models[modelIndex].Fields[fieldIndex]
+					if raw.Models[modelIndex].GoName == "User" && field.GoName == "Nickname" {
+						for _, attribute := range tc.attributes {
+							field.GolemAttrs = append(field.GolemAttrs, flag(attribute, field.Span))
+						}
+					}
+				}
+			}
+			result := resolve.Base(raw)
+			conflict := false
+			for _, diagnostic := range result.Diagnostics {
+				conflict = conflict || diagnostic.Code == "P1_EXPOSURE_MODE_CONFLICT"
+			}
+			if conflict != tc.conflict {
+				t.Fatalf("conflict=%v want %v: %#v", conflict, tc.conflict, result.Diagnostics)
+			}
+			if !tc.conflict && len(result.Diagnostics) != 0 {
+				t.Fatalf("diagnostics: %#v", result.Diagnostics)
+			}
+		})
+	}
+}
