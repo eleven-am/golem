@@ -57,7 +57,6 @@ type Worker struct {
 	inflight    map[string]int
 
 	dispatchLock chan struct{}
-	basePlan     *activePlan
 	plan         *activePlan
 }
 
@@ -107,8 +106,7 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 
 		dispatchLock: make(chan struct{}, 1),
 	}
-	worker.basePlan = worker.initialPlan(registrations)
-	worker.plan = worker.basePlan
+	worker.plan = worker.initialPlan(registrations)
 	return worker, nil
 }
 

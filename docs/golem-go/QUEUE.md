@@ -188,9 +188,10 @@ status, err := app.ReconfigureQueue(ctx, queue.Plan{
 })
 ```
 
-- **A plan states every field it changes.** A zero `Concurrency` or
-  `ClaimBatch`, and any type or resource the plan leaves out, returns to the
-  value given at `Open`. A `MaxConcurrent` of 0 for a type means uncapped.
+- **A plan states only the fields it changes.** A zero `Concurrency` or
+  `ClaimBatch`, and any type or resource the plan leaves out, keeps the value
+  in the active plan, so an earlier change survives a later one. A
+  `MaxConcurrent` of 0 for a type means uncapped.
 - **A refused plan changes nothing.** A negative value, an unregistered type,
   an unknown resource, a `ClaimBatch` above the maximum or a capacity below a
   cost returns `CodeConfigInvalid` and the old plan stays active.
