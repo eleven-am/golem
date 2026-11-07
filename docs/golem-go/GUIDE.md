@@ -1175,6 +1175,9 @@ also selects it, does not exempt them.
 
 A schema package may declare its own query and mutation roots:
 
+For an action that outlives the request (an export, an import), see
+[Recipe: durable actions](QUEUE.md#recipe-durable-actions).
+
 ```go
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
 	golem.Query(graphql, "searchInvites", SearchInvites, golem.MaxItems(20))

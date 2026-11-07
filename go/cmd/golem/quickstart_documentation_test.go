@@ -108,6 +108,18 @@ func quickstartDocumentedFiles(t *testing.T, document string) map[string]string 
 	return files
 }
 
+func quickstartFilesUnder(files map[string]string, prefixes ...string) map[string]string {
+	selected := make(map[string]string)
+	for path, body := range files {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(path, prefix) {
+				selected[path] = body
+			}
+		}
+	}
+	return selected
+}
+
 func quickstartDocumentedCommands(document string) []string {
 	var commands []string
 	for _, line := range strings.Split(document, "\n") {
@@ -190,7 +202,7 @@ func TestQueueApplicationRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := quickstartDocumentedFiles(t, string(source))
+	files := quickstartFilesUnder(quickstartDocumentedFiles(t, string(source)), "notes/", "cmd/notes/")
 	for _, required := range []string{"notes/schema.go", "notes/policies.go", "cmd/notes/main.go"} {
 		if files[required] == "" {
 			t.Fatalf("QUEUE.md documents no %s block", required)
@@ -231,6 +243,60 @@ func TestQueueApplicationRuns(t *testing.T) {
 	quickstartGo(t, application, "mod", "tidy")
 	output := quickstartGo(t, application, "run", "./cmd/notes")
 	for _, expected := range []string{"welcome=succeeded attempt=1", "flaky=succeeded attempt=2"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("the documented program printed %q, want %q", output, expected)
+		}
+	}
+}
+
+func TestDurableActionsRecipeRuns(t *testing.T) {
+	t.Parallel()
+	moduleRoot := commandModuleRoot(t)
+	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "QUEUE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := quickstartFilesUnder(quickstartDocumentedFiles(t, string(source)), "durable/", "cmd/durable/")
+	for _, required := range []string{"durable/schema.go", "durable/exports.go", "cmd/durable/main.go"} {
+		if files[required] == "" {
+			t.Fatalf("QUEUE.md documents no %s block", required)
+		}
+	}
+
+	application := t.TempDir()
+	for path, body := range files {
+		full := filepath.Join(application, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	golemModule, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "module example.com/notes\n\ngo 1.26.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quickstartGo(t, application, "mod", "tidy")
+
+	database := "file:" + filepath.ToSlash(filepath.Join(application, "durable.db"))
+	for _, arguments := range [][]string{
+		{"migration", "new", "--schema", "./durable", "--name", "init"},
+		{"generate", "--schema", "./durable", "--app-out", "./durable"},
+		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
+		}
+	}
+	quickstartGo(t, application, "mod", "tidy")
+	output := quickstartGo(t, application, "run", "./cmd/durable")
+	for _, expected := range []string{"export=report status=succeeded code=\n", "export=failing status=failed code=attempts_exhausted\n", "export=canceled status=canceled code=\n"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("the documented program printed %q, want %q", output, expected)
 		}
