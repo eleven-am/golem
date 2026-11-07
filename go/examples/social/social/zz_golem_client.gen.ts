@@ -354,7 +354,8 @@ export const golemClientManifest = {
     "relationGroupByPosts": {
       "kind": "generated",
       "models": [
-        "Post"
+        "Post",
+        "User"
       ],
       "shape": "groupBy",
       "nullable": false

@@ -58,7 +58,7 @@ const unsubscribe = observer.subscribe((result) => render(result.data))
 - `golem.live.start()` starts live sync and returns a function that stops it. Start it before you observe a query, so no query is fetched before its subscriptions are open.
 - `golem.queryOptions(document, variables?)` returns TanStack options for a live query. It throws `GolemNotLiveError` for a document that cannot be live.
 - `golem.infiniteQueryOptions(document, variables?)` returns options for `InfiniteQueryObserver` over a list query with a `take`. Give `take` a variable with a default, or a literal; never write `cursor` or `skip`.
-- `golem.staticQueryOptions(document, variables?)` returns options for a document that cannot be live (aggregates, group-by, counts, update-many roots). It is fetched once and never patched.
+- `golem.staticQueryOptions(document, variables?)` returns options for a document fetched once and never refreshed, including one that cannot be live (a model without events, a custom root with no model rows). Counts, aggregates, group-by and custom roots with model rows are live through `golem.queryOptions`: any event on a model they come from refetches the document through the coalescer, and they are never patched.
 - `golem.mutate(document, variables?)` runs a mutation over HTTP and returns its data. A document holds exactly one operation; one with several is refused with `GolemMultipleOperationsError`.
 
 ```ts

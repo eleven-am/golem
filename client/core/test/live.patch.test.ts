@@ -100,35 +100,34 @@ describe('single slots', () => {
     await until(() => view.transport.executes === 2)
   })
 
-  it('refetches a nullable custom single root after its row is deleted so the next row can fill the slot', async () => {
+  it('refetches a custom single root after its row is deleted and never patches it', async () => {
     let deleted = false
     const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: deleted ? post('b', '3') : post('a', '1') }))
     deleted = true
     view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 0)
-    expect(view.query.state.data).toEqual({ featuredPost: null })
+    expect(view.query.state.data).toEqual({ featuredPost: post('a', '1') })
     await until(() => view.transport.executes === 2)
     await until(() => (view.query.state.data as { featuredPost: unknown }).featuredPost !== null)
     expect(view.query.state.data).toEqual({ featuredPost: post('b', '3') })
   })
 
-  it('enters the NOT_FOUND state for a slot the manifest marks non-nullable, and refetches at once', async () => {
+  it('keeps a custom single root LIVE and refetches it when its row exits', async () => {
     let held = true
     const view = await mount(featured, '{ featuredPost { title } }', () => (held ? { featuredPost: post('a', '1') } : { featuredPost: post('b', '3') }))
     held = false
     view.emit('postEvents', { version: '2', type: 'EXITED', id: 'a', entity: null }, 0)
-    const status = view.live.statusOf(view.query)
-    expect(status?.state).toBe('NOT_FOUND')
-    expect(status?.error).toBeInstanceOf(GolemNotFoundError)
-    expect((status?.error as GolemNotFoundError).subjects).toEqual(['Post:a'])
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
     await until(() => view.transport.executes === 2)
-    await until(() => view.live.statusOf(view.query)?.state === 'LIVE')
-    expect(view.query.state.data).toEqual({ featuredPost: post('b', '3') })
+    await until(() => (view.query.state.data as { featuredPost: { id: string } }).featuredPost.id === 'b')
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
   })
 
-  it('turns a custom single root the manifest marks nullable into null', async () => {
-    const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: post('a', '1') }))
+  it('shows null for a nullable custom single root once the refetch returns null', async () => {
+    let gone = false
+    const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: gone ? null : post('a', '1') }))
+    gone = true
     view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 0)
-    expect(view.query.state.data).toEqual({ featuredPost: null })
+    await until(() => view.query.state.data !== undefined && (view.query.state.data as { featuredPost: unknown }).featuredPost === null)
     expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
   })
 
@@ -220,11 +219,11 @@ describe('events that also refetch', () => {
     await until(() => view.transport.executes === 2)
   })
 
-  it('an older UPDATED neither patches nor refetches', async () => {
+  it('an older UPDATED of a row in a custom result slot still refetches and does not patch', async () => {
     const view = await mount(socialManifest, '{ searchPosts(take: 5, where: {}) { title } }', () => ({ searchPosts: [post('a', '5')] }))
     view.emit('postEvents', { version: '2', type: 'UPDATED', id: 'a', entity: post('a', '2', { title: 'old' }) })
-    await sleep(250)
-    expect(view.transport.executes).toBe(1)
+    expect((view.query.state.data as { searchPosts: Array<{ title: string }> }).searchPosts[0]?.title).toBe('t-a')
+    await until(() => view.transport.executes === 2)
   })
 })
 

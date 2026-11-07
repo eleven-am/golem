@@ -58,8 +58,9 @@ type Root struct {
 }
 
 type generatedRoot struct {
-	owner string
-	shape string
+	owner  string
+	shape  string
+	models []string
 }
 
 func Emit(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) ([]byte, error) {
@@ -110,7 +111,11 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 		}
 		result.Models[modelContract.GraphQLName] = entry
 		for name, shape := range generatedRootShapes(modelContract.Roots) {
-			generatedRoots[name] = generatedRoot{owner: modelContract.GraphQLName, shape: shape}
+			reached := []string{modelContract.GraphQLName}
+			if name == modelContract.Roots.RelationGroupBy {
+				reached = append(reached, relationGroupModels(modelContract, relations, contracts)...)
+			}
+			generatedRoots[name] = generatedRoot{owner: modelContract.GraphQLName, shape: shape, models: reached}
 		}
 	}
 	opaqueRoots := map[string]Root{}
@@ -125,7 +130,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 			continue
 		}
 		if owner, ok := generatedRoots[name]; ok {
-			result.Roots[name] = Root{Kind: RootGenerated, Models: []string{owner.owner}, Shape: owner.shape, Nullable: nullable}
+			result.Roots[name] = Root{Kind: RootGenerated, Models: owner.models, Shape: owner.shape, Nullable: nullable}
 			continue
 		}
 		return Manifest{}, fmt.Errorf("client manifest: schema root %q is neither generated nor custom", name)
@@ -321,4 +326,24 @@ func sdlRoots(schema *ast.Schema) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func relationGroupModels(owner ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR, contracts map[ir.ModelID]ir.ModelContractIR) []string {
+	if owner.Aggregation == nil {
+		return nil
+	}
+	seen := map[string]bool{owner.GraphQLName: true}
+	var reached []string
+	for _, dimension := range owner.Aggregation.RelationDimensions {
+		for _, id := range dimension.Path {
+			target, ok := contracts[relations[id].TargetModel]
+			if !ok || !target.Exposed || seen[target.GraphQLName] {
+				continue
+			}
+			seen[target.GraphQLName] = true
+			reached = append(reached, target.GraphQLName)
+		}
+	}
+	sort.Strings(reached)
+	return reached
 }

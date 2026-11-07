@@ -260,12 +260,7 @@ describe('G7: a query is live, or it says it is not', () => {
     expect([error.reason, error.subject]).toEqual(['hidden-inverse', 'Post.comments'])
   })
 
-  it('names an aggregate root', () => {
-    const error = notLive(social, '{ aggregatePosts { _count } }')
-    expect([error.reason, error.subject]).toEqual(['non-row-root', 'aggregatePosts'])
-  })
-
-  it.each(['aggregate', 'groupBy', 'updateMany', 'deleteMany', 'value'] as const)('classifies a root by the manifest shape %s, whatever its name', (shape) => {
+  it.each(['updateMany', 'deleteMany', 'value'] as const)('classifies a root by the manifest shape %s, whatever its name', (shape) => {
     const renamed = {
       ...socialManifest,
       roots: { ...socialManifest.roots, posts: { kind: 'generated' as const, models: ['Post'], shape, nullable: false } },
@@ -291,6 +286,74 @@ describe('G7: a query is live, or it says it is not', () => {
     const analysis = social.analyze('{ postTags { tagName } }')
     expect(analysis.query).toBe(normal('{ postTags { tagName postID __typename } }'))
   })
+})
+
+describe('derived roots', () => {
+  const eventful = new DocumentAnalyzer(socialWithEventfulUsers)
+
+  it('opens one exact derived stream for an aggregate with a where literal', () => {
+    const analysis = social.analyze('{ aggregatePosts(where: { published: { equals: true } }) { count } }')
+    expect(analysis.live).toBe(true)
+    expect(analysis.query).toBe(normal('{ aggregatePosts(where: { published: { equals: true } }) { count } }'))
+    expect(analysis.streams).toHaveLength(1)
+    const [stream] = analysis.streams
+    expect([stream?.eventsRoot, stream?.scope, stream?.derived, stream?.patchable]).toEqual(['postEvents', 'exact', true, false])
+    expect(stream?.query).toBe(
+      normal('subscription { postEvents(where: { published: { equals: true } }) { eventID version type id entity { id _version __typename } } }'),
+    )
+  })
+
+  it('carries a where variable into the stream', () => {
+    const [stream] = social.analyze('query($w: PostWhereInput) { aggregatePosts(where: $w) { count } }').streams
+    expect(stream?.scope).toBe('exact')
+    expect(stream?.variableNames).toEqual(['w'])
+    expect(flat(stream?.query)).toContain('postEvents(where: $w)')
+  })
+
+  it('opens a policy-only derived stream for an aggregate without a where', () => {
+    const [stream] = social.analyze('{ aggregatePosts { count } }').streams
+    expect([stream?.scope, stream?.derived]).toEqual(['policy-only', true])
+  })
+
+  it('treats groupBy like an aggregate', () => {
+    const analysis = social.analyze('query($w: PostWhereInput) { groupByPosts(by: [published], where: $w) { key { published } count } }')
+    expect(analysis.live).toBe(true)
+    expect(analysis.streams).toHaveLength(1)
+    expect([analysis.streams[0]?.scope, analysis.streams[0]?.derived]).toEqual(['exact', true])
+  })
+
+  it('opens a stream per model for relationGroupBy, the grouped model first', () => {
+    const analysis = eventful.analyze('query($w: PostWhereInput) { relationGroupByPosts(by: [authorHandle], where: $w) { key { authorHandle } count } }')
+    expect(analysis.live).toBe(true)
+    expect(analysis.streams.map((stream) => [stream.model, stream.scope, stream.derived])).toEqual([
+      ['Post', 'exact', true],
+      ['User', 'policy-only', true],
+    ])
+  })
+
+  it('names a relation-group model without events', () => {
+    const analysis = social.analyze('{ relationGroupByPosts(by: [authorHandle]) { count } }')
+    expect(analysis.live).toBe(false)
+    expect(analysis.notLive.map((error) => [error.reason, error.subject])).toEqual([['model-without-events', 'User']])
+  })
+
+  it('shares one derived stream between an aggregate and a list on the same where', () => {
+    const analysis = social.analyze(
+      'query($w: PostWhereInput) { posts(where: $w) { title } aggregatePosts(where: $w) { count } }',
+    )
+    expect(analysis.streams).toHaveLength(1)
+    expect([analysis.streams[0]?.derived, analysis.streams[0]?.scope]).toEqual([true, 'exact'])
+  })
+
+  it('keeps a plain list stream non-derived', () => {
+    expect(social.analyze('{ posts { title } }').streams[0]?.derived).toBe(false)
+  })
+
+  it('marks an opaque root with models derived', () => {
+    const [stream] = social.analyze('{ searchPosts(take: 3) { title } }').streams
+    expect(stream?.derived).toBe(true)
+  })
+
 })
 
 describe('document handling', () => {

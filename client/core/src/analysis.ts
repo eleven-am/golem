@@ -29,6 +29,7 @@ export interface StreamPlan {
   readonly model: string
   readonly eventsRoot: string
   readonly patchable: boolean
+  readonly derived: boolean
   readonly scope: 'exact' | 'policy-only'
   readonly paths: ReadonlyArray<string>
   readonly query: string
@@ -66,6 +67,7 @@ interface StreamDraft {
   readonly model: string
   readonly eventsRoot: string
   patchable: boolean
+  derived: boolean
   readonly scope: Scope | null
   readonly order: number
   readonly fields: Map<string, FieldNode>
@@ -253,7 +255,7 @@ function visitField(field: FieldNode, models: ReadonlyArray<string>, scope: Scop
       return field
     }
     state.nested = true
-    return { ...field, selectionSet: rows(field.selectionSet, computed, null, false, childPath(path, field), walk) }
+    return { ...field, selectionSet: rows(field.selectionSet, computed, null, false, false, childPath(path, field), walk) }
   }
   fields.set(responseKey(field), field)
   return field
@@ -285,10 +287,10 @@ function visitRelation(field: FieldNode, owner: string, relation: { readonly tar
     inverseFilter = objectValue({ [relation.inverse]: objectValue({ [inverse.list ? 'some' : 'is']: scope }) })
   }
   const childScope = conjunction(filterScope(argument(field, 'where')?.value), inverseFilter)
-  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, childPath(path, field), walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, [relation.target], childScope, false, false, childPath(path, field), walk) }
 }
 
-function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, plain: boolean, path: string, walk: Walk): SelectionSetNode {
+function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope | null, plain: boolean, derived: boolean, path: string, walk: Walk): SelectionSetNode {
   const order = walk.sink === null ? 0 : walk.sink.sequence++
   const state: RowState = { fields: new Map(models.map((model) => [model, new Map<string, FieldNode>()])), nested: false }
   let selections = visitSet(set, models, scope, path, state, walk)
@@ -298,7 +300,7 @@ function rows(set: SelectionSetNode, models: ReadonlyArray<string>, scope: Scope
   } else {
     selections = ensure(selections, [TYPENAME_FIELD])
   }
-  register(models, scope, plain && !state.nested, order, path, state, walk)
+  register(models, scope, plain && !state.nested, derived, order, path, state, walk)
   return { ...set, selections }
 }
 
@@ -312,7 +314,7 @@ function disagrees(draft: StreamDraft, fields: ReadonlyMap<string, FieldNode>): 
   return false
 }
 
-function register(models: ReadonlyArray<string>, scope: Scope | null, patchable: boolean, order: number, path: string, state: RowState, walk: Walk): void {
+function register(models: ReadonlyArray<string>, scope: Scope | null, patchable: boolean, derived: boolean, order: number, path: string, state: RowState, walk: Walk): void {
   const sink = walk.sink
   if (sink === null) {
     return
@@ -339,10 +341,11 @@ function register(models: ReadonlyArray<string>, scope: Scope | null, patchable:
       draft = sink.streams.get(key)
     }
     if (draft === undefined) {
-      draft = { key, model: name, eventsRoot: model.events, patchable, scope, order, fields: new Map(), paths: new Set() }
+      draft = { key, model: name, eventsRoot: model.events, patchable, derived, scope, order, fields: new Map(), paths: new Set() }
       sink.streams.set(key, draft)
     } else {
       draft.patchable &&= patchable
+      draft.derived ||= derived
     }
     draft.paths.add(path)
     for (const [responseName, field] of fields) {
@@ -401,6 +404,7 @@ function finish(draft: StreamDraft, manifest: ClientManifest, operation: Operati
     model: draft.model,
     eventsRoot: draft.eventsRoot,
     patchable: draft.patchable,
+    derived: draft.derived,
     scope: draft.scope === null ? 'policy-only' : 'exact',
     paths: [...draft.paths].sort(),
     query: print(document),
@@ -444,6 +448,9 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     if (modelName === undefined || model === undefined) {
       throw new GolemDocumentError(`the manifest root ${name} names no model`)
     }
+    if (root.shape === 'aggregate' || root.shape === 'groupBy') {
+      return derivedRoot(field, root, walk)
+    }
     if (root.shape !== 'rows' && root.shape !== 'row' && root.shape !== 'deletedRow') {
       record(
         walk.sink,
@@ -459,7 +466,7 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     const scope = root.shape === 'rows' ? filterScope(where) : uniqueScope(model, where)
     markNullable(field, root, walk)
     const plain = (field.arguments ?? []).every((candidate) => candidate.name.value === 'where')
-    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, plain, responseKey(field), walk) }
+    return { ...field, selectionSet: rows(field.selectionSet, [modelName], scope, plain, false, responseKey(field), walk) }
   }
   if (root.models.length === 0 || field.selectionSet === undefined) {
     record(
@@ -470,7 +477,17 @@ function visitRoot(field: FieldNode, walk: Walk): FieldNode {
     return field
   }
   markNullable(field, root, walk)
-  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, false, responseKey(field), walk) }
+  return { ...field, selectionSet: rows(field.selectionSet, root.models, null, false, true, responseKey(field), walk) }
+}
+
+function derivedRoot(field: FieldNode, root: ManifestRoot, walk: Walk): FieldNode {
+  const order = walk.sink === null ? 0 : walk.sink.sequence++
+  const scope = filterScope(argument(field, 'where')?.value)
+  root.models.forEach((model, index) => {
+    const state: RowState = { fields: new Map([[model, new Map<string, FieldNode>()]]), nested: false }
+    register([model], index === 0 ? scope : null, false, true, order, responseKey(field), state, walk)
+  })
+  return field
 }
 
 function markNullable(field: FieldNode, root: ManifestRoot, walk: Walk): void {
@@ -487,7 +504,7 @@ function rewriteFragment(definition: FragmentDefinitionNode, walk: Walk): Fragme
   if (walk.manifest.models[condition] === undefined) {
     return definition
   }
-  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, '', walk) }
+  return { ...definition, selectionSet: rows(definition.selectionSet, [condition], null, false, false, '', walk) }
 }
 
 export function operationOf(document: DocumentNode, kind: OperationTypeNode): OperationDefinitionNode {

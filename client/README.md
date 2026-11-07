@@ -92,7 +92,7 @@ Every hook takes a GraphQL document, as a string or as a gql.tada typed document
 | `useGolemInfiniteQuery(doc, variables?, options?)` | `useInfiniteQuery` over a list query with a `take`. Pages stay live. You never write `cursor` or `skip`; the client adds them from the manifest. `hasNextPage` is true while the last page is full. |
 | `useGolemMutation(doc, options?)` | `useMutation` over `client.mutate`. A committed mutation marks every cached query over the models it touches as stale, so the live event or the refetch brings it up to date; the mutation result is never written into the cache. |
 | `useGolemStatus(doc, variables?, { infinite? })` | The live status of a query (below), or `undefined` before the query exists. |
-| `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` for a document that cannot be live (aggregates, group-by, counts, update-many roots). Fetched once, never patched. |
+| `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` for a document you want fetched once and never refreshed. Counts and aggregates are live through `useGolemQuery`. |
 
 ```tsx
 function Posts({ tag }: { tag: string }) {
@@ -107,7 +107,7 @@ function Posts({ tag }: { tag: string }) {
 }
 ```
 
-`useGolemQuery` throws `GolemNotLiveError` (naming the reason and the root) for a document that cannot be live. Use `useGolemStaticQuery` for those.
+Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. `useGolemQuery` throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom root whose result holds no model rows. Use `useGolemStaticQuery` for those. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
 
 ## Live status
 
