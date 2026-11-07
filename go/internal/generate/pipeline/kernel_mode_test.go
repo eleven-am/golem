@@ -252,3 +252,25 @@ func TestKernelModeRejectsApplicationCodeThatReferencesTheGraphQLAdapter(t *test
 	}
 	t.Fatalf("diagnostics = %#v", diagnostics.Diagnostics)
 }
+
+func TestKernelModeAllowsARequiredInternalFieldWhileGraphQLRefusesIt(t *testing.T) {
+	fixture := newKernelModeFixture(t)
+	write := func(kernel bool) {
+		declaration := ""
+		if kernel {
+			declaration = "golem.WithoutGraphQL(schema)"
+		}
+		source := strings.Replace(kernelModeSchema, "DECLARATION", declaration, 1)
+		source = strings.Replace(source, "	Body   string   `db:\"body\"`\n", "	Body   string   `db:\"body\"`\n	Secret string   `db:\"secret\" golem:\"internal\"`\n", 1)
+		writePipelineAcceptanceFile(t, fixture.root, "app/schema.go", source)
+	}
+	write(true)
+	if _, err := Analyze(context.Background(), fixture.request(nil)); err != nil {
+		t.Fatalf("kernel mode refused a required internal field: %v", err)
+	}
+	write(false)
+	_, err := Analyze(context.Background(), fixture.request(nil))
+	if err == nil || !strings.Contains(err.Error(), "P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED") {
+		t.Fatalf("GraphQL mode error = %v, want P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED", err)
+	}
+}
