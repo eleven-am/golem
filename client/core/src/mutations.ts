@@ -11,6 +11,10 @@ export interface MutateOptions {
   readonly keepalive?: boolean
 }
 
+function isAbortSignal(value: AbortSignal | MutateOptions | undefined): value is AbortSignal {
+  return value !== undefined && typeof (value as AbortSignal).aborted === 'boolean' && typeof (value as AbortSignal).addEventListener === 'function'
+}
+
 export interface MutationTransport {
   execute<T = unknown>(request: ExecuteRequest): Promise<T>
 }
@@ -33,7 +37,7 @@ export class Mutations {
   }
 
   async execute<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, options?: AbortSignal | MutateOptions): Promise<T> {
-    const { signal, keepalive } = options instanceof AbortSignal ? { signal: options, keepalive: undefined } : (options ?? {})
+    const { signal, keepalive } = isAbortSignal(options) ? { signal: options, keepalive: undefined } : (options ?? {})
     const analysis = analyzeMutation(document, this.manifest)
     let data: T
     try {

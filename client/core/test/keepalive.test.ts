@@ -60,6 +60,16 @@ describe('mutate options', () => {
     golem.dispose()
   })
 
+  it('recognizes an AbortSignal from another realm', async () => {
+    const { golem, send } = client()
+    const foreign = { aborted: true, reason: new Error('gone'), addEventListener: () => undefined, removeEventListener: () => undefined } as unknown as AbortSignal
+    expect(foreign instanceof AbortSignal).toBe(false)
+    await golem.mutate(MUTATION, { id: 'a' }, foreign)
+    const sent = send.mock.calls[0]?.[1] as RequestInit
+    expect(sent.signal).toBe(foreign)
+    golem.dispose()
+  })
+
   it('threads signal and keepalive from an options object', async () => {
     const { golem, send } = client()
     const controller = new AbortController()
