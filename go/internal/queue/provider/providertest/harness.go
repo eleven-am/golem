@@ -244,7 +244,7 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	if holder, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.cleanup.holder"}, Limit: 1, LeaseDuration: longLease, Resource: &cleanup}); err != nil || len(holder) != 1 {
 		t.Fatalf("cleanup holder=%#v error=%v", holder, err)
 	}
-	if canceled, err := fixture.Store.Cancel(ctx, canceledID); err != nil || !canceled.Changed || canceled.Terminal {
+	if canceled, err := fixture.Store.Cancel(ctx, nil, canceledID); err != nil || !canceled.Changed || canceled.Terminal {
 		t.Fatalf("cleanup cancellation=%#v error=%v", canceled, err)
 	}
 	expireLeases(t, fixture, expiringCleanup...)
@@ -273,7 +273,7 @@ func ExpiredLeaseCancellationIsImmediate(t testing.TB, fixture Fixture) {
 	expiredID := enqueue(t, fixture, "gate.cancel.expired.direct", request{})
 	claimOne(t, fixture, "gate.cancel.expired.direct", shortLease)
 	time.Sleep(expiry)
-	expired, err := fixture.Store.Cancel(ctx, expiredID)
+	expired, err := fixture.Store.Cancel(ctx, nil, expiredID)
 	if err != nil || !expired.Changed || !expired.Terminal {
 		t.Fatalf("expired cancellation=%#v error=%v", expired, err)
 	}
@@ -283,7 +283,7 @@ func ExpiredLeaseCancellationIsImmediate(t testing.TB, fixture Fixture) {
 	}
 	liveID := enqueue(t, fixture, "gate.cancel.live.direct", request{})
 	claimOne(t, fixture, "gate.cancel.live.direct", longLease)
-	live, err := fixture.Store.Cancel(ctx, liveID)
+	live, err := fixture.Store.Cancel(ctx, nil, liveID)
 	if err != nil || !live.Changed || live.Terminal {
 		t.Fatalf("live cancellation=%#v error=%v", live, err)
 	}
@@ -648,7 +648,7 @@ func ExpiredCanceledLeaseIsTerminalWithoutReexecution(t testing.TB, fixture Fixt
 	ctx := context.Background()
 	identity := enqueue(t, fixture, "gate.cancel.crash", request{maxAttempts: 1})
 	claimOne(t, fixture, "gate.cancel.crash", crashLease)
-	result, err := fixture.Store.Cancel(ctx, identity)
+	result, err := fixture.Store.Cancel(ctx, nil, identity)
 	if err != nil || !result.Changed || result.Terminal {
 		t.Fatalf("cancel final lease result=%#v error=%v", result, err)
 	}
@@ -679,7 +679,7 @@ func RetentionIsStateSelectiveAndPreservesLiveRows(t testing.TB, fixture Fixture
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
 	canceled := enqueue(t, fixture, "gate.retention.canceled", request{delay: time.Hour})
-	if result, err := fixture.Store.Cancel(ctx, canceled); err != nil || !result.Changed || !result.Terminal {
+	if result, err := fixture.Store.Cancel(ctx, nil, canceled); err != nil || !result.Changed || !result.Terminal {
 		t.Fatalf("cancel result=%#v error=%v", result, err)
 	}
 	pending := enqueue(t, fixture, "gate.retention.pending", request{delay: time.Hour})
@@ -913,20 +913,20 @@ func CancellationIsDurableAndIdempotent(t testing.TB, fixture Fixture) {
 	t.Helper()
 	ctx := context.Background()
 	pending := enqueue(t, fixture, "gate.cancel.pending", request{delay: time.Hour})
-	if result, err := fixture.Store.Cancel(ctx, pending); err != nil || !result.Changed || !result.Terminal || result.Type != "gate.cancel.pending" || result.AttemptCount != 0 {
+	if result, err := fixture.Store.Cancel(ctx, nil, pending); err != nil || !result.Changed || !result.Terminal || result.Type != "gate.cancel.pending" || result.AttemptCount != 0 {
 		t.Fatalf("cancel pending result=%#v error=%v", result, err)
 	}
 	pendingRecord := inspect(t, fixture, pending)
 	if pendingRecord.State != queueprovider.StateCanceled || pendingRecord.LastCode != "canceled" || pendingRecord.FinishedAt == nil {
 		t.Fatalf("canceled pending job=%#v", pendingRecord)
 	}
-	if result, err := fixture.Store.Cancel(ctx, pending); err != nil || result.Changed {
+	if result, err := fixture.Store.Cancel(ctx, nil, pending); err != nil || result.Changed {
 		t.Fatalf("repeat pending cancellation result=%#v error=%v", result, err)
 	}
 
 	leased := enqueue(t, fixture, "gate.cancel.leased", request{})
 	claim := claimOne(t, fixture, "gate.cancel.leased", longLease)
-	if result, err := fixture.Store.Cancel(ctx, leased); err != nil || !result.Changed || result.Terminal || result.Type != "gate.cancel.leased" || result.AttemptCount != 1 {
+	if result, err := fixture.Store.Cancel(ctx, nil, leased); err != nil || !result.Changed || result.Terminal || result.Type != "gate.cancel.leased" || result.AttemptCount != 1 {
 		t.Fatalf("cancel leased result=%#v error=%v", result, err)
 	}
 	requested := inspect(t, fixture, leased)
@@ -934,7 +934,7 @@ func CancellationIsDurableAndIdempotent(t testing.TB, fixture Fixture) {
 		t.Fatalf("leased cancellation request=%#v", requested)
 	}
 	time.Sleep(2 * time.Millisecond)
-	if result, err := fixture.Store.Cancel(ctx, leased); err != nil || result.Changed {
+	if result, err := fixture.Store.Cancel(ctx, nil, leased); err != nil || result.Changed {
 		t.Fatalf("repeat leased cancellation result=%#v error=%v", result, err)
 	}
 	repeated := inspect(t, fixture, leased)
@@ -1204,7 +1204,7 @@ func IdentityBoundIsOwnedByTheQueueContract(t testing.TB, fixture Fixture) {
 	longest := strings.Repeat("a", queueprovider.MaximumIdentityBytes)
 	overlong := strings.Repeat("a", queueprovider.MaximumIdentityBytes+1)
 
-	if _, err := fixture.Store.Cancel(ctx, overlong); err == nil {
+	if _, err := fixture.Store.Cancel(ctx, nil, overlong); err == nil {
 		t.Errorf("Cancel accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
 	}
 	if _, err := fixture.Store.Requeue(ctx, overlong); err == nil {
@@ -1217,7 +1217,7 @@ func IdentityBoundIsOwnedByTheQueueContract(t testing.TB, fixture Fixture) {
 		t.Errorf("Enqueue accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
 	}
 
-	if _, err := fixture.Store.Cancel(ctx, longest); err != nil {
+	if _, err := fixture.Store.Cancel(ctx, nil, longest); err != nil {
 		t.Errorf("Cancel rejected a %d-byte identity the contract permits: %v", len(longest), err)
 	}
 	if _, err := fixture.Store.Requeue(ctx, longest); err != nil {

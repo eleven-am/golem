@@ -144,6 +144,13 @@ and never the payload. The operator also offers `List`, `ListFailed`,
 `CountByState`, `Cancel`, `CancelMany`, `Requeue`, `RequeueFailed` and
 `RunRetention`. Pages and bulk actions are bounded at 256 jobs.
 
+To cancel from inside your own transaction, call `tx.CancelJob(ctx, jobID)` on a
+`CallerTx` or `SystemTx`. It returns the same `(bool, error)` as `Cancel` and
+commits or rolls back with your other writes. Cancel only a job ID you read, in
+the same transaction, from a row your policy allowed; never an ID taken from
+arguments. Do no slow work after it in the same transaction: on PostgreSQL the
+job row stays locked until commit.
+
 `Cancel` is immediate for a pending job and cooperative for a leased one: the
 request is recorded, the running handler's context is cancelled at its next
 lease renewal, and completion may win first.
@@ -422,8 +429,11 @@ read by the owner's client.
 
 ### Cancel
 
-`cancelExport` sets `cancel_requested` on the row and calls
-`QueueOperator().Cancel` on the job. Cancellation is cooperative, not a
+`cancelExport` sets `cancel_requested` on the row and calls `tx.CancelJob` on
+the job in the same transaction, so the job's cancellation commits or rolls back
+with the `canceled` status. Cancel only a job ID you read, in that transaction,
+from a row the caller's policy allowed; never cancel an ID taken from the
+arguments. Cancellation is cooperative, not a
 rollback. A job that has not started is cancelled at once. A job that is
 running is told at its next lease renewal, and may finish first. Work already
 done stays done. That is why the handler checks the row before it writes: a
@@ -513,9 +523,8 @@ func DefineSchema(schema *golem.Schema) {
 ```
 
 The actions, the handler and the failure callback live in one file. `ExportJob`
-and `Operator` are package variables because a custom operation has no handle
-to the queue's job type or its operator; `main` sets them once the queue is
-registered and the application is open. The generated `Caller`, `System`,
+is a package variable because a custom operation has no handle to the queue's
+job type; `main` sets it once, before the application opens. The generated `Caller`, `System`,
 `Exports` and `Open` come from the next command:
 
 ```go
@@ -535,10 +544,7 @@ type ExportPayload struct {
 	Fail bool   `json:"fail"`
 }
 
-var (
-	ExportJob queue.Type[ExportPayload]
-	Operator  queue.Operator
-)
+var ExportJob queue.Type[ExportPayload]
 
 type RequestExportArgs struct {
 	ID   string `golem:"graphql=id"`
@@ -624,16 +630,14 @@ func CancelExport(ctx context.Context, caller *Caller[Principal], args CancelExp
 			return err
 		}
 		handle, err = tx.Exports.FindUnique(ctx, Exports.ByID.Value(args.ID))
+		if err != nil {
+			return err
+		}
+		jobID, _ := golem.Value(handle, Exports.JobID).Get()
+		_, err = tx.CancelJob(ctx, queue.JobID(jobID))
 		return err
 	})
-	if err != nil {
-		return handle, err
-	}
-	jobID, _ := golem.Value(handle, Exports.JobID).Get()
-	if _, err := Operator.Cancel(ctx, queue.JobID(jobID)); err != nil {
-		return handle, err
-	}
-	return handle, nil
+	return handle, err
 }
 ```
 
@@ -700,7 +704,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	durable.Operator = application.QueueOperator()
 
 	owner := golem.NewUUID([16]byte{1})
 	caller, err := application.ForPrincipal(ctx, durable.Principal{UserID: owner})

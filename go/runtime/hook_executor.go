@@ -87,7 +87,7 @@ func hookEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *executi
 	if err != nil {
 		return "", err
 	}
-	binding.queueEnqueued(app.queueWorker.Wake)
+	binding.afterCommit(app.queueWorker.Wake)
 	return queue.JobID(stored.ID), nil
 }
 

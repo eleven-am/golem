@@ -40,7 +40,8 @@ type executionBinding struct {
 	mutation        executionMutationConfig
 	observation     *observeexec.Span
 	observer        observe.Observer
-	queueWake       atomic.Pointer[func()]
+	commitMu        sync.Mutex
+	commitActions   []func()
 	operationWrites *operationWriteLog
 	serving         atomic.Bool
 	calls           usageGate
@@ -65,9 +66,11 @@ func (binding *executionBinding) releaseOperations() {
 	}
 }
 
-func (binding *executionBinding) queueEnqueued(wake func()) {
-	if binding != nil && wake != nil {
-		binding.queueWake.Store(&wake)
+func (binding *executionBinding) afterCommit(action func()) {
+	if binding != nil && action != nil {
+		binding.commitMu.Lock()
+		binding.commitActions = append(binding.commitActions, action)
+		binding.commitMu.Unlock()
 	}
 }
 
@@ -75,8 +78,12 @@ func (binding *executionBinding) notifyQueue() {
 	if binding == nil {
 		return
 	}
-	if wake := binding.queueWake.Load(); wake != nil {
-		(*wake)()
+	binding.commitMu.Lock()
+	actions := binding.commitActions
+	binding.commitActions = nil
+	binding.commitMu.Unlock()
+	for _, action := range actions {
+		action()
 	}
 }
 
@@ -533,7 +540,7 @@ func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, bind
 		return err
 	}
 	if state.hasSemanticMarks() {
-		binding.queueEnqueued(binding.mutation.queueWake)
+		binding.afterCommit(binding.mutation.queueWake)
 	}
 	return nil
 }

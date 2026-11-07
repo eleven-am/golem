@@ -173,8 +173,53 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 	if err != nil {
 		return "", err
 	}
-	binding.queueEnqueued(app.queueWorker.Wake)
+	binding.afterCommit(app.queueWorker.Wake)
 	return queue.JobID(stored.ID), nil
+}
+
+// CallerTxCancelJob cancels one job on the caller transaction's executor, so the
+// cancellation commits and rolls back with the domain write. Cancel only a job
+// identity read in this transaction from a row the caller's policy allowed.
+func CallerTxCancelJob[P, A any](ctx context.Context, transaction *CallerTx[P, A], id queue.JobID) (bool, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (bool, error) {
+		if transaction == nil || transaction.caller == nil {
+			return false, queue.Fail(queue.CodeConfigInvalid, "caller transaction is unavailable")
+		}
+		return txCancelJob(ctx, transaction.caller.app, transaction.caller.executor, id)
+	})
+}
+
+// SystemTxCancelJob is the unrestricted equivalent of CallerTxCancelJob.
+func SystemTxCancelJob[P, A any](ctx context.Context, transaction *SystemTx[P, A], id queue.JobID) (bool, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (bool, error) {
+		if transaction == nil || transaction.system.app == nil {
+			return false, queue.Fail(queue.CodeConfigInvalid, "system transaction is unavailable")
+		}
+		return txCancelJob(ctx, transaction.system.app, transaction.system.executor, id)
+	})
+}
+
+func txCancelJob[P, A any](ctx context.Context, app *App[P, A], binding *executionBinding, id queue.JobID) (bool, error) {
+	if app == nil || app.queueStore == nil {
+		return false, queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
+	}
+	if callErr := binding.requireAdmitted(ctx); callErr != nil {
+		return false, callErr
+	}
+	executor, err := binding.transactionFor(app.database)
+	if err != nil {
+		return false, queue.Fail(queue.CodeConfigInvalid, "transactional cancel requires a transaction-bound executor")
+	}
+	value := string(id)
+	if err := queueprovider.ValidateOperatorIDs([]string{value}); err != nil {
+		return false, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	result, err := app.queueStore.Cancel(ctx, executor, value)
+	if err != nil {
+		return false, queue.Fail(queue.CodeStoreFailure, "cancel job %s: %v", id, err)
+	}
+	binding.afterCommit(func() { queueworker.EmitCanceled(app.observer, app.eventProvider, result) })
+	return result.Changed, nil
 }
 
 func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Executor, pending queue.Pending) (queueprovider.EnqueueResult, error) {
