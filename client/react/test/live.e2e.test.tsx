@@ -85,9 +85,17 @@ function Total({ token }: { token: string }) {
   return <p data-testid="total">{total === undefined ? 'none' : String(total)}</p>
 }
 
-function LiveCount() {
-  const query = useGolemQuery(COUNT, { t: 'x' })
+const NEVER_LIVE = '{ publishPost }'
+
+function NeverLive() {
+  const query = useGolemQuery(NEVER_LIVE)
   return <p>{String(query.data)}</p>
+}
+
+function LiveTotal({ token }: { token: string }) {
+  const query = useGolemQuery(COUNT, { t: token })
+  const total = (query.data as { aggregatePosts: { count: string } } | undefined)?.aggregatePosts.count
+  return <p data-testid="live-total">{total === undefined ? 'none' : String(total)}</p>
 }
 
 const open: Screen[] = []
@@ -192,7 +200,7 @@ describe('useGolemQuery against the social server', () => {
     one.render(
       <GolemProvider client={one.client}>
         <Boundary>
-          <LiveCount />
+          <NeverLive />
         </Boundary>
       </GolemProvider>,
     )
@@ -220,6 +228,21 @@ describe('other hooks', () => {
     await until(() => pages() === `${tag}-a,${tag}-b,${tag}-c`, 15_000, 'second page')
     await one.createPost(`${tag}-aa`)
     await until(() => pages() === `${tag}-a,${tag}-aa,${tag}-b,${tag}-c`, 15_000, 'live across pages')
+  })
+
+  it('keeps a count live with useGolemQuery', async () => {
+    const one = await fresh()
+    const tag = token()
+    await one.createPost(`${tag}-one`)
+    one.render(
+      <GolemProvider client={one.client}>
+        <LiveTotal token={tag} />
+      </GolemProvider>,
+    )
+    const total = () => one.container.querySelector('[data-testid="live-total"]')?.textContent
+    await until(() => total() === '1', 15_000, 'first count')
+    await one.createPost(`${tag}-two`)
+    await until(() => total() === '2', 15_000, 'live count')
   })
 
   it('serves a static document with useGolemStaticQuery', async () => {

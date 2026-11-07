@@ -957,6 +957,16 @@ code.
   write runs in its own savepoint, and the executor works only while the hook
   runs (see [Operations that own a write](#operations-that-own-a-write) for
   how its calls are ordered).
+  `golem.HookEnqueue(ctx, result.Executor(), pending)` also enqueues a durable
+  job on that transaction: the job exists if and only if the write commits, and
+  an error the hook returns rolls the job back with the write. The call runs in
+  its own savepoint, so a hook may handle a refusal (an oversize payload, say)
+  and let the write commit without the job. It returns the existing job's ID
+  when a `queue.Dedupe` key matches an active job. Without `Config.Queue` it
+  returns `CodeConfigInvalid`, which rolls the write back unless the hook
+  swallows it. Open cannot refuse this, because which hooks enqueue is not
+  known statically. The in-process worker is woken after commit; other
+  processes find the job when they poll, as with `tx.Enqueue`.
 - **`AfterCommit`** runs once the transaction has committed, so its error
   cannot undo anything. golem passes it to `Config.AfterCommitError`, which
   `Open` requires when any after-commit hook exists. Its result has no

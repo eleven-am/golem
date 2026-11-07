@@ -248,3 +248,23 @@ func TestRelationNullability(t *testing.T) {
 		}
 	}
 }
+
+func TestRelationGroupByRootListsReachedModels(t *testing.T) {
+	compilation := relationCompilation()
+	compilation.Contract.Models[0].Roots = ir.GraphQLRootNamesIR{FindOne: "post", RelationGroupBy: "relationGroupByPost"}
+	compilation.Contract.Models[0].Aggregation = &ir.AggregationContractIR{
+		RelationDimensions: []ir.RelationDimensionContractIR{
+			{Name: "authorId", Path: []ir.RelationID{"author"}, TerminalField: "author.id"},
+			{Name: "editorId", Path: []ir.RelationID{"editor"}, TerminalField: "author.id"},
+		},
+	}
+	sdl := strings.Replace(relationSDL, "post(id: ID!): Post", "post(id: ID!): Post\n  relationGroupByPost: [Int!]!", 1)
+	manifest, err := Build(compilation, "contract", sdl)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got := manifest.Roots["relationGroupByPost"].Models
+	if strings.Join(got, ",") != "Post,Author" {
+		t.Fatalf("models = %v, want [Post Author]", got)
+	}
+}

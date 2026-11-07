@@ -94,7 +94,7 @@ describe('ranked and custom results', () => {
     return { alice, bob }
   }
 
-  it('(a) a deleted post leaves a custom result slot at once', async () => {
+  it('(a) a deleted post leaves a custom result slot after the refetch', async () => {
     const { alice, bob } = await pair()
     const mine = token()
     const gone = await alice.createPost(`${mine}-gone`)
@@ -105,13 +105,14 @@ describe('ranked and custom results', () => {
     const before = view.fetches()
     bob.gate.hold()
     await alice.run(DELETE_POST, { id: gone })
+    await until(() => view.fetches() === before + 1)
+    expect(names(view.data(), 'searchPosts')).toHaveLength(2)
+    bob.gate.release()
     await until(() => names(view.data(), 'searchPosts').length === 1)
     expect(names(view.data(), 'searchPosts')).toEqual([`${mine}-stays`])
-    await until(() => view.fetches() === before + 1)
-    bob.gate.release()
   })
 
-  it('(b) a post the viewer can no longer read leaves a custom result slot at once', async () => {
+  it('(b) a post the viewer can no longer read leaves a custom result slot after the refetch', async () => {
     const { alice, bob } = await pair()
     const mine = token()
     const hidden = await alice.createPost(`${mine}-hidden`)
@@ -122,10 +123,11 @@ describe('ranked and custom results', () => {
     const before = view.fetches()
     bob.gate.hold()
     await alice.updatePost(hidden, { published: { set: false } })
+    await until(() => view.fetches() === before + 1)
+    expect(names(view.data(), 'searchPosts')).toHaveLength(2)
+    bob.gate.release()
     await until(() => names(view.data(), 'searchPosts').length === 1)
     expect(names(view.data(), 'searchPosts')).toEqual([`${mine}-stays`])
-    await until(() => view.fetches() === before + 1)
-    bob.gate.release()
   })
 
   it('(d) a new match appears only after the refetch lands', async () => {

@@ -34,7 +34,7 @@ changes. Never edit it. See
 [Subscriptions and events](./GUIDE.md#subscriptions-and-events).
 
 Every model a live query reaches needs `Subscriptions`. A query over a model
-without events is not live; use a static query for it (step 6).
+without events is not live; use a static query for it (step 7).
 
 ## 2. Install
 
@@ -219,11 +219,14 @@ export function FeedList() {
 
 ## 7. Counts and aggregates
 
-Aggregates, group-by, counts and the many-row mutations cannot be live. Use
-the static hook; it fetches once and never patches:
+Aggregates, group-by and relation group-by are live through `useGolemQuery`.
+They hold no rows, so the client never patches them: any event on a model the
+result comes from refetches the whole document, through the same coalescer as
+every other refetch. An aggregate's `where` scopes its stream to the rows the
+count covers, and the server's policy filter still decides which events arrive.
 
 ```tsx
-import { useGolemStaticQuery } from '@eleven-am/golem-react'
+import { useGolemQuery } from '@eleven-am/golem-react'
 
 const PUBLISHED_COUNT = `
   query PublishedCount {
@@ -234,20 +237,33 @@ const PUBLISHED_COUNT = `
 `
 
 export function PublishedCount() {
-  const result = useGolemStaticQuery(PUBLISHED_COUNT)
+  const result = useGolemQuery(PUBLISHED_COUNT)
   const count = (result.data as { aggregatePosts: { count: string | number } } | undefined)?.aggregatePosts.count
   return <span>{String(count)}</span>
 }
 ```
 
-`useGolemQuery` on such a document throws `GolemNotLiveError`, which names the
-root and the reason.
+Put counts in their own query. Every event on a derived stream refetches the
+whole document, so a count beside a long list refetches the list too.
+
+Custom query roots whose result holds model rows behave the same way: they
+refetch on any event and are never patched. The many-row mutations
+(`updateMany`, `deleteMany`) are mutations, not queries, so no hook applies.
+
+`useGolemStaticQuery` stays available when you want a count fetched once and
+never refreshed. A document is still not live, and `useGolemQuery` throws
+`GolemNotLiveError` naming the root and the reason, when a model it reaches has
+no events or a custom root's result holds no model rows.
 
 ## 8. What the server must be
 
 - **golem go/v0.8.2 or later.** The generated manifest from that release
   carries `nullable` on every root and relation and the `deletedRow` root
   shape. The client reads both and does not guess.
+- **golem go/v0.8.3 or later for relation group-by.** From that release the
+  manifest lists every model a `relationGroupBy` root groups by, so renaming a
+  related row refreshes the groups. With a go/v0.8.2 manifest the root
+  refetches only on events of its own model.
 - **Regenerate the manifest after every schema change.** The manifest holds the
   contract fingerprint, and every live request carries it. A client built from
   an older manifest is refused with `GOLEM_CONTRACT_MISMATCH`, which surfaces

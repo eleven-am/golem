@@ -73,7 +73,7 @@ function Posts() {
 }
 ```
 
-It throws `GolemNotLiveError` (naming the reason and the root) for a document that cannot be live. Use `useGolemStaticQuery` for those.
+Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. It throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom root whose result holds no model rows. Use `useGolemStaticQuery` for those. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
 
 ### useGolemStatus
 
@@ -117,7 +117,7 @@ const pages = feed.data?.pages ?? []
 
 ### useGolemStaticQuery
 
-`useQuery` for a document that cannot be live: aggregates, group-by, counts and update-many roots. Fetched once, never patched.
+`useQuery` for a document you want fetched once and never refreshed, or one that cannot be live (a model without events, a custom root with no model rows). Counts and aggregates are live through `useGolemQuery`.
 
 ```tsx
 const COUNT = `
@@ -127,6 +127,7 @@ const COUNT = `
 `
 
 const total = useGolemStaticQuery(COUNT)
+const liveTotal = useGolemQuery(COUNT)
 ```
 
 ## Live status
