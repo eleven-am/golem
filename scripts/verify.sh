@@ -19,7 +19,7 @@ CLI_PACKAGES=(./cmd/golem ./golemtest)
 DATABASE_PACKAGES=(
 	./runtime ./internal/generate/pipeline ./internal/semantic/runtime ./internal/fulltext/runtime ./internal/provider/postgresql
 	./internal/read/decode ./internal/read/sql ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
-	./internal/event/outbox
+	./internal/event/outbox ./internal/queue/worker
 )
 ORACLE_MUTATION_AND_LOAD=(./internal/p8oracle/mutation ./internal/p8oracle/load ./internal/p8oracle/analytics)
 ORACLE_FAILURE_AND_EVENT=(./internal/p8oracle/failure ./internal/p8oracle/event ./internal/p8oracle/natslive)

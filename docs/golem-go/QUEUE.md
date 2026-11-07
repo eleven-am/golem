@@ -175,6 +175,47 @@ defaults:
 2m, `RetentionAge` 1h..10y, `RetentionEvery` 1m..24h or `RetentionDisabled`,
 and `RetentionRows` at most 4096.
 
+### Changing limits without a restart
+
+`app.ReconfigureQueue(ctx, queue.Plan{...})` changes the live worker's
+`Concurrency`, `ClaimBatch`, per-type `MaxConcurrent` and resource capacities.
+`app.QueuePlan()` reports what is active.
+
+```go
+status, err := app.ReconfigureQueue(ctx, queue.Plan{
+	MaxConcurrent: map[string]int{"analyze": 8},
+	Capacities:    map[string]int{"analyze_pool": 8},
+})
+```
+
+- **A plan states every field it changes.** A zero `Concurrency` or
+  `ClaimBatch`, and any type or resource the plan leaves out, returns to the
+  value given at `Open`. A `MaxConcurrent` of 0 for a type means uncapped.
+- **A refused plan changes nothing.** A negative value, an unregistered type,
+  an unknown resource, a `ClaimBatch` above the maximum or a capacity below a
+  cost returns `CodeConfigInvalid` and the old plan stays active.
+- **Raising applies on the next claim, and lowering never interrupts.** There
+  is no drain: running handlers finish, and nothing new is claimed until the
+  live count is under the new value. When `ReconfigureQueue` returns, no claim
+  computed from the old plan is still to start.
+- **It works before `RunQueueWorker` starts and while it runs.**
+- **`PlanStatus.Generation`** starts at 1 and rises by one for every accepted
+  plan; `AppliedAt` is wall time. The plan lives in the process. It is not
+  stored, so after a restart the application applies its own saved plan again
+  after `Open`.
+- **Resource capacity is fleet-wide.** Each claim uses the smaller of its own
+  capacity and the capacity recorded on every live lease. After you raise a
+  resource from 2 to 8, jobs already leased under 2 hold the budget at 2 until
+  they finish; the new 8 takes effect as they end. Replicas that disagree on
+  a capacity never exceed the smallest value held by a live lease.
+  `Concurrency`, `ClaimBatch` and `MaxConcurrent` are per process.
+- **Not changeable live:** resource costs and membership, `LeaseDuration`,
+  `PollInterval`, `ShutdownGrace`, `AbandonGrace`, `MaxPayloadBytes` and the
+  retention settings. Change those with a restart, and drain workers first
+  for costs and membership.
+- **Observation.** Each plan outcome emits one `PhaseApply` queue observation
+  with the type name `plan`.
+
 ## Retention
 
 Workers delete terminal job rows older than `RetentionAge` every
