@@ -565,6 +565,18 @@ func (app *App[P]) RunQueueWorker(ctx context.Context) error {
 	}
 	return app.runtime.RunQueueWorker(ctx)
 }
+func (app *App[P]) ReconfigureQueue(ctx context.Context, plan queue.Plan) (queue.PlanStatus, error) {
+	if app == nil {
+		return queue.PlanStatus{}, queue.Fail(queue.CodeConfigInvalid, "application is required")
+	}
+	return app.runtime.ReconfigureQueue(ctx, plan)
+}
+func (app *App[P]) QueuePlan() (queue.PlanStatus, error) {
+	if app == nil {
+		return queue.PlanStatus{}, queue.Fail(queue.CodeConfigInvalid, "application is required")
+	}
+	return app.runtime.QueuePlan()
+}
 func (app *App[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if app == nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "application is required")
