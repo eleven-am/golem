@@ -830,11 +830,13 @@ golem.(*RuntimeCustomMutationInput).Kind func() RuntimeMutationInputKind
 golem.(*RuntimeHookExecutorRequest).Input func() (FrozenMutationInput, bool)
 golem.(*RuntimeHookExecutorRequest).ModelID func() ModelID
 golem.(*RuntimeHookExecutorRequest).Operation func() RuntimeHookExecutorOperation
+golem.(*RuntimeHookExecutorRequest).Pending func() (queue.Pending, bool)
 golem.(*RuntimeHookExecutorRequest).Predicate func() (FrozenPredicate, bool)
 golem.(*RuntimeHookExecutorRequest).Read func() (FrozenReadRequest, bool)
 golem.(*RuntimeHookExecutorRequest).Target func() (FrozenMutationTarget, bool)
 golem.(*RuntimeHookExecutorRequest).UpdateInput func() (FrozenMutationInput, bool)
 golem.(*RuntimeHookExecutorResult).Count func() int64
+golem.(*RuntimeHookExecutorResult).JobID func() queue.JobID
 golem.(*RuntimeHookExecutorResult).Rows func() []RuntimeModelRow
 golem.(*RuntimeModelRow).ModelID func() ModelID
 golem.(*RuntimeMutationHookRequest).Input func() (FrozenMutationInput, bool)
@@ -1551,11 +1553,13 @@ golem.(RuntimeCustomMutationInput).Kind func() RuntimeMutationInputKind
 golem.(RuntimeHookExecutorRequest).Input func() (FrozenMutationInput, bool)
 golem.(RuntimeHookExecutorRequest).ModelID func() ModelID
 golem.(RuntimeHookExecutorRequest).Operation func() RuntimeHookExecutorOperation
+golem.(RuntimeHookExecutorRequest).Pending func() (queue.Pending, bool)
 golem.(RuntimeHookExecutorRequest).Predicate func() (FrozenPredicate, bool)
 golem.(RuntimeHookExecutorRequest).Read func() (FrozenReadRequest, bool)
 golem.(RuntimeHookExecutorRequest).Target func() (FrozenMutationTarget, bool)
 golem.(RuntimeHookExecutorRequest).UpdateInput func() (FrozenMutationInput, bool)
 golem.(RuntimeHookExecutorResult).Count func() int64
+golem.(RuntimeHookExecutorResult).JobID func() queue.JobID
 golem.(RuntimeHookExecutorResult).Rows func() []RuntimeModelRow
 golem.(RuntimeModelRow).ModelID func() ModelID
 golem.(RuntimeMutationHookRequest).Input func() (FrozenMutationInput, bool)
@@ -2500,6 +2504,7 @@ golem.HookDelete const HookOperation = "delete"
 golem.HookDeleteMany const HookOperation = "deleteMany"
 golem.HookDeleteManyRows func[M any](context.Context, HookExecutor, ModelDescriptor[M], Predicate[M]) (int64, error)
 golem.HookDeleteRow func[M any](context.Context, HookExecutor, ModelDescriptor[M], MutationTarget[M]) (Row[M], error)
+golem.HookEnqueue func(context.Context, HookExecutor, queue.Pending) (queue.JobID, error)
 golem.HookExecutor type struct
 golem.HookFindFirst const HookOperation = "findFirst"
 golem.HookFindMany const HookOperation = "findMany"
@@ -2890,8 +2895,11 @@ golem.RuntimeHookExecutorDelete func(ModelID, FrozenMutationTarget) RuntimeHookE
 golem.RuntimeHookExecutorDeleteMany func(ModelID, FrozenPredicate) RuntimeHookExecutorRequest
 golem.RuntimeHookExecutorDeleteManyOperation const RuntimeHookExecutorOperation = 7
 golem.RuntimeHookExecutorDeleteOperation const RuntimeHookExecutorOperation = 4
+golem.RuntimeHookExecutorEnqueue func(queue.Pending) RuntimeHookExecutorRequest
+golem.RuntimeHookExecutorEnqueueOperation const RuntimeHookExecutorOperation = 8
 golem.RuntimeHookExecutorFindMany func(FrozenReadRequest) RuntimeHookExecutorRequest
 golem.RuntimeHookExecutorFindManyOperation const RuntimeHookExecutorOperation = 1
+golem.RuntimeHookExecutorJob func(queue.JobID) RuntimeHookExecutorResult
 golem.RuntimeHookExecutorOperation comparable
 golem.RuntimeHookExecutorOperation type uint8
 golem.RuntimeHookExecutorRequest comparable

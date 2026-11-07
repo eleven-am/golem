@@ -3,6 +3,8 @@ package golem
 import (
 	"context"
 	"fmt"
+
+	"github.com/eleven-am/golem/go/queue"
 )
 
 // HookExecutor is an opaque capability for Golem operations on the exact
@@ -28,6 +30,7 @@ const (
 	RuntimeHookExecutorUpsertOperation
 	RuntimeHookExecutorUpdateManyOperation
 	RuntimeHookExecutorDeleteManyOperation
+	RuntimeHookExecutorEnqueueOperation
 )
 
 // RuntimeHookExecutorRequest is the immutable model-erased runtime ABI.
@@ -39,6 +42,7 @@ type RuntimeHookExecutorRequest struct {
 	update    *FrozenMutationInput
 	target    *FrozenMutationTarget
 	predicate *FrozenPredicate
+	pending   *queue.Pending
 }
 
 func RuntimeHookExecutorFindMany(request FrozenReadRequest) RuntimeHookExecutorRequest {
@@ -68,6 +72,10 @@ func RuntimeHookExecutorUpdateMany(model ModelID, predicate FrozenPredicate, inp
 func RuntimeHookExecutorDeleteMany(model ModelID, predicate FrozenPredicate) RuntimeHookExecutorRequest {
 	copy := cloneFrozenPredicate(predicate)
 	return RuntimeHookExecutorRequest{operation: RuntimeHookExecutorDeleteManyOperation, model: model, predicate: &copy}
+}
+
+func RuntimeHookExecutorEnqueue(pending queue.Pending) RuntimeHookExecutorRequest {
+	return RuntimeHookExecutorRequest{operation: RuntimeHookExecutorEnqueueOperation, pending: &pending}
 }
 
 func (request RuntimeHookExecutorRequest) Operation() RuntimeHookExecutorOperation {
@@ -105,9 +113,17 @@ func (request RuntimeHookExecutorRequest) Predicate() (FrozenPredicate, bool) {
 	return cloneFrozenPredicate(*request.predicate), true
 }
 
+func (request RuntimeHookExecutorRequest) Pending() (queue.Pending, bool) {
+	if request.pending == nil {
+		return queue.Pending{}, false
+	}
+	return *request.pending, true
+}
+
 type RuntimeHookExecutorResult struct {
 	rows  []RuntimeModelRow
 	count int64
+	job   queue.JobID
 }
 
 func RuntimeHookExecutorRows(rows ...RuntimeModelRow) RuntimeHookExecutorResult {
@@ -116,6 +132,10 @@ func RuntimeHookExecutorRows(rows ...RuntimeModelRow) RuntimeHookExecutorResult 
 func RuntimeHookExecutorCount(count int64) RuntimeHookExecutorResult {
 	return RuntimeHookExecutorResult{count: count}
 }
+func RuntimeHookExecutorJob(id queue.JobID) RuntimeHookExecutorResult {
+	return RuntimeHookExecutorResult{job: id}
+}
+func (result RuntimeHookExecutorResult) JobID() queue.JobID { return result.job }
 func (result RuntimeHookExecutorResult) Rows() []RuntimeModelRow {
 	return cloneRuntimeModelRows(result.rows)
 }
@@ -126,6 +146,14 @@ func runHookExecutor(ctx context.Context, executor HookExecutor, request Runtime
 		return RuntimeHookExecutorResult{}, fmt.Errorf("hook executor is unavailable outside a transaction-after hook")
 	}
 	return executor.execute(ctx, request)
+}
+
+func HookEnqueue(ctx context.Context, executor HookExecutor, pending queue.Pending) (queue.JobID, error) {
+	result, err := runHookExecutor(ctx, executor, RuntimeHookExecutorEnqueue(pending))
+	if err != nil {
+		return "", err
+	}
+	return result.JobID(), nil
 }
 
 func HookFindManyRows[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], options ...ReadOption[M]) ([]Row[M], error) {
