@@ -6,6 +6,15 @@ import { readMeta } from './live.js'
 import type { ClientManifest } from './manifest.js'
 import type { ExecuteRequest } from './transport.js'
 
+export interface MutateOptions {
+  readonly signal?: AbortSignal
+  readonly keepalive?: boolean
+}
+
+function isAbortSignal(value: AbortSignal | MutateOptions | undefined): value is AbortSignal {
+  return value !== undefined && typeof (value as AbortSignal).aborted === 'boolean' && typeof (value as AbortSignal).addEventListener === 'function'
+}
+
 export interface MutationTransport {
   execute<T = unknown>(request: ExecuteRequest): Promise<T>
 }
@@ -27,11 +36,12 @@ export class Mutations {
     this.manifest = options.manifest
   }
 
-  async execute<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<T> {
+  async execute<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, options?: AbortSignal | MutateOptions): Promise<T> {
+    const { signal, keepalive } = isAbortSignal(options) ? { signal: options, keepalive: undefined } : (options ?? {})
     const analysis = analyzeMutation(document, this.manifest)
     let data: T
     try {
-      data = await this.transport.execute<T>({ query: analysis.query, variables, signal })
+      data = await this.transport.execute<T>({ query: analysis.query, variables, signal, keepalive })
     } catch (error) {
       if (error instanceof GolemPartialCommitError || error instanceof GolemCommitUnknownError) {
         this.invalidateCommitted(analysis)

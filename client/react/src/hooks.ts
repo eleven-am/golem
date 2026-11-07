@@ -25,7 +25,7 @@ export type GolemInfiniteQueryOptions<TPage> = Omit<
   'queryKey' | 'queryFn' | 'meta' | 'initialPageParam' | 'getNextPageParam'
 >
 
-export type GolemMutationOptions<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables>, 'mutationFn'>
+export type GolemMutationOptions<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables>, 'mutationFn'> & { readonly keepalive?: boolean }
 
 export function useGolemQuery<TDocument extends GolemDocument>(
   document: TDocument,
@@ -65,8 +65,9 @@ export function useGolemMutation<TDocument extends GolemDocument>(
   options?: GolemMutationOptions<ResultFor<TDocument>, VariablesFor<TDocument>>,
 ): UseMutationResult<ResultFor<TDocument>, Error, VariablesFor<TDocument>> {
   const client = useGolemClient()
+  const { keepalive, ...mutation } = options ?? {}
   return useMutation<ResultFor<TDocument>, Error, VariablesFor<TDocument>>({
-    ...options,
-    mutationFn: (variables) => client.mutate<ResultFor<TDocument>>(document, variables as Variables),
+    ...mutation,
+    mutationFn: (variables) => client.mutate<ResultFor<TDocument>>(document, variables as Variables, keepalive === undefined ? undefined : { keepalive }),
   })
 }

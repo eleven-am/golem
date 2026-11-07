@@ -49,7 +49,7 @@ export const golem = new GolemClient({
 })
 ```
 
-- `manifest` is the generated `zz_golem_client.gen.ts` of your golem server (go/v0.8.2 or later). It carries the contract fingerprint and, per model and root, the primary key, cursor selector, events, relations (with `nullable`), and each root's shape.
+- `manifest` is the generated `zz_golem_client.gen.ts` of your golem server (go/v0.8.3 or later). It carries the contract fingerprint and, per model and root, the primary key, cursor selector, events, relations (with `nullable`), and each root's shape.
 - `credentials` is called again whenever a connection is made, including after the server closes a socket at its credential deadline, so return the current token each time.
 - `queryClient` is required. A second `GolemClient` on a `QueryClient` that already has one throws `GolemConfigurationError`. Call `golem.dispose()` to release it.
 
@@ -201,6 +201,18 @@ GraphQL does not say which subscription root carries a model's events, what its 
 
 For a walkthrough from a model to a live component, see [Using golem from React](../docs/golem-go/REACT.md).
 
+## Mutations on page unload
+
+Browsers cancel ordinary fetches while a page unloads. To send a last mutation on `pagehide`, pass `keepalive`; only that request is sent with `fetch(..., { keepalive: true })`.
+
+```ts
+addEventListener('pagehide', () => {
+  void golem.mutate(END_SESSION, { id: sessionId }, { keepalive: true }).catch(() => {})
+})
+```
+
+The third argument is either an `AbortSignal` or `{ signal?, keepalive? }`. The response may never be processed, so treat the mutation as possibly committed; the next page load refetches the authoritative state. Browsers cap keepalive request bodies at 64 KiB in total, so a larger body throws `GolemKeepaliveTooLargeError` before anything is sent.
+
 ## Errors
 
 All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) or a subclass:
@@ -214,7 +226,7 @@ Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError
 
 ## Server requirements
 
-- **golem go/v0.8.2 or later.** The generated manifest carries `nullable` on every root and relation and the `deletedRow` root shape; the client reads both and does not guess.
+- **golem go/v0.8.3 or later.** The generated manifest carries `nullable` on every root and relation and the `deletedRow` root shape; the client reads both and does not guess.
 - **`golem.Subscriptions` on every model a live query reaches.** A live stream whose rule or filter reaches a model without `Subscriptions` is refused when it is opened.
 - **A socket deadline for every principal.** The server closes a live socket at the principal's deadline (close `4401`) and the client reconnects with fresh credentials from your `credentials` getter and refetches. A principal with no deadline is refused with `GOLEM_PRINCIPAL_DEADLINE_REQUIRED` (close `4426`): set a context deadline where the principal is resolved, or mark an expiry-free principal and set `EventLimits.RevalidateEvery`. See the GUIDE, "The socket deadline".
 - **The contract fingerprint.** Every live request carries `{"protocol": 1, "contract": ...}`. A server built from a different schema answers `GOLEM_CONTRACT_MISMATCH`.

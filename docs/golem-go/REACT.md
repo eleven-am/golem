@@ -257,12 +257,11 @@ no events or a custom root's result holds no model rows.
 
 ## 8. What the server must be
 
-- **golem go/v0.8.2 or later.** The generated manifest from that release
-  carries `nullable` on every root and relation and the `deletedRow` root
-  shape. The client reads both and does not guess.
-- **golem go/v0.8.3 or later for relation group-by.** From that release the
-  manifest lists every model a `relationGroupBy` root groups by, so renaming a
-  related row refreshes the groups. With a go/v0.8.2 manifest the root
+- **golem go/v0.8.3 or later.** The generated manifest carries `nullable` on
+  every root and relation and the `deletedRow` root shape (since go/v0.8.2),
+  and lists every model a `relationGroupBy` root groups by (since go/v0.8.3),
+  so renaming a related row refreshes the groups. The client reads these facts
+  and does not guess. With a go/v0.8.2 manifest a `relationGroupBy` root
   refetches only on events of its own model.
 - **Regenerate the manifest after every schema change.** The manifest holds the
   contract fingerprint, and every live request carries it. A client built from

@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/query-core'
 import { parse, print, type DocumentNode } from 'graphql'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { DocumentAnalyzer, GolemClient, GolemDocumentError, GolemMultipleOperationsError, analyzeMutation, GolemNotLiveError, assertLive, streamRequest } from '../src/index.js'
+import { DocumentAnalyzer, GolemClient, GolemDocumentError, GolemMultipleOperationsError, analyzeMutation, GolemNotLiveError, assertLive, streamRequest, type MutateOptions } from '../src/index.js'
 import {
   socialHiddenCommentInverse,
   socialManifest,
@@ -388,7 +388,7 @@ describe('document handling', () => {
     expectTypeOf(client.queryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
     expectTypeOf(client.infiniteQueryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
     expectTypeOf(client.staticQueryOptions).parameters.toEqualTypeOf<[Document, Variables?]>()
-    expectTypeOf(client.mutate).parameters.toEqualTypeOf<[Document, Variables?, AbortSignal?]>()
+    expectTypeOf(client.mutate).parameters.toEqualTypeOf<[Document, Variables?, (AbortSignal | MutateOptions)?]>()
     expectTypeOf(DocumentAnalyzer.prototype.analyze).parameters.toEqualTypeOf<[Document]>()
     client.dispose()
   })
