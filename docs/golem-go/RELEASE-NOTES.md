@@ -5,12 +5,54 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.2
+go get github.com/eleven-am/golem/go@v0.8.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.3
+
+**Hooks can enqueue durable jobs on their own transaction.** `golem.HookEnqueue(ctx, result.Executor(), pending)` enqueues a queue job inside a transaction-after hook, so the job commits or rolls back with the hook's write. A failed enqueue rolls back only its own savepoint, so the hook can handle the error. Without `Config.Queue` it returns `CodeConfigInvalid`, which rolls the write back unless the hook swallows the error. Use it instead of `AfterCommit` when a committed write must have a job.
+
+**Queue failure callbacks.** A job type can declare a failure callback with `OnJobFailed`, registered through `Config.QueueFailed`. The callback runs in the same system transaction that marks the job failed, so a status-row write, any `tx.Enqueue` and the `failed` state commit together.
+- If the callback errors or panics, the transaction rolls back and the job is finalized again after its lease expires. `Operator().Cancel` stops a stuck job.
+- A job that crashes on its last attempt is now finalized by a worker instead of inside `Claim`, so its callback runs too.
+- A terminal decision is persisted before the callback runs, so a failing callback cannot cause the handler to run again.
+- The callback's deadline is the job's remaining lease, so it never outlives its `ExclusiveBy` ownership.
+- The callback may run more than once, so it must not cause external side effects.
+- Every process that registers the type must also register its callback.
+
+**Upgrade every worker before relying on `OnJobFailed`:** a go/v0.8.2 worker still fails exhausted leases inside `Claim` without calling it.
+
+**Queue limits change on a running application.** `app.ReconfigureQueue(ctx, queue.Plan{...})` changes `Concurrency`, `ClaimBatch`, per-type `MaxConcurrent` and resource capacities without a restart, and `app.QueuePlan()` reports the active plan and its generation.
+- A plan restates the full configuration: start from `QueuePlan()` and change the fields you need.
+- A plan that fails validation changes nothing.
+- Lowering a cap lets running jobs finish.
+- Costs, resource membership and lease settings still require a restart.
+- Raising a shared resource takes full effect once the jobs leased under the old capacity end.
+
+**Custom operations see the caller's actor.** Custom query and mutation resolvers now receive the caller's actor, so `golem.ActorFrom[Actor](ctx)` works in them as it does in hooks. Call resolvers through the generated `Mutate` or `Query`; calling the resolver function directly skips the actor.
+
+**The `internal` field tag.** A field tagged `golem:"internal"` stays fully available to Go and system code, including unique lookups, filters and order. It is removed from:
+- every GraphQL type, input, enum and aggregate;
+- introspection and subscription payloads;
+- the client manifest.
+
+Use it instead of `hidden` for values such as API-key hashes. On a model with a GraphQL create root, a required `internal` field must be `system` or hook-owned. A unique one must be `system`, because a hook cannot own a unique field. Kernel-mode schemas have no such requirement. `internal` together with `hidden` is refused.
+
+**Live derived queries in the client manifest.** A `relationGroupBy` root's `models` now lists the related models it groups by, so a live client refreshes the groups when a related row changes. Regenerate to get it.
+
+**A durable actions recipe.** QUEUE.md gains a tested recipe:
+- a status model users watch live;
+- a mutation that records the action and enqueues it in one transaction;
+- an idempotent, at-least-once handler;
+- `OnJobFailed` to record failure;
+- cooperative cancel;
+- the guard for the window between the handler committing and the queue recording success.
 
 ---
 
