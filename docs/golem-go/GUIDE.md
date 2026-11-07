@@ -985,7 +985,8 @@ copy, so changing it does not change the write.
 Names such as `BeforeUpsert` and `BeforeAggregate` are refused. A panic in a
 hook becomes an error, `generated hook panicked`, and its value is not kept.
 `golem.ActorFrom[Actor](ctx)` returns the actor of the caller the hook runs
-for. Hooks run for callers' operations, including those inside custom
+for; a custom query or mutation resolver receives the same actor in its
+`ctx`, over GraphQL and through the generated `Mutate` and `Query`. Hooks run for callers' operations, including those inside custom
 mutations and transaction operations. Writes through `System()` or
 `SystemEscape` run no hooks.
 

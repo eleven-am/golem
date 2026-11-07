@@ -320,8 +320,11 @@ changes through your mutations and your handler, never through a generic
 `queued`. The job carries `queue.Dedupe` set to the same domain key, so asking
 twice while a job is still active returns the first job's ID instead of
 starting a second. The status row and the job commit together or not at all,
-and the mutation returns the row as the handle. The policy is the ownership
-check: an upsert over someone else's row is refused as an update the caller
+and the mutation returns the row as the handle. The owner is not an argument:
+the mutation reads it from `golem.ActorFrom[Actor](ctx)`, so a client cannot
+name someone else. When you call the mutation from Go, go through the
+generated `Mutate`, as the program below does; calling the resolver function
+directly skips the actor. The policy is the ownership check: an upsert over someone else's row is refused as an update the caller
 may not make.
 
 ### Every new row gets a job
@@ -494,9 +497,11 @@ func DefineSchema(schema *golem.Schema) {
 }
 ```
 
-The actions, the handler and the failure callback live in one file. The
-generated `Caller`, `System`, `Exports` and `Open` come from the next
-command:
+The actions, the handler and the failure callback live in one file. `ExportJob`
+and `Operator` are package variables because a custom operation has no handle
+to the queue's job type or its operator; `main` sets them once the queue is
+registered and the application is open. The generated `Caller`, `System`,
+`Exports` and `Open` come from the next command:
 
 ```go
 // durable/exports.go
@@ -521,9 +526,8 @@ var (
 )
 
 type RequestExportArgs struct {
-	ID      string     `golem:"graphql=id"`
-	OwnerID golem.UUID `golem:"graphql=ownerID"`
-	Fail    bool       `golem:"graphql=fail"`
+	ID   string `golem:"graphql=id"`
+	Fail bool   `golem:"graphql=fail"`
 }
 
 type CancelExportArgs struct {
@@ -547,7 +551,7 @@ func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestE
 			return err
 		}
 		handle, err = tx.Exports.Upsert(ctx, Exports.ByID.Value(args.ID),
-			Exports.Create(Exports.ID.Create(args.ID), Exports.OwnerID.Create(args.OwnerID), Exports.JobID.Create(string(jobID)), Exports.ErrorCode.Create(""), Exports.Result.Create("")),
+			Exports.Create(Exports.ID.Create(args.ID), Exports.OwnerID.Create(golem.ActorFrom[Actor](ctx).UserID), Exports.JobID.Create(string(jobID)), Exports.ErrorCode.Create(""), Exports.Result.Create("")),
 			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
 		)
 		return err
@@ -674,15 +678,15 @@ func main() {
 		log.Fatal(err)
 	}
 	for _, request := range []durable.RequestExportArgs{
-		{ID: "report", OwnerID: owner},
-		{ID: "failing", OwnerID: owner, Fail: true},
-		{ID: "canceled", OwnerID: owner},
+		{ID: "report"},
+		{ID: "failing", Fail: true},
+		{ID: "canceled"},
 	} {
-		if _, err := durable.RequestExport(ctx, caller, request); err != nil {
+		if _, err := durable.Mutate(ctx, caller, durable.RequestExport, request); err != nil {
 			log.Fatal(err)
 		}
 	}
-	if _, err := durable.CancelExport(ctx, caller, durable.CancelExportArgs{ID: "canceled"}); err != nil {
+	if _, err := durable.Mutate(ctx, caller, durable.CancelExport, durable.CancelExportArgs{ID: "canceled"}); err != nil {
 		log.Fatal(err)
 	}
 

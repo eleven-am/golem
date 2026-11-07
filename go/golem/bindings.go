@@ -9,9 +9,10 @@ import (
 
 type actorContextKey struct{}
 
-// ActorFrom is the typed context access point used by hook source. A value is
-// present only while a caller-bound hook is executing; system reads bypass
-// hooks and never install an actor.
+// ActorFrom is the typed context access point used by hook and custom
+// operation source. A value is present only while a caller-bound hook or
+// custom operation is executing; system reads bypass hooks and never install
+// an actor.
 func ActorFrom[A any](ctx context.Context) A {
 	if ctx != nil {
 		if actor, ok := ctx.Value(actorContextKey{}).(A); ok {
