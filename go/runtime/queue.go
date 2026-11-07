@@ -177,9 +177,6 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 	return queue.JobID(stored.ID), nil
 }
 
-// CallerTxCancelJob cancels one job on the caller transaction's executor, so the
-// cancellation commits and rolls back with the domain write. Cancel only a job
-// identity read in this transaction from a row the caller's policy allowed.
 func CallerTxCancelJob[P, A any](ctx context.Context, transaction *CallerTx[P, A], id queue.JobID) (bool, error) {
 	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (bool, error) {
 		if transaction == nil || transaction.caller == nil {
@@ -189,7 +186,6 @@ func CallerTxCancelJob[P, A any](ctx context.Context, transaction *CallerTx[P, A
 	})
 }
 
-// SystemTxCancelJob is the unrestricted equivalent of CallerTxCancelJob.
 func SystemTxCancelJob[P, A any](ctx context.Context, transaction *SystemTx[P, A], id queue.JobID) (bool, error) {
 	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (bool, error) {
 		if transaction == nil || transaction.system.app == nil {
