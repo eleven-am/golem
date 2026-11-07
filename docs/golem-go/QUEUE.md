@@ -327,6 +327,21 @@ generated `Mutate`, as the program below does; calling the resolver function
 directly skips the actor. The policy is the ownership check: an upsert over someone else's row is refused as an update the caller
 may not make.
 
+### The acknowledgement window
+
+The handler's transaction and the queue's acknowledgement are separate commits,
+so delivery is at-least-once and there are two windows where "handler
+committed, queue not yet acknowledged". A request can arrive after `RunExport`
+committed `succeeded` but before the worker recorded the job as done; `Dedupe`
+still sees the active job and returns its ID. `requestExport` therefore compares
+the returned job ID with the row's stored one: the same ID is a coalesced
+request and the row is returned untouched, a different ID is a new job (the
+previous one is terminal) and the row is reset to `queued`. That reset is the
+recipe's reprocess rule: asking again after a job has finished runs the export
+again. Likewise, lease recovery can fail a job whose handler already committed
+`succeeded`, so the failure callback updates only the row whose job ID equals
+`failure.ID` and whose status is neither `succeeded` nor `canceled`.
+
 ### Every new row gets a job
 
 When the rule is "every new post gets a job" there is no mutation to put the
@@ -550,6 +565,16 @@ func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestE
 		if err != nil {
 			return err
 		}
+		existing, err := tx.Exports.FindMany(ctx, Exports.Where(Exports.ID.Eq(args.ID)))
+		if err != nil {
+			return err
+		}
+		if len(existing) == 1 {
+			if stored, _ := golem.Value(existing[0], Exports.JobID).Get(); stored == string(jobID) {
+				handle = existing[0]
+				return nil
+			}
+		}
 		handle, err = tx.Exports.Upsert(ctx, Exports.ByID.Value(args.ID),
 			Exports.Create(Exports.ID.Create(args.ID), Exports.OwnerID.Create(golem.ActorFrom[Actor](ctx).UserID), Exports.JobID.Create(string(jobID)), Exports.ErrorCode.Create(""), Exports.Result.Create("")),
 			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
@@ -578,8 +603,13 @@ func RunExport(ctx context.Context, system System[Principal], payload ExportPayl
 }
 
 func MarkExportFailed(ctx context.Context, tx *SystemTx[Principal], failure queue.Failure[ExportPayload]) error {
-	_, err := tx.Exports.Update(ctx, Exports.ByID.Value(failure.Payload.ID),
-		Exports.Update(Exports.Status.Set(StatusFailed), Exports.ErrorCode.Set(string(failure.Code))))
+	_, err := tx.Exports.UpdateMany(ctx,
+		Exports.ID.Eq(failure.Payload.ID).
+			And(Exports.JobID.Eq(string(failure.ID))).
+			And(Exports.Status.Ne(StatusSucceeded)).
+			And(Exports.Status.Ne(StatusCanceled)),
+		Exports.UpdateMany(Exports.Status.Set(StatusFailed), Exports.ErrorCode.Set(string(failure.Code))),
+	)
 	return err
 }
 
