@@ -16,7 +16,7 @@ Peer dependencies: `@eleven-am/golem-client` ^0.1.0, `@tanstack/react-query` ^5,
 
 The client lives on your application's `QueryClient`. It does not make a second one.
 
-The manifest is `zz_golem_client.gen.ts`, written by `golem generate` beside your GraphQL schema on the server (go/v0.8.2 or later). Copy or import it into your front end, and regenerate it whenever the schema changes. Never edit it.
+The manifest is `zz_golem_client.gen.ts`, written by `golem generate` beside your GraphQL schema on the server (go/v0.8.3 or later). Copy or import it into your front end, and regenerate it whenever the schema changes. Never edit it.
 
 ```tsx
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -222,6 +222,18 @@ GraphQL does not say which subscription root carries a model's events, what its 
 
 For a walkthrough from a model to a live component, see [Using golem from React](https://github.com/eleven-am/golem/blob/main/docs/golem-go/REACT.md).
 
+## Mutations on page unload
+
+Browsers cancel ordinary fetches while a page unloads. Pass `keepalive: true` to `useGolemMutation` and that mutation's requests are sent with `fetch(..., { keepalive: true })`.
+
+```tsx
+const endSession = useGolemMutation(END_SESSION, { keepalive: true })
+
+addEventListener('pagehide', () => endSession.mutate({ id: sessionId }))
+```
+
+The response may never be processed, so treat the mutation as possibly committed; the next page load refetches the authoritative state. Browsers cap keepalive request bodies at 64 KiB in total, so a larger body throws `GolemKeepaliveTooLargeError` before anything is sent.
+
 ## Errors
 
 All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) or a subclass:
@@ -235,7 +247,7 @@ Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError
 
 ## Requirements
 
-- golem **go/v0.8.2 or later** on the server, with `golem.Subscriptions` on every model a live query reaches.
+- golem **go/v0.8.3 or later** on the server, with `golem.Subscriptions` on every model a live query reaches.
 - `react` >=18, `@tanstack/react-query` 5.
 - A socket deadline for every principal, and a manifest regenerated after every schema change. See [The socket deadline](https://github.com/eleven-am/golem/blob/main/docs/golem-go/GUIDE.md#the-socket-deadline) and [The client manifest](https://github.com/eleven-am/golem/blob/main/docs/golem-go/GUIDE.md#the-client-manifest).
 

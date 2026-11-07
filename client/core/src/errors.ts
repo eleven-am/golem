@@ -93,6 +93,20 @@ export class GolemConfigurationError extends Error {
   }
 }
 
+export const KEEPALIVE_BODY_LIMIT = 65536
+
+export class GolemKeepaliveTooLargeError extends Error {
+  readonly bytes: number
+  readonly limit: number
+
+  constructor(bytes: number) {
+    super(`a keepalive request body is ${bytes} bytes; browsers allow at most ${KEEPALIVE_BODY_LIMIT}`)
+    this.name = 'GolemKeepaliveTooLargeError'
+    this.bytes = bytes
+    this.limit = KEEPALIVE_BODY_LIMIT
+  }
+}
+
 export type NotLiveReason = 'model-without-events' | 'opaque-root-without-models' | 'hidden-inverse' | 'non-row-root'
 
 export class GolemNotLiveError extends Error {

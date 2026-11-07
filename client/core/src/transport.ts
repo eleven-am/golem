@@ -1,4 +1,4 @@
-import { GolemConfigurationError, GolemHttpError, GolemProtocolError, failureOf, type GraphQLResponseBody } from './errors.js'
+import { GolemConfigurationError, GolemHttpError, GolemKeepaliveTooLargeError, KEEPALIVE_BODY_LIMIT, GolemProtocolError, failureOf, type GraphQLResponseBody } from './errors.js'
 import { golemBlock, type ContractManifest, type SessionStatus } from './protocol.js'
 import { Session, type CredentialsGetter, type SocketFactory, type StreamHandlers, type SubscriptionRequest } from './session.js'
 
@@ -16,6 +16,7 @@ export interface ExecuteRequest {
   readonly query: string
   readonly variables?: Readonly<Record<string, unknown>>
   readonly signal?: AbortSignal
+  readonly keepalive?: boolean
 }
 
 export class Transport {
@@ -53,15 +54,23 @@ export class Transport {
   async execute<T = unknown>(request: ExecuteRequest): Promise<T> {
     const credentials = (await this.options.credentials?.()) ?? {}
     const send = this.options.fetch ?? globalThis.fetch
+    const payload = JSON.stringify({
+      query: request.query,
+      variables: request.variables,
+      extensions: { golem: golemBlock(this.options.manifest) },
+    })
+    if (request.keepalive === true) {
+      const bytes = new TextEncoder().encode(payload).length
+      if (bytes > KEEPALIVE_BODY_LIMIT) {
+        throw new GolemKeepaliveTooLargeError(bytes)
+      }
+    }
     const response = await send(this.options.url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', ...credentials.headers },
-      body: JSON.stringify({
-        query: request.query,
-        variables: request.variables,
-        extensions: { golem: golemBlock(this.options.manifest) },
-      }),
+      body: payload,
       signal: request.signal,
+      ...(request.keepalive === true ? { keepalive: true } : {}),
     })
     const text = await response.text()
     let body: GraphQLResponseBody

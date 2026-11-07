@@ -4,7 +4,7 @@ import { DocumentAnalyzer } from './analysis.js'
 import { GolemConfigurationError } from './errors.js'
 import { LiveSync } from './live.js'
 import type { ClientManifest } from './manifest.js'
-import { Mutations } from './mutations.js'
+import { Mutations, type MutateOptions } from './mutations.js'
 import type { CredentialsGetter, SocketFactory } from './session.js'
 import { Transport } from './transport.js'
 
@@ -65,8 +65,8 @@ export class GolemClient {
     }
   }
 
-  mutate<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<T> {
-    return this.mutations.execute<T>(document, variables, signal)
+  mutate<T = unknown>(document: DocumentNode | string, variables?: Readonly<Record<string, unknown>>, options?: AbortSignal | MutateOptions): Promise<T> {
+    return this.mutations.execute<T>(document, variables, options)
   }
 
   attach(): () => void {

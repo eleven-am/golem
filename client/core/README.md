@@ -34,7 +34,7 @@ export const golem = new GolemClient({
 |---|---|
 | `queryClient` | Required. Your application's TanStack `QueryClient`. A second `GolemClient` on a `QueryClient` that already has one throws `GolemConfigurationError`. |
 | `url` | The GraphQL endpoint. HTTP requests go to it; the WebSocket connects to the same URL. |
-| `manifest` | The generated `zz_golem_client.gen.ts` of your golem server (go/v0.8.2 or later). |
+| `manifest` | The generated `zz_golem_client.gen.ts` of your golem server (go/v0.8.3 or later). |
 | `credentials` | Optional function returning `{ headers, connectionParams }`. Called again for every request and every connection, including after the server closes a socket at its credential deadline, so return the current token each time. |
 | `createSocket` | Optional `(url, protocols, credentials) => socket` factory, for a WebSocket implementation of your own (for example in Node). |
 | `fetch` | Optional `fetch` implementation for HTTP requests. Defaults to `globalThis.fetch`. |
@@ -178,6 +178,18 @@ GraphQL does not say which subscription root carries a model's events, what its 
 
 For a walkthrough from a model to a live component, see [Using golem from React](https://github.com/eleven-am/golem/blob/main/docs/golem-go/REACT.md).
 
+## Mutations on page unload
+
+Browsers cancel ordinary fetches while a page unloads. To send a last mutation on `pagehide`, pass `keepalive`; only that request is sent with `fetch(..., { keepalive: true })`.
+
+```ts
+addEventListener('pagehide', () => {
+  void golem.mutate(END_SESSION, { id: sessionId }, { keepalive: true }).catch(() => {})
+})
+```
+
+The third argument is either an `AbortSignal` or `{ signal?, keepalive? }`. The response may never be processed, so treat the mutation as possibly committed; the next page load refetches the authoritative state. Browsers cap keepalive request bodies at 64 KiB in total, so a larger body throws `GolemKeepaliveTooLargeError` before anything is sent.
+
 ## Errors
 
 All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) or a subclass:
@@ -191,7 +203,7 @@ Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError
 
 ## Requirements
 
-- golem **go/v0.8.2 or later** on the server, with `golem.Subscriptions` on every model a live query reaches.
+- golem **go/v0.8.3 or later** on the server, with `golem.Subscriptions` on every model a live query reaches.
 - `@tanstack/query-core` 5.
 - A socket deadline for every principal. See [The socket deadline](https://github.com/eleven-am/golem/blob/main/docs/golem-go/GUIDE.md#the-socket-deadline).
 
