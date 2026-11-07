@@ -257,7 +257,7 @@ no events or a custom root's result holds no model rows.
 
 ## 8. What the server must be
 
-- **golem go/v0.8.2 or later.** The generated manifest from that release
+- **golem go/v0.8.3 or later.** The generated manifest from that release
   carries `nullable` on every root and relation and the `deletedRow` root
   shape. The client reads both and does not guess.
 - **golem go/v0.8.3 or later for relation group-by.** From that release the
