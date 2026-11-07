@@ -214,7 +214,7 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 			continue
 		}
 		binding, exists := fieldsByName[occurrence.field.Name]
-		if !exists || !compilerir.ModesReadable(binding.contract.Modes) {
+		if !exists || !compilerir.ModesGraphQLReadable(binding.contract.Modes) {
 			return nil, nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableField, compileerr.Path(occurrence.field.Name), compileerr.Model(contract.GraphQLName))
 		}
 		if binding.model.Kind != compilerir.FieldRelation {
@@ -288,7 +288,7 @@ func (in *compiler) compileCounts(modelID compilerir.ModelID, set ast.SelectionS
 	byName := map[string]compilerir.FieldIR{}
 	for _, field := range model.Fields {
 		fc := fieldContracts[field.ID]
-		if field.Kind == compilerir.FieldRelation && compilerir.ModesReadable(fc.Modes) {
+		if field.Kind == compilerir.FieldRelation && compilerir.ModesGraphQLReadable(fc.Modes) {
 			byName[fc.GraphQLName] = field
 		}
 	}

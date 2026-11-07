@@ -87,11 +87,22 @@ On a real field:
 | `system` | written only by hooks and the system client; a caller's input that names it is refused |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |
+| `internal` | kept in the Go and system API, absent from GraphQL |
 | `writeonly` | writable, never readable |
 | `graphql=` | GraphQL field name |
 | `relation=has_many` / `has_one` / `belongs_to` | relation kind |
 | `fields=` / `references=` | the local and foreign columns joining it |
 | `name=` | pairs the two sides of a relation when a model has more than one relation to the same target, such as a self-relation |
+
+Use `hidden` for a column no code should touch through golem, and `internal`
+for one your own Go code must still read, filter or look up by but no client
+may see: an API key hash is `golem:"unique;internal;system"`, found with
+`FindUnique` in authentication middleware and absent from every GraphQL type,
+input, enum, subscription payload and the client manifest. `internal` combines
+with everything except `hidden`. On a model with a GraphQL create root, a
+required internal field with no default must also be `system` or listed in
+`GraphQLHookOwned`, or `golem generate` refuses it
+(`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`).
 
 `db:"-"` marks a field as having no column of its own, which every relation
 needs. `relation=many_to_many` is refused

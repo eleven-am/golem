@@ -213,6 +213,43 @@ func ValidateHookOwnedMethods(compilation ir.CompilationIR) []ir.Diagnostic {
 	return diagnostics
 }
 
+func ValidateInternalFields(compilation ir.CompilationIR) []ir.Diagnostic {
+	fields := map[ir.FieldID]ir.FieldIR{}
+	for _, model := range compilation.Model.Models {
+		for _, field := range model.Fields {
+			fields[field.ID] = field
+		}
+	}
+	var diagnostics []ir.Diagnostic
+	for _, model := range compilation.Contract.Models {
+		if !containsOperation(model.Operations, ir.OperationCreate) && !containsOperation(model.Operations, ir.OperationUpsert) {
+			continue
+		}
+		for _, contract := range model.Fields {
+			field := fields[contract.FieldID]
+			if !ir.HasMode(contract.Modes, ir.ModeInternal) || ir.HasMode(contract.Modes, ir.ModeSystem) || containsField(model.HookOwnedCreateFields, contract.FieldID) {
+				continue
+			}
+			scalar := field.Scalar
+			if scalar == nil || scalar.Nullable || scalar.Default != nil || scalar.Generation != nil || scalar.DatabaseReadOnly || scalar.Updated {
+				continue
+			}
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED", fmt.Sprintf("model %s internal field %s is required without a default, so GraphQL create would fail; mark it system or list it in GraphQLHookOwned, or give it a default", model.ModelID, contract.FieldID), ir.SourceSpan{}))
+		}
+	}
+	ir.SortDiagnostics(diagnostics)
+	return diagnostics
+}
+
+func containsOperation(values []ir.Operation, wanted ir.Operation) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func validateHookOwnedShape(logical ir.ModelIR, contract ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic {
 	if len(contract.HookOwnedCreateFields) == 0 {
 		return nil
@@ -381,7 +418,7 @@ func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, de
 
 func eventIdentityFieldExposed(field ir.FieldContractIR) bool {
 	for _, mode := range field.Modes {
-		if mode == ir.ModeHidden || mode == ir.ModeWriteOnly {
+		if mode == ir.ModeHidden || mode == ir.ModeInternal || mode == ir.ModeWriteOnly {
 			return false
 		}
 	}

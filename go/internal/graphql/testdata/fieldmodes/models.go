@@ -11,5 +11,6 @@ type Account struct {
 	Handle   string     `db:"handle" golem:"type=varchar(40)"`
 	Secret   string     `db:"secret" golem:"type=varchar(64);writeonly"`
 	Email    string     `db:"email" golem:"type=varchar(255);hidden"`
+	Token    string     `db:"token" golem:"type=varchar(64);unique;internal;system"`
 	Sequence int64      `db:"sequence" golem:"readonly"`
 }

@@ -198,3 +198,25 @@ func TestBeforeHookWritesASystemFieldOnAMutationThatAlsoCarriesRelations(t *test
 		t.Fatalf("persisted name=%q author=%q", name, author)
 	}
 }
+
+func TestInternalSystemFieldStaysReadableAndFilterableThroughTheGoSystem(t *testing.T) {
+	ctx := context.Background()
+	alice := golem.UUID{15: 1}
+	schemaFixture := schematest.NewWithContractModes(t, schematest.ContractModes{AuthorID: []compilerir.FieldMode{compilerir.ModeSystem, compilerir.ModeInternal}})
+	fixture := openMutationResultFixture(t, schemaFixture, MutationLimits{}, nil, nil, nil, true)
+	seedSystemAuthorPost(t, ctx, fixture, 61, alice)
+	if got := readSystemAuthor(t, ctx, fixture, 61); got != alice {
+		t.Fatalf("persisted author=%v, want %v", got, alice)
+	}
+	author := golem.GeneratedEqualField[mutationResultPost, golem.UUID](schemaFixture.AuthorID)
+	rows, err := SystemFindMany(ctx, fixture.app.System(), fixture.postDescriptor, golem.Where(author.Eq(alice)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("filtered rows=%d, want 1", len(rows))
+	}
+	if value, present := golem.Value(rows[0], author).Get(); !present || value != alice {
+		t.Fatalf("default projection author=%v present=%v", value, present)
+	}
+}

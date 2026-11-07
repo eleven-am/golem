@@ -747,3 +747,42 @@ func reverseSelectors(values []ir.SelectorContractIR) {
 		values[left], values[right] = values[right], values[left]
 	}
 }
+
+func TestInternalFieldKeepsTheWholeGoSurfaceThatHiddenRemoves(t *testing.T) {
+	compilation := socialCompilation()
+	var post *ir.ModelDeclIR
+	for index := range compilation.Model.Models {
+		if compilation.Model.Models[index].LogicalName == "Post" {
+			post = &compilation.Model.Models[index]
+			break
+		}
+	}
+	if post == nil {
+		t.Fatal("post fixture missing")
+	}
+	token := scalarField(id(91), "Token", 10, ir.TypeString)
+	secret := scalarField(id(92), "Secret", 11, ir.TypeString)
+	post.Fields = append(post.Fields, token, secret)
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].ModelID != post.ID {
+			continue
+		}
+		compilation.Contract.Models[index].Fields = append(compilation.Contract.Models[index].Fields,
+			ir.FieldContractIR{FieldID: token.ID, Modes: []ir.FieldMode{ir.ModeInternal}},
+			ir.FieldContractIR{FieldID: secret.ID, Modes: []ir.FieldMode{ir.ModeHidden}},
+		)
+	}
+	result, err := Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social", Directory: t.TempDir()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(result.Files[0].Source)
+	for _, required := range []string{"Token ", "func (field golemGeneratedPostTokenMutationField) Set(", "func (field golemGeneratedPostTokenMutationField) Create("} {
+		if !strings.Contains(source, required) {
+			t.Errorf("internal field lost Go surface %q", required)
+		}
+	}
+	if strings.Contains(source, "Secret ") {
+		t.Error("hidden control leaked into the Go surface")
+	}
+}

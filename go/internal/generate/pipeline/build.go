@@ -84,6 +84,9 @@ func analyze(ctx context.Context, request Request) (*Analysis, error) {
 	if diagnostics := graphqlcontract.ValidateHookOwnedMethods(compilation); len(diagnostics) != 0 {
 		return nil, diagnosticsError(diagnostics)
 	}
+	if diagnostics := graphqlcontract.ValidateInternalFields(compilation); len(diagnostics) != 0 {
+		return nil, diagnosticsError(diagnostics)
+	}
 	canonicalContract, err := canonicalContract(compilation.Contract)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize discovered contract: %w", err)

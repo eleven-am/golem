@@ -98,7 +98,7 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 			conditions = append(conditions, condition)
 		default:
 			field, exists := fields[key]
-			if !exists || !compilerir.ModesReadable(field.contract.Modes) {
+			if !exists || !compilerir.ModesGraphQLReadable(field.contract.Modes) {
 				return policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, key)))
 			}
 			condition, bindErr := s.fieldCondition(model, contract, field, rawChild, joinPath(path, key), depth+1)
@@ -486,6 +486,9 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 			break
 		}
 	}
+	if selector != nil && compilerir.SelectorHasInternalField(contract, *selector) {
+		selector = nil
+	}
 	if selector == nil || len(selector.Fields) == 0 {
 		return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, name)))
 	}
@@ -528,7 +531,7 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 	conditions := make([]policyir.Condition, len(selector.Fields))
 	for index, id := range selector.Fields {
 		binding, ok := fieldByID(fields, id)
-		if !ok || !compilerir.ModesReadable(binding.contract.Modes) || binding.model.Scalar == nil {
+		if !ok || !compilerir.ModesGraphQLReadable(binding.contract.Modes) || binding.model.Scalar == nil {
 			return readir.Selector{}, policyir.Condition{}, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(path, name)))
 		}
 		fieldID, _ := policyFieldID(id)
@@ -592,7 +595,7 @@ func (s *inputState) orderBy(model compilerir.ModelDeclIR, contract compilerir.M
 		}
 		name := sortedKeys(entry)[0]
 		field, ok := fields[name]
-		if !ok || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil {
+		if !ok || !compilerir.ModesGraphQLReadable(field.contract.Modes) || field.model.Scalar == nil {
 			return nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(joinPath(entryPath, name)))
 		}
 		if seen[field.model.ID] {
@@ -635,7 +638,7 @@ func (s *inputState) distinct(model compilerir.ModelDeclIR, contract compilerir.
 	for index, item := range items {
 		name, ok := item.(string)
 		field, exists := fields[name]
-		if !ok || !exists || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil {
+		if !ok || !exists || !compilerir.ModesGraphQLReadable(field.contract.Modes) || field.model.Scalar == nil {
 			return nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(compileerr.Index("distinct", index)))
 		}
 		if seen[field.model.ID] {

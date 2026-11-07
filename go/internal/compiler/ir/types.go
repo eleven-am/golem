@@ -745,6 +745,7 @@ const (
 	ModeWriteOnly FieldMode = "writeOnly"
 	ModeImmutable FieldMode = "immutable"
 	ModeSystem    FieldMode = "system"
+	ModeInternal  FieldMode = "internal"
 )
 
 func HasMode(modes []FieldMode, wanted FieldMode) bool {
@@ -758,6 +759,25 @@ func HasMode(modes []FieldMode, wanted FieldMode) bool {
 
 func ModesReadable(modes []FieldMode) bool {
 	return !HasMode(modes, ModeHidden) && !HasMode(modes, ModeWriteOnly)
+}
+
+func ModesGraphQLReadable(modes []FieldMode) bool {
+	return ModesReadable(modes) && !HasMode(modes, ModeInternal)
+}
+
+func SelectorHasInternalField(contract ModelContractIR, selector SelectorContractIR) bool {
+	for _, id := range selector.Fields {
+		for _, field := range contract.Fields {
+			if field.FieldID == id && HasMode(field.Modes, ModeInternal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ModesGraphQLHidden(modes []FieldMode) bool {
+	return HasMode(modes, ModeHidden) || HasMode(modes, ModeInternal)
 }
 
 type FieldContractIR struct {
