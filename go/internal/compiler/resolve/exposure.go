@@ -5,6 +5,20 @@ import (
 )
 
 func resolveModes(field ir.RawFieldDecl) ([]ir.FieldMode, []ir.Diagnostic) {
+	modes, diagnostics := resolveBaseModes(field)
+	if diagnostics != nil || !hasAttribute(field.GolemAttrs, "internal") {
+		return modes, diagnostics
+	}
+	if hasAttribute(field.GolemAttrs, "hidden") {
+		return nil, []ir.Diagnostic{errorf("P1_EXPOSURE_MODE_CONFLICT", field.Span, "field %s combines internal and hidden: hidden already removes the field from the Go API, internal keeps it", field.GoName)}
+	}
+	if len(modes) == 1 && modes[0] == ir.ModeVisible {
+		return []ir.FieldMode{ir.ModeInternal}, nil
+	}
+	return append(modes, ir.ModeInternal), nil
+}
+
+func resolveBaseModes(field ir.RawFieldDecl) ([]ir.FieldMode, []ir.Diagnostic) {
 	hidden := hasAttribute(field.GolemAttrs, "hidden")
 	readOnly := hasAttribute(field.GolemAttrs, "readonly")
 	writeOnly := hasAttribute(field.GolemAttrs, "writeonly")

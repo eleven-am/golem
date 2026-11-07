@@ -355,7 +355,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		if hidden(fc.Modes) {
 			continue
 		}
-		readable := ir.ModesReadable(fc.Modes)
+		readable := ir.ModesGraphQLReadable(fc.Modes)
 		writableCreate := !notCallerWritable(fc.Modes)
 		writableUpdate := writableCreate && !ir.HasMode(fc.Modes, ir.ModeImmutable)
 		if field.Kind == ir.FieldRelation {
@@ -477,10 +477,13 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		return selectors[i].KeyID < selectors[j].KeyID
 	})
 	for _, selector := range selectors {
+		if ir.SelectorHasInternalField(view.contract, selector) {
+			continue
+		}
 		if len(selector.Fields) == 1 {
 			field := fieldByID(view.model, selector.Fields[0])
 			fc := view.fields[selector.Fields[0]]
-			if field == nil || field.Scalar == nil || !ir.ModesReadable(fc.Modes) {
+			if field == nil || field.Scalar == nil || !ir.ModesGraphQLReadable(fc.Modes) {
 				return nil, fmt.Errorf("selector %s.%s contains an unexposed field", name, selector.Name)
 			}
 			base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
@@ -495,7 +498,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			for _, id := range selector.Fields {
 				field := fieldByID(view.model, id)
 				fc := view.fields[id]
-				if field == nil || field.Scalar == nil || !ir.ModesReadable(fc.Modes) {
+				if field == nil || field.Scalar == nil || !ir.ModesGraphQLReadable(fc.Modes) {
 					return nil, fmt.Errorf("selector %s.%s contains an unexposed field", name, selector.Name)
 				}
 				base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
@@ -779,7 +782,7 @@ func allRelationFilterTypes(views []modelView, contracts map[ir.ModelID]ir.Model
 				continue
 			}
 			fc := view.fields[field.ID]
-			if !ir.ModesReadable(fc.Modes) {
+			if !ir.ModesGraphQLReadable(fc.Modes) {
 				continue
 			}
 			relation := relationForField(field, view.relations)
@@ -1428,7 +1431,7 @@ func fieldByID(model ir.ModelDeclIR, id ir.FieldID) *ir.FieldIR {
 	}
 	return nil
 }
-func hidden(values []ir.FieldMode) bool { return ir.HasMode(values, ir.ModeHidden) }
+func hidden(values []ir.FieldMode) bool { return ir.ModesGraphQLHidden(values) }
 
 func notCallerWritable(values []ir.FieldMode) bool {
 	return ir.HasMode(values, ir.ModeReadOnly) || ir.HasMode(values, ir.ModeSystem)

@@ -562,7 +562,7 @@ func mutationField(model compilerir.ModelDeclIR, contract compilerir.ModelContra
 
 func mutationFieldRefusal(field compilerir.FieldIR, contract compilerir.FieldContractIR, kind InputKind) bool {
 	for _, mode := range contract.Modes {
-		if mode == compilerir.ModeHidden || mode == compilerir.ModeReadOnly || mode == compilerir.ModeSystem {
+		if mode == compilerir.ModeHidden || mode == compilerir.ModeInternal || mode == compilerir.ModeReadOnly || mode == compilerir.ModeSystem {
 			return true
 		}
 		if mode == compilerir.ModeImmutable && kind != CreateInput {

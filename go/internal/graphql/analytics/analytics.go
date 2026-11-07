@@ -1227,7 +1227,7 @@ func identitySet(values []compilerir.FieldID) map[compilerir.FieldID]bool {
 	return result
 }
 func available(value compilerir.FieldContractIR) bool {
-	return compilerir.ModesReadable(value.Modes) && value.GraphQLName != ""
+	return compilerir.ModesGraphQLReadable(value.Modes) && value.GraphQLName != ""
 }
 func publicModelID(value compilerir.ModelID) (golem.ModelID, error) {
 	var result golem.ModelID

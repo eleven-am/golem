@@ -155,7 +155,7 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 	primaryKey := make([]string, 0, len(selector.Fields))
 	for _, id := range selector.Fields {
 		field, ok := names[id]
-		if !ok || !ir.ModesReadable(field.Modes) {
+		if !ok || !ir.ModesGraphQLReadable(field.Modes) {
 			return Model{}, fmt.Errorf("client manifest: model %s primary key field %s is not readable", contract.GraphQLName, id)
 		}
 		primaryKey = append(primaryKey, field.GraphQLName)
@@ -174,7 +174,7 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 		if !ok {
 			return Model{}, fmt.Errorf("client manifest: model %s relation field %s has no contract", contract.GraphQLName, field.ID)
 		}
-		if !ir.ModesReadable(fc.Modes) {
+		if !ir.ModesGraphQLReadable(fc.Modes) {
 			continue
 		}
 		relation, ok := relations[field.Relation.RelationID]
@@ -239,7 +239,7 @@ func visibleFieldName(contract ir.ModelContractIR, id *ir.FieldID) *string {
 		return nil
 	}
 	for _, field := range contract.Fields {
-		if field.FieldID == *id && ir.ModesReadable(field.Modes) {
+		if field.FieldID == *id && ir.ModesGraphQLReadable(field.Modes) {
 			name := field.GraphQLName
 			return &name
 		}
