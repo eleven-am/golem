@@ -447,8 +447,6 @@ func UncountedRetryPreservesAttempt(t testing.TB, fixture Fixture) {
 	}
 }
 
-// ExpiredFinalAttemptFailsWithoutReexecution proves a crashed final attempt is
-// handed to a claimer for finalization without another attempt.
 func ExpiredFinalAttemptFailsWithoutReexecution(t testing.TB, fixture Fixture) {
 	t.Helper()
 	identity := enqueue(t, fixture, "gate.exhausted", request{maxAttempts: 2})
@@ -481,8 +479,6 @@ func ExpiredFinalAttemptFailsWithoutReexecution(t testing.TB, fixture Fixture) {
 	}
 }
 
-// FinalizeLeaseHoldsNoResourceBudget proves a finalizing lease neither takes a
-// resource snapshot nor counts against the shared budget.
 func FinalizeLeaseHoldsNoResourceBudget(t testing.TB, fixture Fixture) {
 	t.Helper()
 	ctx := context.Background()
@@ -504,8 +500,6 @@ func FinalizeLeaseHoldsNoResourceBudget(t testing.TB, fixture Fixture) {
 	}
 }
 
-// FailOnExecutorCommitsAndRollsBackWithTransaction proves a failure written on
-// a caller transaction is atomic with it and stays fenced by the lease token.
 func FailOnExecutorCommitsAndRollsBackWithTransaction(t testing.TB, fixture Fixture) {
 	t.Helper()
 	ctx := context.Background()
@@ -545,9 +539,6 @@ func FailOnExecutorCommitsAndRollsBackWithTransaction(t testing.TB, fixture Fixt
 	}
 }
 
-// DeferFailureIsFencedAndSurvivesLeaseExpiry proves a deferred terminal
-// decision is fenced, keeps the attempt budget, and is handed to the next
-// claimer for finalization instead of re-running the handler.
 func DeferFailureIsFencedAndSurvivesLeaseExpiry(t testing.TB, fixture Fixture) {
 	t.Helper()
 	ctx := context.Background()
