@@ -99,7 +99,8 @@ for one your own Go code must still read, filter or look up by but no client
 may see: an API key hash is `golem:"unique;internal;system"`, found with
 `FindUnique` in authentication middleware and absent from every GraphQL type,
 input, enum, subscription payload and the client manifest. `internal` combines
-with everything except `hidden`. On a model with a GraphQL create root, a
+with everything except `hidden`, and a primary key cannot be `internal`
+(`P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`). On a model with a GraphQL create root, a
 required internal field with no default must also be `system` or listed in
 `GraphQLHookOwned`, or `golem generate` refuses it
 (`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`).
