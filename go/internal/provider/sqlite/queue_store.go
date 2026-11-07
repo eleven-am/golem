@@ -357,6 +357,12 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 			if tokenErr != nil {
 				return nil, tokenErr
 			}
+			if candidate.ExclusiveKey.Valid {
+				if _, taken := held[candidate.ExclusiveKey.String]; taken {
+					continue
+				}
+				held[candidate.ExclusiveKey.String] = struct{}{}
+			}
 			selected = append(selected, sqliteSelectedClaim{candidateID: candidate.ID, token: token, finalize: true})
 			continue
 		}
@@ -435,7 +441,7 @@ func sqliteLeaseSelected(ctx context.Context, connection *sqlx.Conn, selected []
 		arguments = append(arguments, claim.candidateID, claim.token, claim.resource, claim.cost, claim.capacity)
 	}
 	arguments = append(arguments, leaseUntil, leaseUntil, now, now)
-	statement := `WITH claim(id,token,resource_name,resource_cost,resource_capacity) AS (VALUES ` + strings.Join(values, ",") + `) UPDATE ` + sqliteQueueTable + ` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 AND NOT ("status"='leased' AND ("attempt_count">="max_attempts" OR COALESCE("last_code",'')='` + queueprovider.CodeTerminal + `')) THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=(SELECT token FROM claim WHERE claim.id="golem_queue"."id"),"available_at"=?,"lease_until"=?,"resource_name"=(SELECT resource_name FROM claim WHERE claim.id="golem_queue"."id"),"resource_cost"=(SELECT resource_cost FROM claim WHERE claim.id="golem_queue"."id"),"resource_capacity"=(SELECT resource_capacity FROM claim WHERE claim.id="golem_queue"."id"),"updated_at"=? WHERE "id" IN (SELECT id FROM claim) AND "status" IN ('pending','leased') AND "available_at"<=? RETURNING ` + sqliteQueueColumns
+	statement := `WITH claim(id,token,resource_name,resource_cost,resource_capacity) AS (VALUES ` + strings.Join(values, ",") + `) UPDATE ` + sqliteQueueTable + ` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 AND NOT ("status"='leased' AND ("attempt_count">="max_attempts" OR COALESCE("last_code",'')='` + queueprovider.CodeTerminal + `')) THEN "attempt_count"+1 ELSE "attempt_count" END,"last_code"=CASE WHEN "status"='leased' AND "attempt_count">="max_attempts" AND COALESCE("last_code",'')<>'` + queueprovider.CodeTerminal + `' THEN '` + queueprovider.CodeAttemptsExhausted + `' ELSE "last_code" END,"lease_token"=(SELECT token FROM claim WHERE claim.id="golem_queue"."id"),"available_at"=?,"lease_until"=?,"resource_name"=(SELECT resource_name FROM claim WHERE claim.id="golem_queue"."id"),"resource_cost"=(SELECT resource_cost FROM claim WHERE claim.id="golem_queue"."id"),"resource_capacity"=(SELECT resource_capacity FROM claim WHERE claim.id="golem_queue"."id"),"updated_at"=? WHERE "id" IN (SELECT id FROM claim) AND "status" IN ('pending','leased') AND "available_at"<=? RETURNING ` + sqliteQueueColumns
 	var rows []sqliteQueueRow
 	if err := connection.SelectContext(ctx, &rows, statement, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_SQLITE_STORE: lease jobs: %w", err)
@@ -557,11 +563,13 @@ func (store *queueStore) RetryAt(ctx context.Context, id, token string, delay ti
 	return store.fenced(ctx, nil, `UPDATE `+sqliteQueueTable+` SET "status"='pending',"attempt_count"=CASE WHEN ? AND "attempt_count">0 THEN "attempt_count"-1 ELSE "attempt_count" END,"available_at"=`+sqliteDatabaseMicros+`+?,"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=?,"updated_at"=`+sqliteDatabaseMicros+sqliteQueueFence, uncounted, delay.Microseconds(), optionalText(code), id, token)
 }
 
+const sqliteFinalizerMark = `COALESCE("last_code",'') IN ('` + queueprovider.CodeTerminal + `','` + queueprovider.CodeAttemptsExhausted + `')`
+
 func (store *queueStore) Release(ctx context.Context, id, token string) (bool, error) {
 	if err := queueprovider.ValidateIdentity(id, token); err != nil {
 		return false, err
 	}
-	return store.fenced(ctx, nil, `UPDATE `+sqliteQueueTable+` SET "status"='pending',"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"updated_at"=`+sqliteDatabaseMicros+sqliteQueueFence, id, token)
+	return store.fenced(ctx, nil, `UPDATE `+sqliteQueueTable+` SET "status"=CASE WHEN `+sqliteFinalizerMark+` THEN 'leased' ELSE 'pending' END,"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=CASE WHEN `+sqliteFinalizerMark+` THEN `+sqliteDatabaseMicros+` ELSE NULL END,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"updated_at"=`+sqliteDatabaseMicros+sqliteQueueFence, id, token)
 }
 
 func (store *queueStore) Cancel(ctx context.Context, id string) (queueprovider.CancelResult, error) {
