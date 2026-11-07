@@ -295,6 +295,483 @@ protect you.
 - **Priority.** Delayed execution plus one queue per job class covers most
   orderings. Revisit on a named starvation case.
 
+## Recipe: durable actions
+
+An action that takes longer than a request (an export, a render, an import) has
+the same shape every time. The caller asks, gets a handle back at once, and
+watches the handle change. The work happens in a job, and the job may run more
+than once, fail, or be cancelled. This recipe wires that shape from parts
+golem already has, and the program at the end of it runs as written.
+
+### The status row is the handle
+
+Model the action's state as an ordinary model, keyed by the action's domain
+identity (here, the export's name) rather than by the job ID. It carries
+`golem.Subscriptions`, so a client watches it with `useGolemQuery` and sees
+`queued` become `succeeded` without polling, and a policy, so only its owner
+reads or writes it. Expose only the read operations over GraphQL: the status
+changes through your mutations and your handler, never through a generic
+`updateExport`.
+
+### Accepting the action
+
+`requestExport` is a [custom mutation](GUIDE.md#custom-operations). In one
+`caller.Transaction` it enqueues the job and upserts the status row as
+`queued`. The job carries `queue.Dedupe` set to the same domain key, so asking
+twice while a job is still active returns the first job's ID instead of
+starting a second. The status row and the job commit together or not at all,
+and the mutation returns the row as the handle. The owner is not an argument:
+the mutation reads it from `golem.ActorFrom[Actor](ctx)`, so a client cannot
+name someone else. When you call the mutation from Go, go through the
+generated `Mutate`, as the program below does; calling the resolver function
+directly skips the actor. The policy is the ownership check: an upsert over someone else's row is refused as an update the caller
+may not make.
+
+### The acknowledgement window
+
+The handler's transaction and the queue's acknowledgement are separate commits,
+so delivery is at-least-once and there are two windows where "handler
+committed, queue not yet acknowledged". A request can arrive after `RunExport`
+committed `succeeded` but before the worker recorded the job as done; `Dedupe`
+still sees the active job and returns its ID. `requestExport` therefore compares
+the returned job ID with the row's stored one: the same ID is a coalesced
+request and the row is returned untouched, a different ID is a new job (the
+previous one is terminal) and the row is reset to `queued`. That reset is the
+recipe's reprocess rule: asking again after a job has finished runs the export
+again. Likewise, lease recovery can fail a job whose handler already committed
+`succeeded`, so the failure callback updates only the row whose job ID equals
+`failure.ID` and whose status is neither `succeeded` nor `canceled`.
+
+### Every new row gets a job
+
+When the rule is "every new post gets a job" there is no mutation to put the
+call in. Enqueue from an `AfterCreate` hook:
+
+```go
+func (Post) AfterCreate(ctx context.Context, result PostCreateResult) error {
+	pending, err := thumbnailJob.New(Thumbnail{PostID: result.Row().ID})
+	if err != nil {
+		return err
+	}
+	_, err = golem.HookEnqueue(ctx, result.Executor(), pending)
+	return err
+}
+```
+
+`HookEnqueue` writes the job on the hook's own transaction, so the job exists
+if and only if the post commits. That is the reason not to use `AfterCommit`
+here: an after-commit hook runs once the transaction is already durable, and a
+crash or an error between the commit and the enqueue loses the job with
+nothing left to retry it from. See the
+[Hooks](GUIDE.md#hooks) section for the full contract.
+
+### The handler runs at least once
+
+The queue delivers a job at least once. A worker that dies after the handler
+finished but before the job was recorded succeeded leaves a job another worker
+will claim and run again, and a lease that expires mid-run does the same. The
+handler must therefore be safe to run twice:
+
+1. Read the status row first. If it is already `succeeded` or `canceled`,
+   return: the work is done or no longer wanted.
+2. Do the work.
+3. In one `SystemTx`, write the result, set the status to `succeeded`, and
+   enqueue the next stage if there is one.
+
+Step 3 is the whole trick. The result, the status and the next job commit
+together, so a second run either sees `succeeded` at step 1 and stops, or
+finds nothing committed and redoes the work. It never finds a result without
+its status, or a status without its next stage. `RunExport` below keeps its
+work small: it reads the row and writes the result in the same transaction. A
+handler with slow work reads the row first, does the work outside any
+transaction, and writes in a second `SystemTx`.
+
+When a stage has several parents, the last parent to finish enqueues the
+child. Each parent marks itself done and counts the parents still open under a
+lock key on the action, and only the one that sees none left enqueues the child:
+
+```go
+err := system.Transaction(ctx, func(tx *SystemTx[Principal]) error {
+	if err := tx.LockKeys(ctx, golem.MustLockKey("export", exportID)); err != nil {
+		return err
+	}
+	if _, err := tx.Parts.Update(ctx, Parts.ByID.Value(partID), Parts.Update(Parts.Done.Set(true))); err != nil {
+		return err
+	}
+	open, err := tx.Parts.Count(ctx, Parts.Where(Parts.ExportID.Eq(exportID).And(Parts.Done.Eq(false))))
+	if err != nil || open > 0 {
+		return err
+	}
+	_, err = tx.Enqueue(ctx, assemble)
+	return err
+})
+```
+
+The child's `queue.Dedupe` on the action key is the second guard: if two
+parents both see none left, the second enqueue returns the first job.
+
+### Failure
+
+A handler that returns an error is retried until its attempts run out. The
+last failure moves the job to `failed`, and a handler that crashes on its last
+attempt never gets to write anything. `OnJobFailed` closes that gap. golem runs
+the callback in the transaction that marks the job failed, so the status row
+becomes `failed` with a safe code (`attempts_exhausted`, `terminal`) if and
+only if the job does. Pass the code, never the error text: the status row is
+read by the owner's client.
+
+### Cancel
+
+`cancelExport` sets `cancel_requested` on the row and calls
+`QueueOperator().Cancel` on the job. Cancellation is cooperative, not a
+rollback. A job that has not started is cancelled at once. A job that is
+running is told at its next lease renewal, and may finish first. Work already
+done stays done. That is why the handler checks the row before it writes: a
+handler that finishes after the cancel must not overwrite `canceled` with `succeeded`. A
+handler with several steps repeats the check between steps. In the program
+below the mutation marks a queued row `canceled` in its own transaction, and
+`RunExport` declines any row that is no longer `queued`.
+
+### Retry or reprocess
+
+A custom mutation resets one stage's row to `queued` and enqueues it again,
+exactly as `requestExport` does: the same transaction, the same `Dedupe` key.
+Reprocessing a succeeded export is the same call. The handler's first check
+looks at the row, finds `queued`, and does the work again.
+
+### The program
+
+Four files and three commands. The schema holds the status model and its
+policy:
+
+```go
+// durable/schema.go
+package durable
+
+import "github.com/eleven-am/golem/go/golem"
+
+type Principal struct{ UserID golem.UUID }
+
+type Actor struct {
+	UserID        golem.UUID
+	Authenticated bool
+}
+
+type Status string
+
+const (
+	StatusQueued    Status = "queued"
+	StatusSucceeded Status = "succeeded"
+	StatusFailed    Status = "failed"
+	StatusCanceled  Status = "canceled"
+)
+
+func (Status) GolemEnum() golem.EnumSpec[Status] {
+	return golem.DefineEnum(
+		golem.EnumValue(StatusQueued),
+		golem.EnumValue(StatusSucceeded),
+		golem.EnumValue(StatusFailed),
+		golem.EnumValue(StatusCanceled),
+	)
+}
+
+type Export struct {
+	_ struct{} `golem:"model;id=example.durable.Export;table=exports;graphql=Export"`
+
+	ID              string     `db:"id" golem:"id=example.durable.Export.ID;pk;type=varchar(64)"`
+	OwnerID         golem.UUID `db:"owner_id"`
+	JobID           string     `db:"job_id" golem:"type=varchar(64)"`
+	Status          Status     `db:"status" golem:"default=queued"`
+	CancelRequested bool       `db:"cancel_requested" golem:"default=false"`
+	ErrorCode       string     `db:"error_code" golem:"type=varchar(64)"`
+	Result          string     `db:"result" golem:"type=varchar(200)"`
+}
+
+func (Export) GolemModel() golem.ModelSpec[Export] {
+	return golem.DefineModel(
+		golem.GraphQL[Export](golem.GraphQLOperations(golem.GraphQLFindOne, golem.GraphQLFindMany)),
+		golem.Subscriptions[Export](),
+	)
+}
+
+func (Export) DefinePolicy(rules *golem.Rules[Export], actor Actor) {
+	if !actor.Authenticated {
+		return
+	}
+	owned := Exports.OwnerID.Eq(actor.UserID)
+	rules.CanRead(owned)
+	rules.CanCreate(owned)
+	rules.CanUpdate(owned)
+}
+
+func DefineSchema(schema *golem.Schema) {
+	golem.SchemaName(schema, "durable")
+	golem.Actor[Actor](schema)
+	golem.Model[Export](schema)
+	golem.Providers(schema, golem.SQLite)
+}
+```
+
+The actions, the handler and the failure callback live in one file. `ExportJob`
+and `Operator` are package variables because a custom operation has no handle
+to the queue's job type or its operator; `main` sets them once the queue is
+registered and the application is open. The generated `Caller`, `System`,
+`Exports` and `Open` come from the next command:
+
+```go
+// durable/exports.go
+package durable
+
+import (
+	"context"
+	"errors"
+
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/queue"
+)
+
+type ExportPayload struct {
+	ID   string `json:"id"`
+	Fail bool   `json:"fail"`
+}
+
+var (
+	ExportJob queue.Type[ExportPayload]
+	Operator  queue.Operator
+)
+
+type RequestExportArgs struct {
+	ID   string `golem:"graphql=id"`
+	Fail bool   `golem:"graphql=fail"`
+}
+
+type CancelExportArgs struct {
+	ID string `golem:"graphql=id"`
+}
+
+func DefineGraphQL(graphql *golem.GraphQLSchema) {
+	golem.Mutation(graphql, "requestExport", RequestExport)
+	golem.Mutation(graphql, "cancelExport", CancelExport)
+}
+
+func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestExportArgs) (golem.Row[Export], error) {
+	pending, err := ExportJob.New(ExportPayload{ID: args.ID, Fail: args.Fail}, queue.Dedupe("export:"+args.ID))
+	if err != nil {
+		return golem.Row[Export]{}, err
+	}
+	var handle golem.Row[Export]
+	err = caller.Transaction(ctx, func(tx *CallerTx[Principal]) error {
+		jobID, err := tx.Enqueue(ctx, pending)
+		if err != nil {
+			return err
+		}
+		existing, err := tx.Exports.FindMany(ctx, Exports.Where(Exports.ID.Eq(args.ID)))
+		if err != nil {
+			return err
+		}
+		if len(existing) == 1 {
+			if stored, _ := golem.Value(existing[0], Exports.JobID).Get(); stored == string(jobID) {
+				handle = existing[0]
+				return nil
+			}
+		}
+		handle, err = tx.Exports.Upsert(ctx, Exports.ByID.Value(args.ID),
+			Exports.Create(Exports.ID.Create(args.ID), Exports.OwnerID.Create(golem.ActorFrom[Actor](ctx).UserID), Exports.JobID.Create(string(jobID)), Exports.ErrorCode.Create(""), Exports.Result.Create("")),
+			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
+		)
+		return err
+	})
+	return handle, err
+}
+
+func RunExport(ctx context.Context, system System[Principal], payload ExportPayload) error {
+	return system.Transaction(ctx, func(tx *SystemTx[Principal]) error {
+		current, err := tx.Exports.FindUnique(ctx, Exports.ByID.Value(payload.ID))
+		if err != nil {
+			return err
+		}
+		if status, _ := golem.Value(current, Exports.Status).Get(); status != StatusQueued {
+			return nil
+		}
+		if payload.Fail {
+			return errors.New("renderer unavailable")
+		}
+		_, err = tx.Exports.Update(ctx, Exports.ByID.Value(payload.ID),
+			Exports.Update(Exports.Status.Set(StatusSucceeded), Exports.Result.Set("export-"+payload.ID+".zip")))
+		return err
+	})
+}
+
+func MarkExportFailed(ctx context.Context, tx *SystemTx[Principal], failure queue.Failure[ExportPayload]) error {
+	_, err := tx.Exports.UpdateMany(ctx,
+		Exports.ID.Eq(failure.Payload.ID).
+			And(Exports.JobID.Eq(string(failure.ID))).
+			And(Exports.Status.Ne(StatusSucceeded)).
+			And(Exports.Status.Ne(StatusCanceled)),
+		Exports.UpdateMany(Exports.Status.Set(StatusFailed), Exports.ErrorCode.Set(string(failure.Code))),
+	)
+	return err
+}
+
+func CancelExport(ctx context.Context, caller *Caller[Principal], args CancelExportArgs) (golem.Row[Export], error) {
+	var handle golem.Row[Export]
+	err := caller.Transaction(ctx, func(tx *CallerTx[Principal]) error {
+		_, err := tx.Exports.UpdateMany(ctx,
+			Exports.ID.Eq(args.ID).And(Exports.Status.Eq(StatusQueued)),
+			Exports.UpdateMany(Exports.CancelRequested.Set(true), Exports.Status.Set(StatusCanceled)),
+		)
+		if err != nil {
+			return err
+		}
+		handle, err = tx.Exports.FindUnique(ctx, Exports.ByID.Value(args.ID))
+		return err
+	})
+	if err != nil {
+		return handle, err
+	}
+	jobID, _ := golem.Value(handle, Exports.JobID).Get()
+	if _, err := Operator.Cancel(ctx, queue.JobID(jobID)); err != nil {
+		return handle, err
+	}
+	return handle, nil
+}
+```
+
+The program accepts three exports, cancels one before the worker starts, makes
+one fail, and prints each final status:
+
+```go
+// cmd/durable/main.go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"example.com/notes/durable"
+	"github.com/eleven-am/golem/go/events"
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/provider/sqlite"
+	"github.com/eleven-am/golem/go/queue"
+	golemruntime "github.com/eleven-am/golem/go/runtime"
+)
+
+func main() {
+	ctx := context.Background()
+	database, err := sqlite.Open(ctx, sqlite.Config{DataSourceName: "file:durable.db"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer database.Close()
+
+	transport, err := events.NewMemoryTransport(events.MemoryLimits{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var application *durable.App[durable.Principal]
+	registry := queue.NewRegistry()
+	durable.ExportJob, err = queue.Register(registry, queue.Definition[durable.ExportPayload]{
+		Type:        "export",
+		MaxAttempts: 2,
+		Timeout:     5 * time.Second,
+		Backoff:     queue.Backoff{Base: 10 * time.Millisecond, Cap: 50 * time.Millisecond},
+		Handle: func(ctx context.Context, job queue.Job[durable.ExportPayload]) error {
+			return durable.RunExport(ctx, application.System(), job.Payload)
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	application, err = durable.Open(ctx, durable.Config[durable.Principal]{
+		Database:            database,
+		EventTransport:      transport,
+		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
+		Queue:               &golemruntime.QueueConfig{Registry: registry},
+		QueueFailed:         []golemruntime.JobFailed[durable.Principal, durable.Actor]{durable.OnJobFailed(durable.ExportJob, durable.MarkExportFailed)},
+		ResolvePrincipal: func(_ context.Context, principal durable.Principal) (durable.Actor, error) {
+			return durable.Actor{UserID: principal.UserID, Authenticated: true}, nil
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	durable.Operator = application.QueueOperator()
+
+	owner := golem.NewUUID([16]byte{1})
+	caller, err := application.ForPrincipal(ctx, durable.Principal{UserID: owner})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, request := range []durable.RequestExportArgs{
+		{ID: "report"},
+		{ID: "failing", Fail: true},
+		{ID: "canceled"},
+	} {
+		if _, err := durable.Mutate(ctx, caller, durable.RequestExport, request); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if _, err := durable.Mutate(ctx, caller, durable.CancelExport, durable.CancelExportArgs{ID: "canceled"}); err != nil {
+		log.Fatal(err)
+	}
+
+	worker, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() {
+		if err := application.RunQueueWorker(worker); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("worker stopped: %v", err)
+		}
+	}()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		rows, err := caller.Exports.FindMany(ctx, durable.Exports.Where(durable.Exports.Status.Ne(durable.StatusQueued)))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(rows) == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Fatalf("stalled with %d of 3 exports finished", len(rows))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, id := range []string{"report", "failing", "canceled"} {
+		row, err := caller.Exports.FindUnique(ctx, durable.Exports.ByID.Value(id))
+		if err != nil {
+			log.Fatal(err)
+		}
+		status, _ := golem.Value(row, durable.Exports.Status).Get()
+		code, _ := golem.Value(row, durable.Exports.ErrorCode).Get()
+		fmt.Printf("export=%s status=%s code=%s\n", id, status, code)
+	}
+}
+```
+
+```sh
+golem migration new --schema ./durable --name init
+golem generate --schema ./durable --app-out ./durable
+golem migration apply --provider sqlite --dsn "file:durable.db"
+```
+
+It prints:
+
+```
+export=report status=succeeded code=
+export=failing status=failed code=attempts_exhausted
+export=canceled status=canceled code=
+```
+
+The program does not run the event publisher, so nothing reaches a client
+watching `Export`. A server runs `application.RunEventPublisher(ctx)` beside
+the queue worker; see [Event transports](GUIDE.md#event-transports).
+
 ## The whole program
 
 A minimal schema, so the application has a database to keep jobs in:
