@@ -250,3 +250,15 @@ func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
 	}
 	providertest.LegacySchemaUpgradesInPlace(t, providertest.Fixture{Store: store, Database: database}, "legacy-live", "legacy-done")
 }
+
+func TestFinalizeLeaseHoldsNoResourceBudget(t *testing.T) {
+	providertest.FinalizeLeaseHoldsNoResourceBudget(t, newQueueFixture(t))
+}
+
+func TestFailOnExecutorCommitsAndRollsBackWithTransaction(t *testing.T) {
+	providertest.FailOnExecutorCommitsAndRollsBackWithTransaction(t, newQueueFixture(t))
+}
+
+func TestDeferFailureIsFencedAndSurvivesLeaseExpiry(t *testing.T) {
+	providertest.DeferFailureIsFencedAndSurvivesLeaseExpiry(t, newQueueFixture(t))
+}

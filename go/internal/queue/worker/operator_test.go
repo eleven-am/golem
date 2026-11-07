@@ -43,7 +43,7 @@ func TestOperatorRequeueRestoresTerminalWork(t *testing.T) {
 	if err != nil || len(leased) != 1 {
 		t.Fatalf("claim %#v error=%v", leased, err)
 	}
-	if changed, err := fixture.store.Fail(ctx, identity, leased[0].LeaseToken, codeTerminal); err != nil || !changed {
+	if changed, err := fixture.store.Fail(ctx, nil, identity, leased[0].LeaseToken, codeTerminal); err != nil || !changed {
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
 	changed, err := control.Requeue(ctx, queue.JobID(identity))

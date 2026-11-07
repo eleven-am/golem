@@ -37,6 +37,7 @@ type postgresqlSelectedClaim struct {
 	resource    any
 	cost        any
 	capacity    any
+	finalize    bool
 }
 
 // QueueStore binds the durable job state machine to a live PostgreSQL database
@@ -222,9 +223,10 @@ type postgresqlClaimCandidate struct {
 	CancelRequested sql.NullTime   `db:"cancel_requested_at"`
 	ExclusiveKey    sql.NullString `db:"exclusive_key"`
 	AvailableAt     time.Time      `db:"available_at"`
+	LastCode        sql.NullString `db:"last_code"`
 }
 
-const postgresqlClaimCandidateColumns = `job."id",job."type",job."status",job."attempt_count",job."max_attempts",job."cancel_requested_at",job."exclusive_key",job."available_at"`
+const postgresqlClaimCandidateColumns = `job."id",job."type",job."status",job."attempt_count",job."max_attempts",job."cancel_requested_at",job."exclusive_key",job."available_at",job."last_code"`
 
 func postgresqlClaimEligible(table, typePredicate string) string {
 	return `job."available_at"<=clock_timestamp() AND ` + typePredicate +
@@ -331,7 +333,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 			arguments = append(arguments, name)
 			names = append(names, "$"+strconv.Itoa(len(arguments)))
 		}
-		typePredicate = `(` + typePredicate + ` OR (job."type" IN (` + strings.Join(names, ",") + `) AND job."status"='leased' AND job."lease_until"<=clock_timestamp() AND (job."cancel_requested_at" IS NOT NULL OR job."attempt_count">=job."max_attempts")))`
+		typePredicate = `(` + typePredicate + ` OR (job."type" IN (` + strings.Join(names, ",") + `) AND job."status"='leased' AND job."lease_until"<=clock_timestamp() AND (job."cancel_requested_at" IS NOT NULL OR job."attempt_count">=job."max_attempts" OR COALESCE(job."last_code",'')='` + queueprovider.CodeTerminal + `')))`
 	}
 	discoveryLimit := options.Limit
 	if options.Resource != nil {
@@ -344,7 +346,6 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	held := make(map[string]struct{}, len(candidates))
 	selected := make([]postgresqlSelectedClaim, 0, len(candidates))
 	canceled := make([]string, 0)
-	exhausted := make([]string, 0)
 	for _, candidate := range candidates {
 		if len(selected) >= options.Limit {
 			break
@@ -353,8 +354,12 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 			canceled = append(canceled, candidate.ID)
 			continue
 		}
-		if candidate.Status == string(queueprovider.StateLeased) && candidate.Attempts >= candidate.MaxAttempts {
-			exhausted = append(exhausted, candidate.ID)
+		if candidate.Status == string(queueprovider.StateLeased) && (candidate.Attempts >= candidate.MaxAttempts || candidate.LastCode.String == queueprovider.CodeTerminal) {
+			token, tokenErr := queueprovider.NewIdentifier()
+			if tokenErr != nil {
+				return nil, tokenErr
+			}
+			selected = append(selected, postgresqlSelectedClaim{candidateID: candidate.ID, token: token, finalize: true})
 			continue
 		}
 		candidateCost := int64(0)
@@ -394,7 +399,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		resourceUsed += candidateCost
 		selected = append(selected, postgresqlSelectedClaim{candidateID: candidate.ID, token: token, resource: resourceName, cost: resourceCost, capacity: snapshotCapacity})
 	}
-	if err := store.finishExpiredClaims(ctx, transaction, canceled, exhausted); err != nil {
+	if err := store.finishExpiredCanceled(ctx, transaction, canceled); err != nil {
 		return nil, err
 	}
 	records, err := store.leaseSelected(ctx, transaction, selected, options.LeaseDuration)
@@ -407,29 +412,19 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	return queueprovider.CloneRecords(records), nil
 }
 
-func (store *queueStore) finishExpiredClaims(ctx context.Context, transaction *sqlx.Tx, canceled, exhausted []string) error {
-	for _, terminal := range []struct {
-		ids       []string
-		state     string
-		code      string
-		predicate string
-	}{
-		{canceled, "canceled", queueprovider.CodeCanceled, `"cancel_requested_at" IS NOT NULL`},
-		{exhausted, "failed", queueprovider.CodeAttemptsExhausted, `"attempt_count">="max_attempts"`},
-	} {
-		if len(terminal.ids) == 0 {
-			continue
-		}
-		marks, arguments := postgresqlArguments(terminal.ids)
-		arguments = append(arguments, terminal.code)
-		result, err := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='`+terminal.state+`',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$`+strconv.Itoa(len(arguments))+`,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased' AND "lease_until"<=clock_timestamp() AND `+terminal.predicate, arguments...)
-		if err != nil {
-			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: finalize expired leases: %w", err)
-		}
-		changed, err := result.RowsAffected()
-		if err != nil || int(changed) != len(terminal.ids) {
-			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired lease ownership changed")
-		}
+func (store *queueStore) finishExpiredCanceled(ctx context.Context, transaction *sqlx.Tx, canceled []string) error {
+	if len(canceled) == 0 {
+		return nil
+	}
+	marks, arguments := postgresqlArguments(canceled)
+	arguments = append(arguments, queueprovider.CodeCanceled)
+	result, err := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$`+strconv.Itoa(len(arguments))+`,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased' AND "lease_until"<=clock_timestamp() AND "cancel_requested_at" IS NOT NULL`, arguments...)
+	if err != nil {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: finalize expired leases: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || int(changed) != len(canceled) {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired lease ownership changed")
 	}
 	return nil
 }
@@ -448,7 +443,7 @@ func (store *queueStore) leaseSelected(ctx context.Context, transaction *sqlx.Tx
 	arguments = append(arguments, duration.Microseconds())
 	returned := `job.` + strings.ReplaceAll(postgresqlQueueColumns, `,`, `,job.`)
 	deadline := `clock_timestamp()+$` + strconv.Itoa(len(arguments)) + `*interval '1 microsecond'`
-	statement := `WITH deadline AS MATERIALIZED (SELECT ` + deadline + ` AS expires_at) UPDATE ` + store.table() + ` AS job SET "status"='leased',"attempt_count"=CASE WHEN job."attempt_count"<9223372036854775807 THEN job."attempt_count"+1 ELSE job."attempt_count" END,"lease_token"=claim.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"resource_name"=claim.resource_name,"resource_cost"=claim.resource_cost,"resource_capacity"=claim.resource_capacity,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(id,token,resource_name,resource_cost,resource_capacity) CROSS JOIN deadline WHERE job."id"=claim.id AND ` + postgresqlQueueClaim + ` RETURNING ` + returned
+	statement := `WITH deadline AS MATERIALIZED (SELECT ` + deadline + ` AS expires_at) UPDATE ` + store.table() + ` AS job SET "status"='leased',"attempt_count"=CASE WHEN job."attempt_count"<9223372036854775807 AND NOT (job."status"='leased' AND (job."attempt_count">=job."max_attempts" OR COALESCE(job."last_code",'')='` + queueprovider.CodeTerminal + `')) THEN job."attempt_count"+1 ELSE job."attempt_count" END,"lease_token"=claim.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"resource_name"=claim.resource_name,"resource_cost"=claim.resource_cost,"resource_capacity"=claim.resource_capacity,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(id,token,resource_name,resource_cost,resource_capacity) CROSS JOIN deadline WHERE job."id"=claim.id AND ` + postgresqlQueueClaim + ` RETURNING ` + returned
 	var rows []postgresqlQueueRow
 	if err := transaction.SelectContext(ctx, &rows, statement, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: lease jobs: %w", err)
@@ -463,6 +458,7 @@ func (store *queueStore) leaseSelected(ctx context.Context, transaction *sqlx.Tx
 		if !ok {
 			return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: selected job lost claim eligibility")
 		}
+		record.Finalize = claim.finalize
 		records = append(records, record)
 	}
 	return records, nil
@@ -533,25 +529,35 @@ func (store *queueStore) Renew(ctx context.Context, id, token string, duration t
 }
 
 func (store *queueStore) Succeed(ctx context.Context, id, token, code string) (bool, error) {
-	return store.terminal(ctx, id, token, code, string(queueprovider.StateSucceeded))
+	return store.terminal(ctx, nil, id, token, code, string(queueprovider.StateSucceeded))
 }
 
-func (store *queueStore) Fail(ctx context.Context, id, token, code string) (bool, error) {
-	return store.terminal(ctx, id, token, code, string(queueprovider.StateFailed))
+func (store *queueStore) Fail(ctx context.Context, executor queueprovider.Executor, id, token, code string) (bool, error) {
+	return store.terminal(ctx, executor, id, token, code, string(queueprovider.StateFailed))
 }
 
-func (store *queueStore) MarkCanceled(ctx context.Context, id, token, code string) (bool, error) {
-	return store.terminal(ctx, id, token, code, string(queueprovider.StateCanceled))
-}
-
-func (store *queueStore) terminal(ctx context.Context, id, token, code, state string) (bool, error) {
+func (store *queueStore) DeferFailure(ctx context.Context, id, token, code string) (bool, error) {
 	if err := queueprovider.ValidateIdentity(id, token); err != nil {
 		return false, err
 	}
 	if err := queueprovider.ValidateCode(code); err != nil {
 		return false, err
 	}
-	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"=$1,"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$2,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$3 AND "lease_token"=$4 AND "status"='leased' AND "lease_until">clock_timestamp()`, state, optionalText(code), id, token)
+	return store.fenced(ctx, nil, `UPDATE `+store.table()+` SET "last_code"=$1,"updated_at"=clock_timestamp() WHERE "id"=$2 AND "lease_token"=$3 AND "status"='leased' AND "lease_until">clock_timestamp()`, optionalText(code), id, token)
+}
+
+func (store *queueStore) MarkCanceled(ctx context.Context, id, token, code string) (bool, error) {
+	return store.terminal(ctx, nil, id, token, code, string(queueprovider.StateCanceled))
+}
+
+func (store *queueStore) terminal(ctx context.Context, executor queueprovider.Executor, id, token, code, state string) (bool, error) {
+	if err := queueprovider.ValidateIdentity(id, token); err != nil {
+		return false, err
+	}
+	if err := queueprovider.ValidateCode(code); err != nil {
+		return false, err
+	}
+	return store.fenced(ctx, executor, `UPDATE `+store.table()+` SET "status"=$1,"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$2,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$3 AND "lease_token"=$4 AND "status"='leased' AND "lease_until">clock_timestamp()`, state, optionalText(code), id, token)
 }
 
 func (store *queueStore) RetryAt(ctx context.Context, id, token string, delay time.Duration, code string, uncounted bool) (bool, error) {
@@ -564,14 +570,14 @@ func (store *queueStore) RetryAt(ctx context.Context, id, token string, delay ti
 	if err := queueprovider.ValidateCode(code); err != nil {
 		return false, err
 	}
-	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='pending',"attempt_count"=CASE WHEN $1 AND "attempt_count">0 THEN "attempt_count"-1 ELSE "attempt_count" END,"available_at"=clock_timestamp()+$2*interval '1 microsecond',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$3,"updated_at"=clock_timestamp() WHERE "id"=$4 AND "lease_token"=$5 AND "status"='leased' AND "lease_until">clock_timestamp()`, uncounted, delay.Microseconds(), optionalText(code), id, token)
+	return store.fenced(ctx, nil, `UPDATE `+store.table()+` SET "status"='pending',"attempt_count"=CASE WHEN $1 AND "attempt_count">0 THEN "attempt_count"-1 ELSE "attempt_count" END,"available_at"=clock_timestamp()+$2*interval '1 microsecond',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$3,"updated_at"=clock_timestamp() WHERE "id"=$4 AND "lease_token"=$5 AND "status"='leased' AND "lease_until">clock_timestamp()`, uncounted, delay.Microseconds(), optionalText(code), id, token)
 }
 
 func (store *queueStore) Release(ctx context.Context, id, token string) (bool, error) {
 	if err := queueprovider.ValidateIdentity(id, token); err != nil {
 		return false, err
 	}
-	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='pending',"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "lease_token"=$2 AND "status"='leased' AND "lease_until">clock_timestamp()`, id, token)
+	return store.fenced(ctx, nil, `UPDATE `+store.table()+` SET "status"='pending',"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "lease_token"=$2 AND "status"='leased' AND "lease_until">clock_timestamp()`, id, token)
 }
 
 func (store *queueStore) Cancel(ctx context.Context, id string) (queueprovider.CancelResult, error) {
@@ -630,7 +636,7 @@ func (store *queueStore) Requeue(ctx context.Context, id string) (bool, error) {
 	if err := queueprovider.ValidateJobIdentity(id); err != nil {
 		return false, err
 	}
-	changed, err := store.fenced(ctx, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status" IN ('failed','canceled') AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
+	changed, err := store.fenced(ctx, nil, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status" IN ('failed','canceled') AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
 	if postgresqlDedupeConflict(err) {
 		return false, nil
 	}
@@ -800,7 +806,7 @@ func (store *queueStore) RequeueFailed(ctx context.Context, ids []string) (int, 
 	sort.Strings(ordered)
 	changed := 0
 	for _, id := range ordered {
-		requeued, err := store.fenced(ctx, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='failed' AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
+		requeued, err := store.fenced(ctx, nil, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='failed' AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
 		if postgresqlDedupeConflict(err) {
 			continue
 		}
@@ -819,8 +825,11 @@ func postgresqlDedupeConflict(err error) bool {
 	return errors.As(err, &failure) && failure.Code == "23505" && failure.ConstraintName == "golem_queue_dedupe"
 }
 
-func (store *queueStore) fenced(ctx context.Context, statement string, arguments ...any) (bool, error) {
-	result, err := store.database.ExecContext(ctx, statement, arguments...)
+func (store *queueStore) fenced(ctx context.Context, executor queueprovider.Executor, statement string, arguments ...any) (bool, error) {
+	if executor == nil {
+		executor = store.database
+	}
+	result, err := executor.ExecContext(ctx, statement, arguments...)
 	if err != nil {
 		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: fenced transition: %w", err)
 	}

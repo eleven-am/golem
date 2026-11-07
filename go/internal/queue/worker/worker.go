@@ -49,6 +49,7 @@ type Worker struct {
 	limits      queue.Limits
 	provider    golem.Provider
 	observer    observe.Observer
+	fail        FailFunc
 	wake        chan struct{}
 	running     atomic.Bool
 	mutex       sync.Mutex
@@ -63,7 +64,7 @@ type claimGroup struct {
 
 // New binds a registry to a durable store. Every refusal is CodeConfigInvalid
 // and happens before any background work exists.
-func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer, resources ...queue.Resource) (*Worker, error) {
+func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer, fail FailFunc, resources ...queue.Resource) (*Worker, error) {
 	if store == nil {
 		return nil, queue.Fail(queue.CodeConfigInvalid, "durable job store is required")
 	}
@@ -96,6 +97,7 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 		limits:      resolved,
 		provider:    provider,
 		observer:    observer,
+		fail:        fail,
 		wake:        make(chan struct{}, 1),
 		inflight:    make(map[string]int, len(registrations)),
 	}, nil
@@ -350,6 +352,11 @@ func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
 }
 
 func (worker *Worker) run(ctx context.Context, record queueprovider.Record, claimedAt time.Time, registration queue.Registration, observer observe.Observer) {
+	if record.Finalize {
+		code, reason := finalizeCode(record)
+		worker.failJob(ctx, observer, record, code, reason, 0)
+		return
+	}
 	if record.CancelRequested {
 		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.MarkCanceled(book, record.ID, record.LeaseToken, codeCanceled)
@@ -481,19 +488,9 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeSuccess, observe.ReasonNone, duration)
 		}
 	case outcome.Resolution == queue.ResolutionFailed:
-		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
-			return worker.store.Fail(book, record.ID, record.LeaseToken, codeTerminal)
-		})
-		if changed {
-			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeFailure, observationReason(err, cause), duration)
-		}
+		worker.failJob(ctx, observer, record, codeTerminal, observationReason(err, cause), duration)
 	case !outcome.Uncounted && record.AttemptCount >= record.MaxAttempts:
-		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
-			return worker.store.Fail(book, record.ID, record.LeaseToken, codeAttemptsExhausted)
-		})
-		if changed {
-			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeFailure, observe.ReasonLimit, duration)
-		}
+		worker.failJob(ctx, observer, record, codeAttemptsExhausted, observe.ReasonLimit, duration)
 	default:
 		delay := outcome.Delay
 		if !outcome.Scheduled {

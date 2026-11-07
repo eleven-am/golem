@@ -73,7 +73,7 @@ func (fixture *harness) start(t *testing.T, store queueprovider.Store, registry 
 
 func (fixture *harness) startObserved(t *testing.T, store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer) (*Worker, func()) {
 	t.Helper()
-	worker, err := New(store, registry, limits, provider, observer)
+	worker, err := New(store, registry, limits, provider, observer, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,11 +133,11 @@ func (stub stubStore) Succeed(ctx context.Context, id, token, code string) (bool
 	return stub.Store.Succeed(ctx, id, token, code)
 }
 
-func (stub stubStore) Fail(ctx context.Context, id, token, code string) (bool, error) {
+func (stub stubStore) Fail(ctx context.Context, executor queueprovider.Executor, id, token, code string) (bool, error) {
 	if stub.fail != nil {
 		return stub.fail(ctx, id, token, code)
 	}
-	return stub.Store.Fail(ctx, id, token, code)
+	return stub.Store.Fail(ctx, executor, id, token, code)
 }
 
 func (stub stubStore) RetryAt(ctx context.Context, id, token string, delay time.Duration, code string, uncounted bool) (bool, error) {
@@ -789,7 +789,7 @@ func TestWakeDoesNotBypassStoreFailureBackoff(t *testing.T) {
 	}}
 	limits := gateLimits()
 	limits.PollInterval = 20 * time.Millisecond
-	worker, err := New(store, registry, limits, "", nil)
+	worker, err := New(store, registry, limits, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +841,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 			}
 			return records, err
 		}}
-		worker, err := New(store, registry, gateLimits(), "", nil)
+		worker, err := New(store, registry, gateLimits(), "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -876,7 +876,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 			},
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType))
-		worker, err := New(fixture.store, registry, gateLimits(), "", nil)
+		worker, err := New(fixture.store, registry, gateLimits(), "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -922,7 +922,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 		identity := fixture.enqueue(t, newPending(t, jobType))
 		limits := gateLimits()
 		limits.ShutdownGrace = 500 * time.Millisecond
-		worker, err := New(fixture.store, registry, limits, "", nil)
+		worker, err := New(fixture.store, registry, limits, "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -969,7 +969,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 		identity := fixture.enqueue(t, newPending(t, jobType))
 		limits := gateLimits()
 		limits.ShutdownGrace = 150 * time.Millisecond
-		worker, err := New(fixture.store, registry, limits, "", nil)
+		worker, err := New(fixture.store, registry, limits, "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1051,7 +1051,7 @@ func TestRestartDoesNotReuseAbandonedRunWaiter(t *testing.T) {
 	limits.ClaimBatch = 2
 	limits.ShutdownGrace = 400 * time.Millisecond
 	limits.AbandonGrace = 400 * time.Millisecond
-	worker, err := New(store, registry, limits, "", nil)
+	worker, err := New(store, registry, limits, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1299,7 +1299,7 @@ func TestOperatorSurface(t *testing.T) {
 	if err != nil || len(leased) != 1 {
 		t.Fatalf("claim %#v error=%v", leased, err)
 	}
-	if changed, err := fixture.store.Fail(ctx, failed, leased[0].LeaseToken, codeTerminal); err != nil || !changed {
+	if changed, err := fixture.store.Fail(ctx, nil, failed, leased[0].LeaseToken, codeTerminal); err != nil || !changed {
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
 	page, err := control.ListFailed(ctx, queue.FailedQuery{Types: []string{"gate.operator"}, Limit: 1})
@@ -1367,7 +1367,7 @@ func TestStartupValidation(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			worker, err := New(row.store, row.registry, row.limits, "", nil)
+			worker, err := New(row.store, row.registry, row.limits, "", nil, nil)
 			if worker != nil {
 				t.Fatalf("refused configuration produced a worker")
 			}
@@ -1376,7 +1376,7 @@ func TestStartupValidation(t *testing.T) {
 			}
 		})
 	}
-	worker, err := New(fixture.store, populated, gateLimits(), "", nil)
+	worker, err := New(fixture.store, populated, gateLimits(), "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1422,7 +1422,7 @@ func TestSharedResourceConfigurationIsClosedAndUnambiguous(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			worker, err := New(fixture.store, registry, gateLimits(), "", nil, row.resources...)
+			worker, err := New(fixture.store, registry, gateLimits(), "", nil, nil, row.resources...)
 			if worker != nil {
 				t.Fatal("refused resource configuration produced a worker")
 			}
@@ -1445,7 +1445,7 @@ func TestDispatchCarriesTheCompleteResourcePlan(t *testing.T) {
 		claims = append(claims, options)
 		return nil, nil
 	}}
-	worker, err := New(store, registry, gateLimits(), "", nil, queue.Resource{Name: "gate.shared", Concurrency: 3, Costs: costs})
+	worker, err := New(store, registry, gateLimits(), "", nil, nil, queue.Resource{Name: "gate.shared", Concurrency: 3, Costs: costs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,7 +1668,7 @@ func TestShutdownRecordsAHandlerThatSucceedsInsideAbandonGrace(t *testing.T) {
 	limits := gateLimits()
 	limits.ShutdownGrace = 10 * time.Millisecond
 	limits.AbandonGrace = 20 * time.Second
-	worker, err := New(fixture.store, registry, limits, "", nil)
+	worker, err := New(fixture.store, registry, limits, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

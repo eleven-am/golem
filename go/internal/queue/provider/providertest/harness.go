@@ -249,11 +249,15 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	}
 	expireLeases(t, fixture, expiringCleanup...)
 	full := queueprovider.ClaimResource{Name: cleanup.Name, Concurrency: 1, Costs: cleanup.Costs}
-	if records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.cleanup.canceled", "gate.resource.cleanup.exhausted"}, Limit: 1, LeaseDuration: longLease, Resource: &full}); err != nil || len(records) != 0 {
+	records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.cleanup.canceled", "gate.resource.cleanup.exhausted"}, Limit: 2, LeaseDuration: longLease, Resource: &full})
+	if err != nil || len(records) != 1 || records[0].ID != exhaustedID || !records[0].Finalize || records[0].AttemptCount != 1 {
 		t.Fatalf("full resource cleanup records=%#v error=%v", records, err)
 	}
 	if canceled := inspect(t, fixture, canceledID); canceled.State != queueprovider.StateCanceled {
 		t.Fatalf("full resource left canceled lease in state %s", canceled.State)
+	}
+	if changed, err := fixture.Store.Fail(ctx, nil, exhaustedID, records[0].LeaseToken, queueprovider.CodeAttemptsExhausted); err != nil || !changed {
+		t.Fatalf("full resource finalize changed=%v error=%v", changed, err)
 	}
 	if exhausted := inspect(t, fixture, exhaustedID); exhausted.State != queueprovider.StateFailed || exhausted.LastCode != queueprovider.CodeAttemptsExhausted {
 		t.Fatalf("full resource left exhausted lease %#v", exhausted)
@@ -305,7 +309,7 @@ func StaleTokenCannotTransition(t testing.TB, fixture Fixture) {
 		call func() (bool, error)
 	}{
 		{name: "succeed", call: func() (bool, error) { return fixture.Store.Succeed(ctx, identity, stale.LeaseToken, "stale") }},
-		{name: "fail", call: func() (bool, error) { return fixture.Store.Fail(ctx, identity, stale.LeaseToken, "stale") }},
+		{name: "fail", call: func() (bool, error) { return fixture.Store.Fail(ctx, nil, identity, stale.LeaseToken, "stale") }},
 		{name: "retry", call: func() (bool, error) { return fixture.Store.RetryAt(ctx, identity, stale.LeaseToken, 0, "stale", false) }},
 		{name: "cancel", call: func() (bool, error) { return fixture.Store.MarkCanceled(ctx, identity, stale.LeaseToken, "stale") }},
 		{name: "release", call: func() (bool, error) { return fixture.Store.Release(ctx, identity, stale.LeaseToken) }},
@@ -379,7 +383,7 @@ func ExpiredLeaseCannotTransition(t testing.TB, fixture Fixture) {
 		call func() (bool, error)
 	}{
 		{name: "succeed", call: func() (bool, error) { return fixture.Store.Succeed(ctx, identity, expired.LeaseToken, "expired") }},
-		{name: "fail", call: func() (bool, error) { return fixture.Store.Fail(ctx, identity, expired.LeaseToken, "expired") }},
+		{name: "fail", call: func() (bool, error) { return fixture.Store.Fail(ctx, nil, identity, expired.LeaseToken, "expired") }},
 		{name: "retry", call: func() (bool, error) {
 			return fixture.Store.RetryAt(ctx, identity, expired.LeaseToken, 0, "expired", false)
 		}},
@@ -443,7 +447,8 @@ func UncountedRetryPreservesAttempt(t testing.TB, fixture Fixture) {
 	}
 }
 
-// ExpiredFinalAttemptFailsWithoutReexecution proves a crashed final attempt is terminal.
+// ExpiredFinalAttemptFailsWithoutReexecution proves a crashed final attempt is
+// handed to a claimer for finalization without another attempt.
 func ExpiredFinalAttemptFailsWithoutReexecution(t testing.TB, fixture Fixture) {
 	t.Helper()
 	identity := enqueue(t, fixture, "gate.exhausted", request{maxAttempts: 2})
@@ -457,12 +462,119 @@ func ExpiredFinalAttemptFailsWithoutReexecution(t testing.TB, fixture Fixture) {
 		t.Fatalf("second claim attempts=%d", second.AttemptCount)
 	}
 	time.Sleep(expiry)
+	finalizer := claimOne(t, fixture, "gate.exhausted", longLease)
+	if finalizer.ID != identity || !finalizer.Finalize || finalizer.AttemptCount != 2 || finalizer.LeaseToken == second.LeaseToken || finalizer.State != queueprovider.StateLeased {
+		t.Fatalf("finalizer=%#v", finalizer)
+	}
 	if records := claim(t, fixture, "gate.exhausted", longLease, 1); len(records) != 0 {
-		t.Fatalf("exhausted job was reclaimed: %#v", records)
+		t.Fatalf("finalizer lease was reclaimed while live: %#v", records)
+	}
+	if changed, err := fixture.Store.Fail(context.Background(), nil, identity, second.LeaseToken, queueprovider.CodeAttemptsExhausted); err != nil || changed {
+		t.Fatalf("stale owner finalized changed=%v error=%v", changed, err)
+	}
+	if changed, err := fixture.Store.Fail(context.Background(), nil, identity, finalizer.LeaseToken, queueprovider.CodeAttemptsExhausted); err != nil || !changed {
+		t.Fatalf("finalizer fail changed=%v error=%v", changed, err)
 	}
 	record := inspect(t, fixture, identity)
 	if record.State != queueprovider.StateFailed || record.AttemptCount != 2 || record.LastCode != queueprovider.CodeAttemptsExhausted || record.FinishedAt == nil {
 		t.Fatalf("exhausted job=%#v", record)
+	}
+}
+
+// FinalizeLeaseHoldsNoResourceBudget proves a finalizing lease neither takes a
+// resource snapshot nor counts against the shared budget.
+func FinalizeLeaseHoldsNoResourceBudget(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	resource := queueprovider.ClaimResource{Name: "gate.finalize.resource", Concurrency: 1, Costs: map[string]int64{"gate.finalize.resource.a": 1, "gate.finalize.resource.b": 1}}
+	exhaustedID := enqueue(t, fixture, "gate.finalize.resource.a", request{maxAttempts: 1})
+	records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.finalize.resource.a"}, Limit: 1, LeaseDuration: longLease, Resource: &resource})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("first claim records=%#v error=%v", records, err)
+	}
+	expireLeases(t, fixture, exhaustedID)
+	finalizing, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.finalize.resource.a"}, Limit: 1, LeaseDuration: longLease, Resource: &resource})
+	if err != nil || len(finalizing) != 1 || !finalizing[0].Finalize {
+		t.Fatalf("finalize claim records=%#v error=%v", finalizing, err)
+	}
+	otherID := enqueue(t, fixture, "gate.finalize.resource.b", request{})
+	other, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.finalize.resource.b"}, Limit: 1, LeaseDuration: longLease, Resource: &resource})
+	if err != nil || len(other) != 1 || other[0].ID != otherID || other[0].Finalize {
+		t.Fatalf("finalizing lease consumed the budget records=%#v error=%v", other, err)
+	}
+}
+
+// FailOnExecutorCommitsAndRollsBackWithTransaction proves a failure written on
+// a caller transaction is atomic with it and stays fenced by the lease token.
+func FailOnExecutorCommitsAndRollsBackWithTransaction(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	identity := enqueue(t, fixture, "gate.fail.tx", request{})
+	lease := claimOne(t, fixture, "gate.fail.tx", longLease)
+	transaction, err := fixture.Database.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fixture.Store.Fail(ctx, transaction, identity, "stale-token", "terminal"); err != nil || changed {
+		_ = transaction.Rollback()
+		t.Fatalf("stale transactional fail changed=%v error=%v", changed, err)
+	}
+	if changed, err := fixture.Store.Fail(ctx, transaction, identity, lease.LeaseToken, "terminal"); err != nil || !changed {
+		_ = transaction.Rollback()
+		t.Fatalf("transactional fail changed=%v error=%v", changed, err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if record := inspect(t, fixture, identity); record.State != queueprovider.StateLeased || record.LeaseToken != lease.LeaseToken {
+		t.Fatalf("rolled-back fail survived %#v", record)
+	}
+	transaction, err = fixture.Database.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fixture.Store.Fail(ctx, transaction, identity, lease.LeaseToken, "terminal"); err != nil || !changed {
+		_ = transaction.Rollback()
+		t.Fatalf("second transactional fail changed=%v error=%v", changed, err)
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if record := inspect(t, fixture, identity); record.State != queueprovider.StateFailed || record.LastCode != "terminal" || record.FinishedAt == nil {
+		t.Fatalf("committed fail=%#v", record)
+	}
+}
+
+// DeferFailureIsFencedAndSurvivesLeaseExpiry proves a deferred terminal
+// decision is fenced, keeps the attempt budget, and is handed to the next
+// claimer for finalization instead of re-running the handler.
+func DeferFailureIsFencedAndSurvivesLeaseExpiry(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	identity := enqueue(t, fixture, "gate.defer", request{maxAttempts: 5})
+	lease := claimOne(t, fixture, "gate.defer", longLease)
+	if changed, err := fixture.Store.DeferFailure(ctx, identity, "stale-token", "terminal"); err != nil || changed {
+		t.Fatalf("stale defer changed=%v error=%v", changed, err)
+	}
+	if changed, err := fixture.Store.DeferFailure(ctx, identity, lease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("defer changed=%v error=%v", changed, err)
+	}
+	if record := inspect(t, fixture, identity); record.State != queueprovider.StateLeased || record.LastCode != "terminal" || record.AttemptCount != 1 || record.MaxAttempts != 5 {
+		t.Fatalf("deferred job=%#v", record)
+	}
+	expireLeases(t, fixture, identity)
+	if changed, err := fixture.Store.DeferFailure(ctx, identity, lease.LeaseToken, "terminal"); err != nil || changed {
+		t.Fatalf("expired defer changed=%v error=%v", changed, err)
+	}
+	finalizer := claimOne(t, fixture, "gate.defer", longLease)
+	if finalizer.ID != identity || !finalizer.Finalize || finalizer.AttemptCount != 1 || finalizer.LastCode != "terminal" {
+		t.Fatalf("finalizer=%#v", finalizer)
+	}
+	if changed, err := fixture.Store.Fail(ctx, nil, identity, finalizer.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("finalizer fail changed=%v error=%v", changed, err)
+	}
+	if record := inspect(t, fixture, identity); record.State != queueprovider.StateFailed || record.MaxAttempts != 5 {
+		t.Fatalf("finalized job=%#v", record)
 	}
 }
 
@@ -500,7 +612,7 @@ func RetentionIsStateSelectiveAndPreservesLiveRows(t testing.TB, fixture Fixture
 	}
 	failed := enqueue(t, fixture, "gate.retention.failed", request{})
 	failedLease := claimOne(t, fixture, "gate.retention.failed", longLease)
-	if changed, err := fixture.Store.Fail(ctx, failed, failedLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, failed, failedLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
 	canceled := enqueue(t, fixture, "gate.retention.canceled", request{delay: time.Hour})
@@ -547,19 +659,19 @@ func FailedJobsCanBeDiscoveredAndRecovered(t testing.TB, fixture Fixture) {
 	ctx := context.Background()
 	oldest := enqueue(t, fixture, "gate.failed", request{})
 	oldestLease := claimOne(t, fixture, "gate.failed", longLease)
-	if changed, err := fixture.Store.Fail(ctx, oldest, oldestLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, oldest, oldestLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail oldest changed=%t error=%v", changed, err)
 	}
 	time.Sleep(2 * time.Millisecond)
 	newest := enqueue(t, fixture, "gate.failed", request{})
 	newestLease := claimOne(t, fixture, "gate.failed", longLease)
-	if changed, err := fixture.Store.Fail(ctx, newest, newestLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, newest, newestLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail newest changed=%t error=%v", changed, err)
 	}
 	time.Sleep(2 * time.Millisecond)
 	other := enqueue(t, fixture, "gate.other", request{})
 	otherLease := claimOne(t, fixture, "gate.other", longLease)
-	if changed, err := fixture.Store.Fail(ctx, other, otherLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, other, otherLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail other changed=%t error=%v", changed, err)
 	}
 	pending := enqueue(t, fixture, "gate.failed", request{delay: time.Hour})
@@ -591,7 +703,7 @@ func FailedJobsCanBeDiscoveredAndRecovered(t testing.TB, fixture Fixture) {
 
 	blocked := enqueue(t, fixture, "gate.dedupe", request{dedupe: "same"})
 	blockedLease := claimOne(t, fixture, "gate.dedupe", longLease)
-	if changed, err := fixture.Store.Fail(ctx, blocked, blockedLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, blocked, blockedLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail dedupe changed=%t error=%v", changed, err)
 	}
 	active := enqueue(t, fixture, "gate.dedupe", request{dedupe: "same", delay: time.Hour})
@@ -607,12 +719,12 @@ func FailedJobsCanBeDiscoveredAndRecovered(t testing.TB, fixture Fixture) {
 
 	sharedFirst := enqueue(t, fixture, "gate.dedupe", request{dedupe: "batch-shared"})
 	sharedFirstLease := claimOne(t, fixture, "gate.dedupe", longLease)
-	if changed, err := fixture.Store.Fail(ctx, sharedFirst, sharedFirstLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, sharedFirst, sharedFirstLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail first shared job changed=%t error=%v", changed, err)
 	}
 	sharedSecond := enqueue(t, fixture, "gate.dedupe", request{dedupe: "batch-shared"})
 	sharedSecondLease := claimOne(t, fixture, "gate.dedupe", longLease)
-	if changed, err := fixture.Store.Fail(ctx, sharedSecond, sharedSecondLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, sharedSecond, sharedSecondLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail second shared job changed=%t error=%v", changed, err)
 	}
 	if changed, err := fixture.Store.RequeueFailed(ctx, []string{sharedFirst, sharedSecond}); err != nil || changed != 1 {
@@ -630,12 +742,12 @@ func FailedJobsCanBeDiscoveredAndRecovered(t testing.TB, fixture Fixture) {
 		typeName := "gate.dedupe.race." + strconv.Itoa(round)
 		first := enqueue(t, fixture, typeName, request{dedupe: key})
 		firstLease := claimOne(t, fixture, typeName, longLease)
-		if changed, err := fixture.Store.Fail(ctx, first, firstLease.LeaseToken, "terminal"); err != nil || !changed {
+		if changed, err := fixture.Store.Fail(ctx, nil, first, firstLease.LeaseToken, "terminal"); err != nil || !changed {
 			t.Fatalf("fail raced first changed=%t error=%v", changed, err)
 		}
 		second := enqueue(t, fixture, typeName, request{dedupe: key})
 		secondLease := claimOne(t, fixture, typeName, longLease)
-		if changed, err := fixture.Store.Fail(ctx, second, secondLease.LeaseToken, "terminal"); err != nil || !changed {
+		if changed, err := fixture.Store.Fail(ctx, nil, second, secondLease.LeaseToken, "terminal"); err != nil || !changed {
 			t.Fatalf("fail raced second changed=%t error=%v", changed, err)
 		}
 		start := make(chan struct{})
@@ -683,7 +795,7 @@ func JobsCanBeListedCountedAndCanceledInBulk(t testing.TB, fixture Fixture) {
 	}
 	failed := enqueue(t, fixture, "gate.operator.failed", request{})
 	failedLease := claimOne(t, fixture, "gate.operator.failed", longLease)
-	if changed, err := fixture.Store.Fail(ctx, failed, failedLease.LeaseToken, "terminal"); err != nil || !changed {
+	if changed, err := fixture.Store.Fail(ctx, nil, failed, failedLease.LeaseToken, "terminal"); err != nil || !changed {
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
 
