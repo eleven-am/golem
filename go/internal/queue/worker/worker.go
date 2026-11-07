@@ -354,7 +354,7 @@ func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
 func (worker *Worker) run(ctx context.Context, record queueprovider.Record, claimedAt time.Time, registration queue.Registration, observer observe.Observer) {
 	if record.Finalize {
 		code, reason := finalizeCode(record)
-		worker.failJob(ctx, observer, record, code, reason, 0)
+		worker.failJob(ctx, observer, record, code, reason, 0, claimedAt.Add(worker.limits.LeaseDuration))
 		return
 	}
 	if record.CancelRequested {
@@ -426,7 +426,7 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, clai
 			if errors.Is(result.cause, context.DeadlineExceeded) {
 				result.err = context.DeadlineExceeded
 			}
-			worker.record(ctx, observer, record, registration, result.err, result.cause, canceled, time.Since(started))
+			worker.record(ctx, observer, record, registration, result.err, result.cause, canceled, time.Since(started), leaseUntil)
 			return
 		case <-deadline:
 			deadline = nil
@@ -436,7 +436,7 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, clai
 			if lost || errors.Is(cause, errShutdown) || errors.Is(cause, ErrLeaseLost) {
 				return
 			}
-			worker.record(ctx, observer, record, registration, cause, cause, canceled, time.Since(started))
+			worker.record(ctx, observer, record, registration, cause, cause, canceled, time.Since(started), leaseUntil)
 			return
 		case <-renewalChannel:
 			attempted := time.Now()
@@ -468,7 +468,7 @@ func (worker *Worker) renew(ctx context.Context, record queueprovider.Record, le
 	return worker.store.Renew(book, record.ID, record.LeaseToken, worker.limits.LeaseDuration)
 }
 
-func (worker *Worker) record(ctx context.Context, observer observe.Observer, record queueprovider.Record, registration queue.Registration, err, cause error, canceled bool, duration time.Duration) {
+func (worker *Worker) record(ctx context.Context, observer observe.Observer, record queueprovider.Record, registration queue.Registration, err, cause error, canceled bool, duration time.Duration, leaseUntil time.Time) {
 	if canceled {
 		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.MarkCanceled(book, record.ID, record.LeaseToken, codeCanceled)
@@ -488,9 +488,9 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeSuccess, observe.ReasonNone, duration)
 		}
 	case outcome.Resolution == queue.ResolutionFailed:
-		worker.failJob(ctx, observer, record, codeTerminal, observationReason(err, cause), duration)
+		worker.failJob(ctx, observer, record, codeTerminal, observationReason(err, cause), duration, leaseUntil)
 	case !outcome.Uncounted && record.AttemptCount >= record.MaxAttempts:
-		worker.failJob(ctx, observer, record, codeAttemptsExhausted, observe.ReasonLimit, duration)
+		worker.failJob(ctx, observer, record, codeAttemptsExhausted, observe.ReasonLimit, duration, leaseUntil)
 	default:
 		delay := outcome.Delay
 		if !outcome.Scheduled {

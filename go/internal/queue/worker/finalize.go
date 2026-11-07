@@ -11,6 +11,8 @@ import (
 	"github.com/eleven-am/golem/go/queue"
 )
 
+const leaseMarginDivisor = 10
+
 var errCallbackPanic = errors.New("QUEUE_FAILURE_CALLBACK_PANIC: failure callback panicked")
 
 type FailFunc func(ctx context.Context, record queueprovider.Record, code string) (bool, error)
@@ -30,8 +32,8 @@ func finalizeCode(record queueprovider.Record) (string, observe.Reason) {
 	return codeAttemptsExhausted, observe.ReasonLimit
 }
 
-func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, record queueprovider.Record, code string, reason observe.Reason, duration time.Duration) {
-	book, cancel := worker.bookkeeping(ctx)
+func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, record queueprovider.Record, code string, reason observe.Reason, duration time.Duration, leaseUntil time.Time) {
+	book, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseUntil.Add(-worker.limits.LeaseDuration/leaseMarginDivisor))
 	defer cancel()
 	started := time.Now()
 	if worker.fail != nil && !record.Finalize {
