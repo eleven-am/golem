@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	"github.com/eleven-am/golem/go/queue"
 )
@@ -241,5 +243,48 @@ func TestCancelJobRacingARenewWaitsForCommitAndMatchesTheOperator(t *testing.T) 
 	}
 	if again, err := fixture.app.QueueOperator().Cancel(ctx, identity); err != nil || again {
 		t.Fatalf("operator cancel after tx cancel = %v, %v", again, err)
+	}
+}
+
+func staleSnapshotCancel(t *testing.T, fixture failedFixture, jobType queue.Type[queueGatePayload], options ...golem.TransactionOption) (error, int) {
+	t.Helper()
+	ctx := context.Background()
+	identity, err := fixture.app.Enqueue(ctx, newQueueGatePending(t, jobType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	err = SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[testPrincipal, testActor]) error {
+		attempts++
+		if err := fixture.record(transaction, fmt.Sprintf("stale-cancel-%d", attempts)); err != nil {
+			return err
+		}
+		if attempts == 1 {
+			if _, err := fixture.app.QueueOperator().Cancel(ctx, identity); err != nil {
+				return err
+			}
+			_, err := SystemTxCancelJob(ctx, transaction, identity)
+			return err
+		}
+		return nil
+	}, options...)
+	return err, attempts
+}
+
+func TestCancelJobReportsASerializationFailureAsAConflict(t *testing.T) {
+	registry, jobType := failedRegistry(t, "cancel.serializable", 3, func(context.Context, queue.Job[queueGatePayload]) error { return nil })
+	fixture := openFailedFixture(t, "postgresql", &QueueConfig{Registry: registry, Limits: failedLimits()}, nil)
+	err, _ := staleSnapshotCancel(t, fixture, jobType, golem.Isolation(golem.Serializable))
+	if !isConflict(err) {
+		t.Fatalf("err = %v; want a conflict", err)
+	}
+}
+
+func TestCancelJobSerializationFailureRetriesUnderRetryConflicts(t *testing.T) {
+	registry, jobType := failedRegistry(t, "cancel.retry", 3, func(context.Context, queue.Job[queueGatePayload]) error { return nil })
+	fixture := openFailedFixture(t, "postgresql", &QueueConfig{Registry: registry, Limits: failedLimits()}, nil)
+	err, attempts := staleSnapshotCancel(t, fixture, jobType, golem.Isolation(golem.Serializable), golem.RetryConflicts(3))
+	if err != nil || attempts != 2 {
+		t.Fatalf("err = %v attempts = %d; want success on the second attempt", err, attempts)
 	}
 }

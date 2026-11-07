@@ -212,6 +212,9 @@ func txCancelJob[P, A any](ctx context.Context, app *App[P, A], binding *executi
 	}
 	result, err := app.queueStore.Cancel(ctx, executor, value)
 	if err != nil {
+		if providerInterference(err) {
+			return false, transactionConflict("cancel job conflicted with another transaction", err)
+		}
 		return false, queue.Fail(queue.CodeStoreFailure, "cancel job %s: %v", id, err)
 	}
 	binding.afterCommit(func() { queueworker.EmitCanceled(app.observer, app.eventProvider, result) })
@@ -239,6 +242,9 @@ func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Exec
 		DedupeKey: pending.DedupeKey(), ExclusiveKey: pending.ExclusiveKey(),
 	})
 	if err != nil {
+		if providerInterference(err) {
+			return queueprovider.EnqueueResult{}, transactionConflict("enqueue conflicted with another transaction", err)
+		}
 		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodeStoreFailure, "enqueue job type %q: %v", pending.TypeName(), err)
 	}
 	return stored, nil
