@@ -102,6 +102,20 @@ func (app *App[P, A]) RunQueueWorker(ctx context.Context) error {
 	return app.queueWorker.Run(ctx)
 }
 
+func (app *App[P, A]) ReconfigureQueue(ctx context.Context, plan queue.Plan) (queue.PlanStatus, error) {
+	if app == nil || ctx == nil || app.queueWorker == nil {
+		return queue.PlanStatus{}, queue.Fail(queue.CodeConfigInvalid, "queue worker is not configured")
+	}
+	return app.queueWorker.Apply(ctx, plan)
+}
+
+func (app *App[P, A]) QueuePlan() (queue.PlanStatus, error) {
+	if app == nil || app.queueWorker == nil {
+		return queue.PlanStatus{}, queue.Fail(queue.CodeConfigInvalid, "queue worker is not configured")
+	}
+	return app.queueWorker.Plan(), nil
+}
+
 // QueueOperator returns the durable job control surface, or nil when the queue
 // is not configured.
 func (app *App[P, A]) QueueOperator() queue.Operator {

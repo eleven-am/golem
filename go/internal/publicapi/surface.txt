@@ -4211,6 +4211,20 @@ queue.Outcome.Resolution field Resolution
 queue.Outcome.Scheduled field bool
 queue.Outcome.Uncounted field bool
 queue.Pending type struct
+queue.Plan type struct
+queue.Plan unkeyed literal {Concurrency, ClaimBatch, MaxConcurrent, Capacities}
+queue.Plan.Capacities field map[string]int
+queue.Plan.ClaimBatch field int
+queue.Plan.Concurrency field int
+queue.Plan.MaxConcurrent field map[string]int
+queue.PlanStatus type struct
+queue.PlanStatus unkeyed literal {Generation, Concurrency, ClaimBatch, MaxConcurrent, Capacities, AppliedAt}
+queue.PlanStatus.AppliedAt field time.Time
+queue.PlanStatus.Capacities field map[string]int
+queue.PlanStatus.ClaimBatch field int
+queue.PlanStatus.Concurrency field int
+queue.PlanStatus.Generation field uint64
+queue.PlanStatus.MaxConcurrent field map[string]int
 queue.Register func[T any](*Registry, Definition[T]) (Type[T], error)
 queue.Registration type struct
 queue.Registration unkeyed literal {Type, MaxAttempts, Timeout, MaxConcurrent, Backoff, Handle}
@@ -4318,6 +4332,8 @@ runtime.(*App).EventOperator func() events.Operator
 runtime.(*App).ForPrincipal func(context.Context, P) (*Caller[P, A], error)
 runtime.(*App).InvalidatePolicies func()
 runtime.(*App).QueueOperator func() queue.Operator
+runtime.(*App).QueuePlan func() (queue.PlanStatus, error)
+runtime.(*App).ReconfigureQueue func(context.Context, queue.Plan) (queue.PlanStatus, error)
 runtime.(*App).RefreshSemanticIndex func(context.Context, golem.ModelID, string) error
 runtime.(*App).RefreshSemanticIndexes func(context.Context) error
 runtime.(*App).RunEventPublisher func(context.Context) error

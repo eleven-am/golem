@@ -121,7 +121,8 @@ type Definition[T any] struct {
 // Resource is one fleet-wide weighted concurrency budget. Costs maps locally
 // registered job types to the capacity consumed by one active lease. Workers
 // with disjoint registries may share a name, but every active worker must agree
-// on its meaning. Drain workers before changing capacity or costs.
+// on its meaning. Capacity may change live through ReconfigureQueue; costs and
+// membership need a restart with workers drained.
 type Resource struct {
 	Name        string
 	Concurrency int

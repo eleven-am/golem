@@ -55,6 +55,10 @@ type Worker struct {
 	mutex       sync.Mutex
 	active      int
 	inflight    map[string]int
+
+	dispatchLock chan struct{}
+	basePlan     *activePlan
+	plan         *activePlan
 }
 
 type claimGroup struct {
@@ -90,7 +94,7 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 	if err != nil {
 		return nil, err
 	}
-	return &Worker{
+	worker := &Worker{
 		store:       store,
 		registry:    registry,
 		claimGroups: claimGroups,
@@ -100,7 +104,12 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 		fail:        fail,
 		wake:        make(chan struct{}, 1),
 		inflight:    make(map[string]int, len(registrations)),
-	}, nil
+
+		dispatchLock: make(chan struct{}, 1),
+	}
+	worker.basePlan = worker.initialPlan(registrations)
+	worker.plan = worker.basePlan
+	return worker, nil
 }
 
 func normalizeClaimGroups(registrations []queue.Registration, resources []queue.Resource) ([]claimGroup, error) {
@@ -260,6 +269,13 @@ type cohort struct {
 }
 
 func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer observe.Observer, handlers *sync.WaitGroup) (int, error) {
+	select {
+	case worker.dispatchLock <- struct{}{}:
+		defer func() { <-worker.dispatchLock }()
+	case <-ctx.Done():
+		return 0, nil
+	}
+	plan := worker.currentPlan()
 	claimed := 0
 	offset := worker.claimOffset
 	if len(worker.claimGroups) != 0 {
@@ -268,12 +284,12 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 	for _, capped := range []bool{false, true} {
 		for position := range worker.claimGroups {
 			claimGroup := worker.claimGroups[(offset+position)%len(worker.claimGroups)]
-			group, ok := worker.cohort(claimGroup, capped)
+			group, ok := worker.cohort(claimGroup, capped, plan)
 			if !ok {
 				continue
 			}
 			claimedAt := time.Now()
-			records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: claimGroup.resource})
+			records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: plan.resourceFor(claimGroup.resource)})
 			if err != nil {
 				return claimed, err
 			}
@@ -293,23 +309,24 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 // cohort selects the job types with free capacity and the largest claim that
 // cannot overrun any of them. Capacity is enforced here so a gated job is never
 // leased and bounced back through the database.
-func (worker *Worker) cohort(group claimGroup, capped bool) (cohort, bool) {
+func (worker *Worker) cohort(group claimGroup, capped bool, plan *activePlan) (cohort, bool) {
 	worker.mutex.Lock()
 	defer worker.mutex.Unlock()
-	limit := worker.limits.Concurrency - worker.active
-	if limit > worker.limits.ClaimBatch {
-		limit = worker.limits.ClaimBatch
+	limit := plan.concurrency - worker.active
+	if limit > plan.claimBatch {
+		limit = plan.claimBatch
 	}
 	if limit <= 0 {
 		return cohort{}, false
 	}
 	var types []string
 	for _, registration := range group.registrations {
-		if (registration.MaxConcurrent != 0) != capped {
+		typeCap := plan.maxConcurrent[registration.Type]
+		if (typeCap != 0) != capped {
 			continue
 		}
 		if capped {
-			remaining := registration.MaxConcurrent - worker.inflight[registration.Type]
+			remaining := typeCap - worker.inflight[registration.Type]
 			if remaining <= 0 {
 				continue
 			}
