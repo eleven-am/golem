@@ -361,6 +361,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tEmbeddings %s.Registry\n", embeddingAlias)
 	fmt.Fprintf(source, "\tQueue *%s.QueueConfig\n", runtimeAlias)
+	fmt.Fprintf(source, "\tQueueFailed []%s.JobFailed[P, %s]\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n", runtimeAlias, runtimeAlias, runtimeAlias)
 	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tObserver %s.Observer\n", eventsAlias, eventsAlias, observeAlias)
 	fmt.Fprintf(source, "\tCDCAdapters []%s.CDCAdapter\n\tReportEventOperator %s.OperatorAudit\n", eventsAlias, eventsAlias)
@@ -493,7 +494,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		emitMutationClientMethods(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, createInput, updateInput, updateManyInput, versioned)
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
-	fmt.Fprintf(source, "\treturn golemOpen(ctx, config, %s.Config[P, %s]{Database: config.Database, Queue: config.Queue})\n}\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\treturn golemOpen(ctx, config, %s.Config[P, %s]{Database: config.Database, Queue: config.Queue, QueueFailed: config.QueueFailed})\n}\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "\nfunc golemOpen[P any](ctx %s.Context, config Config[P], engineConfig %s.Config[P, %s]) (*App[P], error) {\n", contextAlias, runtimeAlias, actorType)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
 	if hasSubscriptions(contracts) {
@@ -593,6 +594,14 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\t\treturn callback(result)\n\t}, options...)\n}\n")
+	fmt.Fprintf(source, "\nfunc OnJobFailed[P, T any](jobType %s.Type[T], callback func(%s.Context, *SystemTx[P], %s.Failure[T]) error) %s.JobFailed[P, %s] {\n", queueAlias, contextAlias, queueAlias, runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tif callback == nil { return %s.OnJobFailed[P, %s, T](jobType, nil) }\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\treturn %s.OnJobFailed(jobType, func(ctx %s.Context, inner *%s.SystemTx[P, %s], failure %s.Failure[T]) error {\n", runtimeAlias, contextAlias, runtimeAlias, actorType, queueAlias)
+	source.WriteString("\t\tresult := &SystemTx[P]{runtime: inner}\n")
+	for _, model := range models {
+		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("\t\treturn callback(ctx, result, failure)\n\t})\n}\n")
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.SystemTxEnqueue(ctx, (*%s.SystemTx[P, %s])(nil), pending) }; return %s.SystemTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) LockKeys(ctx %s.Context, keys ...%s.LockKey) error { if transaction == nil { return %s.SystemTxLockKeys(ctx, (*%s.SystemTx[P, %s])(nil), keys...) }; return %s.SystemTxLockKeys(ctx, transaction.runtime, keys...) }\n", contextAlias, golemAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 }

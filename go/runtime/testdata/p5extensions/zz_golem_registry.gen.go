@@ -56,6 +56,7 @@ type Config[P any] struct {
 	Database                 *provider.Database
 	Embeddings               embedding.Registry
 	Queue                    *golemruntime.QueueConfig
+	QueueFailed              []golemruntime.JobFailed[P, Actor]
 	ReadLimits               golemruntime.ReadLimits
 	MutationLimits           golemruntime.MutationLimits
 	AnalyticsLimits          golemruntime.AnalyticsLimits
@@ -279,7 +280,7 @@ func (client SystemTxUserClient[P]) DeleteMany(ctx context.Context, where golem.
 }
 
 func Open[P any](ctx context.Context, config Config[P]) (*App[P], error) {
-	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database, Queue: config.Queue})
+	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database, Queue: config.Queue, QueueFailed: config.QueueFailed})
 }
 
 func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemruntime.Config[P, Actor]) (*App[P], error) {
@@ -470,6 +471,17 @@ func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx
 		result.Users = SystemTxUserClient[P]{runtime: inner}
 		return callback(result)
 	}, options...)
+}
+
+func OnJobFailed[P, T any](jobType queue.Type[T], callback func(context.Context, *SystemTx[P], queue.Failure[T]) error) golemruntime.JobFailed[P, Actor] {
+	if callback == nil {
+		return golemruntime.OnJobFailed[P, Actor, T](jobType, nil)
+	}
+	return golemruntime.OnJobFailed(jobType, func(ctx context.Context, inner *golemruntime.SystemTx[P, Actor], failure queue.Failure[T]) error {
+		result := &SystemTx[P]{runtime: inner}
+		result.Users = SystemTxUserClient[P]{runtime: inner}
+		return callback(ctx, result, failure)
+	})
 }
 func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
 	if transaction == nil {

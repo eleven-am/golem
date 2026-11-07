@@ -4065,6 +4065,8 @@ queue.(*Pending).TypeName func() string
 queue.(*Registry).Clone func() *Registry
 queue.(*Registry).Lookup func(string) (Registration, bool)
 queue.(*Registry).Registrations func() []Registration
+queue.(*Type).DecodeFailure func(Meta, []uint8, FailureCode) Failure[T]
+queue.(*Type).Name func() string
 queue.(*Type).New func(T, ...Option) (Pending, error)
 queue.(Backoff).Delay func(int) time.Duration
 queue.(Limits).Resolved func() Limits
@@ -4076,6 +4078,8 @@ queue.(Pending).ExclusiveKey func() string
 queue.(Pending).MaxAttempts func() int
 queue.(Pending).Payload func() []uint8
 queue.(Pending).TypeName func() string
+queue.(Type).DecodeFailure func(Meta, []uint8, FailureCode) Failure[T]
+queue.(Type).Name func() string
 queue.(Type).New func(T, ...Option) (Pending, error)
 queue.After func(time.Duration) Option
 queue.Backoff comparable
@@ -4122,6 +4126,19 @@ queue.FailedQuery unkeyed literal {Types, Limit, Before}
 queue.FailedQuery.Before field *FailedCursor
 queue.FailedQuery.Limit field int
 queue.FailedQuery.Types field []string
+queue.Failure unkeyed literal {ID, Payload, Code, Attempt, MaxAttempts, EnqueuedAt}
+queue.Failure.Attempt field int
+queue.Failure.Code field FailureCode
+queue.Failure.EnqueuedAt field time.Time
+queue.Failure.ID field JobID
+queue.Failure.MaxAttempts field int
+queue.Failure.Payload field T
+queue.FailureAttemptsExhausted const FailureCode = "attempts_exhausted"
+queue.FailureCode comparable
+queue.FailureCode type string
+queue.FailurePayloadInvalid const FailureCode = "payload_invalid"
+queue.FailureTerminal const FailureCode = "terminal"
+queue.Failure[T any] type struct
 queue.Handler type func(context.Context, []uint8, Meta) error
 queue.InvalidCode const untyped string = "invalid_code"
 queue.Job unkeyed literal {ID, Payload, Attempt, MaxAttempts, EnqueuedAt}
@@ -4399,7 +4416,7 @@ runtime.CallerUpdateVersioned func[P any, A any, M any](context.Context, *Caller
 runtime.CallerUpsert func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerUpsertVersioned func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.ConcurrencyExpectation, golem.CreateInput[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.Caller[P any, A any] type struct
-runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue, PolicyCache, PolicyCacheKey, SubscriptionPrincipalKey}
+runtime.Config unkeyed literal {Database, Embeddings, Bundle, Bindings, Descriptors, ReadLimits, MutationLimits, AnalyticsLimits, EventRegistry, EventFactories, EventLimits, EventTransport, Observer, CDCAdapters, ReportEventOperator, HistoricalEventBundles, AfterCommitError, AuditPrincipal, ReportScopedQuery, ResolvePrincipal, SnapshotPrincipal, SnapshotActor, Queue, QueueFailed, PolicyCache, PolicyCacheKey, SubscriptionPrincipalKey}
 runtime.Config.AfterCommitError field func(context.Context, golem.AfterCommitFailure)
 runtime.Config.AnalyticsLimits field AnalyticsLimits
 runtime.Config.AuditPrincipal field func(P) string
@@ -4419,6 +4436,7 @@ runtime.Config.Observer field observe.Observer
 runtime.Config.PolicyCache field PolicyCacheConfig
 runtime.Config.PolicyCacheKey field func(A) (string, bool)
 runtime.Config.Queue field *QueueConfig
+runtime.Config.QueueFailed field []JobFailed[P, A]
 runtime.Config.ReadLimits field ReadLimits
 runtime.Config.ReportEventOperator field events.OperatorAudit
 runtime.Config.ReportScopedQuery field func(context.Context, golem.ScopedAuditRecord)
@@ -4436,6 +4454,7 @@ runtime.EventFactory.ModelID func() golem.ModelID
 runtime.EventFactoryRegistry type struct
 runtime.GeneratedEventFactoryRegistry func(golem.SchemaDigest, ...PackageEventFactories) (EventFactoryRegistry, error)
 runtime.GeneratedPackageEventFactories func(golem.SchemaDigest, ...EventFactory) PackageEventFactories
+runtime.JobFailed[P any, A any] type struct
 runtime.MaxBatchLoaderKeys const untyped int = 90000
 runtime.MaxMutationDeleteSnapshotBytes const untyped int = 1048576
 runtime.MaxMutationFacts const untyped int = 1000
@@ -4455,6 +4474,7 @@ runtime.MutationLimits.MaxStatementParameters field int
 runtime.MutationLimits.MaxTouchedRows field int
 runtime.MutationLimits.MaxUpsertAttempts field int
 runtime.NewCallerMutationExecution func[P any, A any](*Caller[P, A], ...CallerMutationModelAdapter[P, A]) (*CallerMutationExecution[P, A], error)
+runtime.OnJobFailed func[P any, A any, T any](queue.Type[T], func(context.Context, *SystemTx[P, A], queue.Failure[T]) error) JobFailed[P, A]
 runtime.Open func[P any, A any](context.Context, Config[P, A]) (*App[P, A], error)
 runtime.PackageEventFactories type struct
 runtime.PolicyCacheConfig comparable

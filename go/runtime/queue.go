@@ -22,9 +22,10 @@ type QueueConfig struct {
 	SemanticReconcileInterval time.Duration
 }
 
-func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueConfig) error {
+func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueConfig, declared []JobFailed[P, A]) error {
 	if config == nil {
-		return nil
+		_, err := app.failedCallbacks(nil, declared, nil)
+		return err
 	}
 	if config.Registry == nil {
 		return queue.Fail(queue.CodeConfigInvalid, "queue registry is required")
@@ -43,7 +44,11 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 			return err
 		}
 	}
-	worker, err := queueworker.New(store, registry, config.Limits, app.eventProvider, app.observer, config.Resources...)
+	callbacks, err := app.failedCallbacks(config, declared, registry)
+	if err != nil {
+		return err
+	}
+	worker, err := queueworker.New(store, registry, config.Limits, app.eventProvider, app.observer, app.failJob(callbacks), config.Resources...)
 	if err != nil {
 		return err
 	}
