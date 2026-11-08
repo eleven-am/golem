@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Transport, type Credentials } from '../src/index.js'
-import { CREATE_COMMENT, LIST, POST_WITH_COMMENTS, sleep, titles, until, watch, world, type World } from './harness/live.js'
+import { CREATE_COMMENT, idle, LIST, POST_WITH_COMMENTS, sleep, titles, until, watch, world, type World } from './harness/live.js'
 import { spy, type Spy } from './harness/spy.js'
 import { actor, headerSocket, invalidatePolicies, manifest, setPrincipalMode, signUp, socialUrl, spawnSocial, type SpawnedSocial } from './harness/social.js'
 import { CREATE_POST, postInput } from './harness/social.js'
@@ -36,7 +36,7 @@ async function server(env: Record<string, string>): Promise<SpawnedSocial> {
 async function settledView(w: World, mine: string, count: number) {
   const view = watch(w, LIST, { t: mine })
   await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && titles(view.data()).length === count)
-  await sleep(1000)
+  await idle(view)
   return view
 }
 
@@ -62,12 +62,19 @@ describe('RESYNC', () => {
     const carol = actor()
     const author = new Transport({ url: `${socialUrl()}/graphql`, manifest, credentials: carol.credentials, createSocket: headerSocket })
     await signUp(author, carol)
+    const posts = await w.publication('post')
+    const comments = await w.publication('comment')
     const created = await author.execute<{ createPost: { id: string } }>({ query: CREATE_POST, variables: { data: postInput(token()) } })
     const post = created.createPost.id
-    await author.execute({ query: CREATE_COMMENT, variables: { id: randomUUID(), post, author: carol.id, body: 'hello' } })
+    const comment = randomUUID()
+    await author.execute({ query: CREATE_COMMENT, variables: { id: comment, post, author: carol.id, body: 'hello' } })
+    await posts?.published([post], 'CREATED')
+    await comments?.published([comment], 'CREATED')
+    posts?.close()
+    comments?.close()
     const view = watch(w, POST_WITH_COMMENTS, { id: post })
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && (view.data() as { post?: unknown } | undefined)?.post !== undefined)
-    await sleep(2500)
+    await idle(view)
     const before = view.fetches()
     const started = Date.now()
     await author.execute({ query: 'mutation($id: UUID!) { updatePost(where: { ID: $id }, data: { published: { set: false } }) { id } }', variables: { id: post } })

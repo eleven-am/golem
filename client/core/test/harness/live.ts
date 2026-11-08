@@ -1,5 +1,5 @@
 import { QueryClient, QueryObserver, type Query } from '@tanstack/query-core'
-import { DocumentAnalyzer, LiveSync, Transport, type Credentials, type DocumentAnalysis, type LiveTransport } from '../../src/index.js'
+import { COALESCE_WINDOW_MS, DocumentAnalyzer, LiveSync, Transport, type Credentials, type DocumentAnalysis, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../../src/index.js'
 import { startProxy, type TcpProxy } from './proxy.js'
 import { actor, CREATE_POST, headerSocket, manifest, postInput, signUp, socialUrl } from './social.js'
 
@@ -77,6 +77,47 @@ export class HttpGate {
   }
 }
 
+export type FeedKind = 'post' | 'comment'
+
+export interface Publication {
+  published(ids: readonly string[], type: string): Promise<void>
+  close(): void
+}
+
+const FEED_FIELD: Record<FeedKind, string> = { post: 'postEvents', comment: 'commentEvents' }
+
+async function openFeed(direct: Transport, kind: FeedKind): Promise<Publication | undefined> {
+  const field = FEED_FIELD[kind]
+  const seen = new Set<string>()
+  let stop: () => void = () => undefined
+  const acknowledged = await new Promise<boolean>((resolve) => {
+    stop = direct.subscribe(
+      { query: `subscription { ${field} { type id } }` },
+      {
+        onAck: () => resolve(true),
+        onEvent: (body) => {
+          const event = (body.data as Record<string, { type: string; id: string }> | undefined)?.[field]
+          if (event !== undefined) {
+            seen.add(`${event.type}:${event.id}`)
+          }
+        },
+        onInterrupted: () => undefined,
+        onEnd: () => resolve(false),
+      },
+    )
+  })
+  if (!acknowledged) {
+    stop()
+    return undefined
+  }
+  return {
+    close: stop,
+    async published(ids, type) {
+      await until(() => ids.every((id) => seen.has(`${type}:${id}`)), 20_000, `${field} ${type} published`)
+    },
+  }
+}
+
 export interface World {
   readonly who: { readonly id: string; readonly credentials: () => Credentials }
   readonly gate: HttpGate
@@ -85,7 +126,10 @@ export interface World {
   readonly transport: Transport
   readonly live: LiveSync
   readonly direct: Transport
+  readonly windowMs: number
+  deliveries(): number
   run<T>(query: string, variables?: Record<string, unknown>): Promise<T>
+  publication(kind?: FeedKind): Promise<Publication | undefined>
   createPost(title: string, published?: boolean): Promise<string>
   updatePost(id: string, data: Record<string, unknown>): Promise<void>
   close(): Promise<void>
@@ -106,9 +150,23 @@ export async function world(overrides: { credentials?: () => Credentials | Promi
     fetch: gate.fetch,
   })
   const direct = new Transport({ url: `${target.origin}/graphql`, manifest, credentials, createSocket: headerSocket })
+  let delivered = 0
+  const inner: LiveTransport = overrides.wrap?.(transport) ?? transport
+  const counting: LiveTransport = {
+    execute: (request) => inner.execute(request),
+    renew: () => inner.renew(),
+    subscribe: (request: SubscriptionRequest, handlers: StreamHandlers) =>
+      inner.subscribe(request, {
+        ...handlers,
+        onEvent: (body) => {
+          delivered++
+          handlers.onEvent(body)
+        },
+      }),
+  }
   const live = new LiveSync({
     queryClient,
-    transport: overrides.wrap?.(transport) ?? transport,
+    transport: counting,
     manifest,
     clock: overrides.clock,
     windowMs: overrides.windowMs,
@@ -117,7 +175,30 @@ export async function world(overrides: { credentials?: () => Credentials | Promi
   })
   live.start()
   await signUp(direct, who)
-  const run = <T>(query: string, variables?: Record<string, unknown>) => direct.execute<T>({ query, variables })
+  const plain = <T>(query: string, variables?: Record<string, unknown>) => direct.execute<T>({ query, variables })
+  const announced = async <T>(kind: FeedKind, type: string, id: (result: T) => string, action: () => Promise<T>): Promise<T> => {
+    const feed = await openFeed(direct, kind)
+    try {
+      const result = await action()
+      await feed?.published([id(result)], type)
+      return result
+    } finally {
+      feed?.close()
+    }
+  }
+  const run = <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+    const id = String(variables?.id)
+    if (query === DELETE_POST) {
+      return announced('post', 'DELETED', () => id, () => plain<T>(query, variables))
+    }
+    if (query === DELETE_COMMENT) {
+      return announced('comment', 'DELETED', () => id, () => plain<T>(query, variables))
+    }
+    if (query === CREATE_COMMENT) {
+      return announced('comment', 'CREATED', () => id, () => plain<T>(query, variables))
+    }
+    return plain<T>(query, variables)
+  }
   return {
     who,
     gate,
@@ -127,12 +208,22 @@ export async function world(overrides: { credentials?: () => Credentials | Promi
     live,
     direct,
     run,
+    windowMs: overrides.windowMs ?? COALESCE_WINDOW_MS,
+    deliveries: () => delivered,
+    async publication(kind = 'post') {
+      return openFeed(direct, kind)
+    },
     async createPost(title, published = true) {
-      const data = await run<{ createPost: { id: string } }>(CREATE_POST, { data: { ...postInput(title), published } })
+      const data = await announced(
+        'post',
+        'CREATED',
+        (result) => result.createPost.id,
+        () => plain<{ createPost: { id: string } }>(CREATE_POST, { data: { ...postInput(title), published } }),
+      )
       return data.createPost.id
     },
     async updatePost(id, data) {
-      await run(UPDATE_POST, { id, data })
+      await announced('post', 'UPDATED', () => id, () => plain(UPDATE_POST, { id, data }))
     },
     async close() {
       live.stop()
@@ -148,6 +239,7 @@ export interface Watch {
   readonly analysis: DocumentAnalysis
   readonly variables: Record<string, unknown>
   fetches(): number
+  queued(): boolean
   readonly query: Query
   readonly frames: unknown[]
   data(): unknown
@@ -168,10 +260,14 @@ export function watch(w: World, document: string, variables: Record<string, unkn
   if (query === undefined) {
     throw new Error('the query was not created')
   }
-  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), query, frames, data: () => observer.getCurrentResult().data, stop }
+  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), queued: () => w.live.hasQueuedRefetch(query), query, frames, data: () => observer.getCurrentResult().data, stop }
 }
 
 export function titles(data: unknown): string[] {
   const posts = (data as { posts?: Array<{ title: string }> } | undefined)?.posts ?? []
   return posts.map((post) => post.title).sort()
+}
+
+export async function idle(view: Watch): Promise<void> {
+  await until(() => view.query.state.fetchStatus === 'idle' && !view.queued(), 20_000, 'view idle')
 }
