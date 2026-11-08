@@ -5,12 +5,24 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.4
+go get github.com/eleven-am/golem/go@v0.8.5
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.5
+
+**Live events arrive in about 20 ms instead of about 250 ms.** The event publisher now wakes as soon as a transaction that recorded outbox facts commits, instead of waiting for its next poll. A rolled-back write never wakes it. Polling remains the fallback for other processes and for CDC.
+
+**The durable actions recipe cannot deadlock or cancel the wrong job.**
+- `CancelExport` now cancels the job before it updates the status row, the same lock order as the failure callback. A terminal failure racing a cancel of the same export no longer deadlocks on PostgreSQL.
+- The status update matches the job ID it read, so a job requested in between is never marked cancelled.
+- The mutation returns the row as updated.
+- The recipe's request and cancel transactions retry conflicts with `golem.RetryConflicts(3)`.
 
 ---
 
