@@ -23,6 +23,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 - The status update matches the job ID it read, so a job requested in between is never marked cancelled.
 - The mutation returns the row as updated.
 - The recipe's request and cancel transactions retry conflicts with `golem.RetryConflicts(3)`.
+- `RunExport` writes `succeeded` only while the row is still `queued`, so a cancel or failure that commits during the handler is no longer overwritten on PostgreSQL.
 
 ---
 
