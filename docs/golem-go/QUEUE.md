@@ -587,7 +587,7 @@ func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestE
 			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
 		)
 		return err
-	})
+	}, golem.RetryConflicts(3))
 	return handle, err
 }
 
@@ -623,24 +623,36 @@ func MarkExportFailed(ctx context.Context, tx *SystemTx[Principal], failure queu
 func CancelExport(ctx context.Context, caller *Caller[Principal], args CancelExportArgs) (golem.Row[Export], error) {
 	var handle golem.Row[Export]
 	err := caller.Transaction(ctx, func(tx *CallerTx[Principal]) error {
-		_, err := tx.Exports.UpdateMany(ctx,
-			Exports.ID.Eq(args.ID).And(Exports.Status.Eq(StatusQueued)),
-			Exports.UpdateMany(Exports.CancelRequested.Set(true), Exports.Status.Set(StatusCanceled)),
-		)
+		observed, err := tx.Exports.FindUnique(ctx, Exports.ByID.Value(args.ID))
 		if err != nil {
+			return err
+		}
+		jobID, _ := golem.Value(observed, Exports.JobID).Get()
+		if _, err = tx.CancelJob(ctx, queue.JobID(jobID)); err != nil {
+			return err
+		}
+		if _, err = tx.Exports.UpdateMany(ctx,
+			Exports.ID.Eq(args.ID).And(Exports.JobID.Eq(jobID)).And(Exports.Status.Eq(StatusQueued)),
+			Exports.UpdateMany(Exports.CancelRequested.Set(true), Exports.Status.Set(StatusCanceled)),
+		); err != nil {
 			return err
 		}
 		handle, err = tx.Exports.FindUnique(ctx, Exports.ByID.Value(args.ID))
-		if err != nil {
-			return err
-		}
-		jobID, _ := golem.Value(handle, Exports.JobID).Get()
-		_, err = tx.CancelJob(ctx, queue.JobID(jobID))
 		return err
-	})
+	}, golem.RetryConflicts(3))
 	return handle, err
 }
 ```
+
+`CancelExport` calls `tx.CancelJob` before it touches the status row because
+the failure callback locks the job row first and its status row second; taking
+them in the other order deadlocks on PostgreSQL. The status update also
+matches the job ID it read. If a failure and a new `requestExport` replaced the
+job between the read and the update, the update matches no row, the new job
+stays queued, and the row read back at the end shows that. The mutation returns
+that row, so the caller sees the cancelled status and not the pre-cancel values.
+Both mutations also pass `golem.RetryConflicts(3)`, since a conflict is a normal
+outcome there.
 
 The program accepts three exports, cancels one before the worker starts, makes
 one fail, and prints each final status:
@@ -720,8 +732,13 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	if _, err := durable.Mutate(ctx, caller, durable.CancelExport, durable.CancelExportArgs{ID: "canceled"}); err != nil {
+	cancelled, err := durable.Mutate(ctx, caller, durable.CancelExport, durable.CancelExportArgs{ID: "canceled"})
+	if err != nil {
 		log.Fatal(err)
+	}
+	returned, _ := golem.Value(cancelled, durable.Exports.Status).Get()
+	if returned != durable.StatusCanceled {
+		log.Fatalf("cancelExport returned status %s", returned)
 	}
 
 	worker, stop := context.WithCancel(ctx)
