@@ -18,6 +18,8 @@ import (
 
 type p7SecretPublisher struct{ secret string }
 
+func (p7SecretPublisher) Wake() {}
+
 func (publisher p7SecretPublisher) Run(context.Context) error { return errors.New(publisher.secret) }
 
 type p7SecretSubscriptionExecutor struct{ secret string }

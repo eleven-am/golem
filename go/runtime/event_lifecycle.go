@@ -20,6 +20,7 @@ import (
 
 type eventPublisherRunner interface {
 	Run(context.Context) error
+	Wake()
 }
 
 type eventCDCWorker struct {
@@ -180,6 +181,12 @@ type eventRunResult struct {
 	cdc      bool
 	topology bool
 	err      error
+}
+
+func (app *App[P, A]) wakeEventPublisher() {
+	if app.eventPublisher != nil {
+		app.eventPublisher.Wake()
+	}
 }
 
 // RunEventPublisher owns the durable outbox publisher and every configured CDC
