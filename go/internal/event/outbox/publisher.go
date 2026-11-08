@@ -132,6 +132,7 @@ type Publisher struct {
 	observer      events.Observer
 	hooks         crashHooks
 	retryKey      string
+	wake          chan struct{}
 
 	mu      sync.Mutex
 	running bool
@@ -161,7 +162,7 @@ func NewPublisherObserved(coordinator eventprovider.Coordinator, resolver mutati
 	if err != nil {
 		return nil, fmt.Errorf("P7_PUBLISHER_CONFIG: retry entropy is unavailable")
 	}
-	return &Publisher{coordinator: coordinator, resolver: resolver, compatibility: compatibility, transport: transport, limits: normalized, observer: observer, retryKey: retryKey}, nil
+	return &Publisher{coordinator: coordinator, resolver: resolver, compatibility: compatibility, transport: transport, limits: normalized, observer: observer, retryKey: retryKey, wake: make(chan struct{}, 1)}, nil
 }
 
 func (publisher *Publisher) Run(ctx context.Context) error {
@@ -237,7 +238,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 		}
 		if len(leases) == 0 {
 			loopFailures = 0
-			if !waitContext(ctx, publisher.limits.RetryBase) {
+			if !publisher.idle(ctx) {
 				return nil
 			}
 			continue
@@ -255,6 +256,25 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 		}
 		loopFailures = 0
 	}
+}
+
+func (publisher *Publisher) Wake() {
+	select {
+	case publisher.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (publisher *Publisher) idle(ctx context.Context) bool {
+	timer := time.NewTimer(publisher.limits.RetryBase)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+	case <-publisher.wake:
+	}
+	return true
 }
 
 func (publisher *Publisher) claimGroups() int {

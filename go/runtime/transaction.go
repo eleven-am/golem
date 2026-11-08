@@ -96,6 +96,7 @@ type executionMutationConfig struct {
 	eventObserver    events.Observer
 	outboxNamespace  string
 	queueWake        func()
+	eventWake        func()
 	// flushSemantic writes the transaction's semantic marks and schedules their
 	// drain on the same executor the outbox rows use. It is nil only for an
 	// execution that owns no application.
@@ -283,7 +284,7 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 		enabled: true, provider: app.provider, limits: app.mutationLimits,
 		afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution,
 		outboxNamespace: string(namespace), flushSemantic: app.flushSemanticMarks,
-		queueWake: app.queueWorker.Wake, eventObserver: app.eventObserver,
+		queueWake: app.queueWorker.Wake, eventWake: app.wakeEventPublisher, eventObserver: app.eventObserver,
 	}
 }
 
@@ -541,6 +542,9 @@ func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, bind
 	}
 	if state.hasSemanticMarks() {
 		binding.afterCommit(binding.mutation.queueWake)
+	}
+	if state.hasFacts() {
+		binding.afterCommit(binding.mutation.eventWake)
 	}
 	return nil
 }

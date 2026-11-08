@@ -16,6 +16,8 @@ type lifecyclePublisher struct {
 	once    sync.Once
 }
 
+func (*lifecyclePublisher) Wake() {}
+
 func (publisher *lifecyclePublisher) Run(ctx context.Context) error {
 	publisher.once.Do(func() { close(publisher.started) })
 	<-ctx.Done()
