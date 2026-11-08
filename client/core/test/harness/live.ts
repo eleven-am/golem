@@ -239,6 +239,7 @@ export interface Watch {
   readonly analysis: DocumentAnalysis
   readonly variables: Record<string, unknown>
   fetches(): number
+  queued(): boolean
   readonly query: Query
   readonly frames: unknown[]
   data(): unknown
@@ -259,7 +260,7 @@ export function watch(w: World, document: string, variables: Record<string, unkn
   if (query === undefined) {
     throw new Error('the query was not created')
   }
-  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), query, frames, data: () => observer.getCurrentResult().data, stop }
+  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), queued: () => w.live.hasQueuedRefetch(query), query, frames, data: () => observer.getCurrentResult().data, stop }
 }
 
 export function titles(data: unknown): string[] {
@@ -268,5 +269,5 @@ export function titles(data: unknown): string[] {
 }
 
 export async function idle(view: Watch): Promise<void> {
-  await until(() => view.query.state.fetchStatus === 'idle', 20_000, 'view idle')
+  await until(() => view.query.state.fetchStatus === 'idle' && !view.queued(), 20_000, 'view idle')
 }

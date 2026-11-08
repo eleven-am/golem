@@ -79,6 +79,27 @@ describe('a live aggregate', () => {
     expect(view.fetches()).toBe(before + 1)
   })
 
+  it('does not report a view settled while a follow-up refetch is queued', async () => {
+    const w = await fresh()
+    const mine = token()
+    const ids: string[] = []
+    for (let index = 0; index < 2; index++) {
+      ids.push(await w.createPost(`${mine}-${index}`))
+    }
+    const view = await settledCount(w, mine, '2')
+    const before = view.fetches()
+    w.gate.hold()
+    await w.run(DELETE_POST, { id: ids[0] })
+    await until(() => view.fetches() === before + 1)
+    await w.run(DELETE_POST, { id: ids[1] })
+    await until(() => view.queued())
+    w.gate.release()
+    await idle(view)
+    expect(view.queued()).toBe(false)
+    expect(count(view.data())).toBe('0')
+    expect(view.fetches()).toBe(before + 2)
+  })
+
   it('is correct after a disconnect and reconnect', async () => {
     const w = await fresh()
     const mine = token()
