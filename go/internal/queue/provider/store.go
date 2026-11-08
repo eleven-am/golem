@@ -227,7 +227,7 @@ type Store interface {
 	List(ctx context.Context, query JobQuery) (JobPage, error)
 	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
 	CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
-	Cancel(ctx context.Context, id string) (CancelResult, error)
+	Cancel(ctx context.Context, executor Executor, id string) (CancelResult, error)
 	CancelMany(ctx context.Context, ids []string) (CancelBatch, error)
 	Requeue(ctx context.Context, id string) (bool, error)
 	RequeueFailed(ctx context.Context, ids []string) (int, error)

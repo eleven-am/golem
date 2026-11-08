@@ -569,6 +569,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	}
 	source.WriteString("\t\treturn callback(result)\n\t}, options...)\n}\n")
 	fmt.Fprintf(source, "func (transaction *CallerTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.CallerTxEnqueue(ctx, (*%s.CallerTx[P, %s])(nil), pending) }; return %s.CallerTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
+	fmt.Fprintf(source, "func (transaction *CallerTx[P]) CancelJob(ctx %s.Context, id %s.JobID) (bool, error) { if transaction == nil { return %s.CallerTxCancelJob(ctx, (*%s.CallerTx[P, %s])(nil), id) }; return %s.CallerTxCancelJob(ctx, transaction.runtime, id) }\n", contextAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "func (transaction *CallerTx[P]) LockKeys(ctx %s.Context, keys ...%s.LockKey) error { if transaction == nil { return %s.CallerTxLockKeys(ctx, (*%s.CallerTx[P, %s])(nil), keys...) }; return %s.CallerTxLockKeys(ctx, transaction.runtime, keys...) }\n", contextAlias, golemAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	source.WriteString("\n// SystemEscape leaves the authorized path. It returns the unrestricted\n")
 	source.WriteString("// system clients for the caller transaction itself, so their reads and\n")
@@ -605,6 +606,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	}
 	source.WriteString("\t\treturn callback(ctx, result, failure)\n\t})\n}\n")
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.SystemTxEnqueue(ctx, (*%s.SystemTx[P, %s])(nil), pending) }; return %s.SystemTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
+	fmt.Fprintf(source, "func (transaction *SystemTx[P]) CancelJob(ctx %s.Context, id %s.JobID) (bool, error) { if transaction == nil { return %s.SystemTxCancelJob(ctx, (*%s.SystemTx[P, %s])(nil), id) }; return %s.SystemTxCancelJob(ctx, transaction.runtime, id) }\n", contextAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "func (transaction *SystemTx[P]) LockKeys(ctx %s.Context, keys ...%s.LockKey) error { if transaction == nil { return %s.SystemTxLockKeys(ctx, (*%s.SystemTx[P, %s])(nil), keys...) }; return %s.SystemTxLockKeys(ctx, transaction.runtime, keys...) }\n", contextAlias, golemAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 }
 

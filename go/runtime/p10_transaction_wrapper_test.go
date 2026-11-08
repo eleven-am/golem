@@ -357,6 +357,28 @@ func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnv
 				t.Fatal(err)
 			}
 		},
+		"CallerTxCancelJob": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture, _ := environment.queued(t)
+			caller, err := fixture.app.ForPrincipal(context.Background(), testPrincipal{Allow: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CallerTransaction(context.Background(), caller, func(tx *CallerTx[testPrincipal, testActor]) error {
+				_, err := CallerTxCancelJob(context.Background(), tx, "missing")
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"SystemTxCancelJob": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture, _ := environment.queued(t)
+			if err := SystemTransaction(context.Background(), fixture.app.System(), func(tx *SystemTx[testPrincipal, testActor]) error {
+				_, err := SystemTxCancelJob(context.Background(), tx, "missing")
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
 	for name, entry := range mutationEntryPointManifest() {
 		if !strings.HasPrefix(name, "CallerTx") && !strings.HasPrefix(name, "SystemTx") {

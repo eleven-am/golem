@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CREATE_COMMENT, DELETE_COMMENT, DELETE_POST, POST_WITH_COMMENTS, sleep, until, watch, world, type Watch, type World } from './harness/live.js'
+import { CREATE_COMMENT, DELETE_COMMENT, DELETE_POST, idle, POST_WITH_COMMENTS, sleep, until, watch, world, type Watch, type World } from './harness/live.js'
 
 const open: World[] = []
 
@@ -30,8 +30,7 @@ const names = (data: unknown, root: string): string[] =>
   ((data as Record<string, Array<{ title: string }> | undefined> | undefined)?.[root] ?? []).map((row) => row.title).sort()
 
 async function settled(view: Watch): Promise<void> {
-  await sleep(1000)
-  expect(view.query.state.fetchStatus).toBe('idle')
+  await idle(view)
 }
 
 describe('removal while every response is held', () => {

@@ -1637,6 +1637,12 @@ func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pendi
 	}
 	return golemruntime.CallerTxEnqueue(ctx, transaction.runtime, pending)
 }
+func (transaction *CallerTx[P]) CancelJob(ctx context.Context, id queue.JobID) (bool, error) {
+	if transaction == nil {
+		return golemruntime.CallerTxCancelJob(ctx, (*golemruntime.CallerTx[P, Actor])(nil), id)
+	}
+	return golemruntime.CallerTxCancelJob(ctx, transaction.runtime, id)
+}
 func (transaction *CallerTx[P]) LockKeys(ctx context.Context, keys ...golem.LockKey) error {
 	if transaction == nil {
 		return golemruntime.CallerTxLockKeys(ctx, (*golemruntime.CallerTx[P, Actor])(nil), keys...)
@@ -1708,6 +1714,12 @@ func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pendi
 		return golemruntime.SystemTxEnqueue(ctx, (*golemruntime.SystemTx[P, Actor])(nil), pending)
 	}
 	return golemruntime.SystemTxEnqueue(ctx, transaction.runtime, pending)
+}
+func (transaction *SystemTx[P]) CancelJob(ctx context.Context, id queue.JobID) (bool, error) {
+	if transaction == nil {
+		return golemruntime.SystemTxCancelJob(ctx, (*golemruntime.SystemTx[P, Actor])(nil), id)
+	}
+	return golemruntime.SystemTxCancelJob(ctx, transaction.runtime, id)
 }
 func (transaction *SystemTx[P]) LockKeys(ctx context.Context, keys ...golem.LockKey) error {
 	if transaction == nil {

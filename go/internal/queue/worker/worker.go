@@ -49,7 +49,7 @@ type Worker struct {
 	limits      queue.Limits
 	provider    golem.Provider
 	observer    observe.Observer
-	fail        FailFunc
+	fail        *FailHook
 	wake        chan struct{}
 	running     atomic.Bool
 	mutex       sync.Mutex
@@ -57,7 +57,6 @@ type Worker struct {
 	inflight    map[string]int
 
 	dispatchLock chan struct{}
-	basePlan     *activePlan
 	plan         *activePlan
 }
 
@@ -68,7 +67,7 @@ type claimGroup struct {
 
 // New binds a registry to a durable store. Every refusal is CodeConfigInvalid
 // and happens before any background work exists.
-func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer, fail FailFunc, resources ...queue.Resource) (*Worker, error) {
+func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer, fail *FailHook, resources ...queue.Resource) (*Worker, error) {
 	if store == nil {
 		return nil, queue.Fail(queue.CodeConfigInvalid, "durable job store is required")
 	}
@@ -107,8 +106,7 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 
 		dispatchLock: make(chan struct{}, 1),
 	}
-	worker.basePlan = worker.initialPlan(registrations)
-	worker.plan = worker.basePlan
+	worker.plan = worker.initialPlan(registrations)
 	return worker, nil
 }
 

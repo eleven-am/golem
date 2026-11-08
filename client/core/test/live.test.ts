@@ -7,12 +7,28 @@ describe('live subscription against the real social server', () => {
     const client = transport({ credentials: alice.credentials })
     await signUp(client, alice)
     const seen = collector()
-    const stop = client.subscribe({ query: POST_EVENTS }, seen.handlers)
+    const order: string[] = []
+    const stop = client.subscribe(
+      { query: POST_EVENTS },
+      {
+        ...seen.handlers,
+        onAck: () => {
+          order.push('ack')
+          seen.handlers.onAck()
+        },
+        onEvent: (body) => {
+          order.push('event')
+          seen.handlers.onEvent(body)
+        },
+      },
+    )
     await seen.until(() => seen.acks() === 1)
-    expect(seen.events).toHaveLength(0)
-    await client.execute({ query: CREATE_POST, variables: { data: postInput('live one') } })
-    await seen.until(() => seen.events.length === 1)
-    const event = seen.events[0] as { postEvents: { type: string; version: string; entity: { title: string } } }
+    expect(order[0]).toBe('ack')
+    const created = await client.execute<{ createPost: { id: string } }>({ query: CREATE_POST, variables: { data: postInput('live one') } })
+    const mine = (): Array<{ postEvents: { id: string; type: string; version: string; entity: { title: string } } }> =>
+      (seen.events as Array<{ postEvents: { id: string; type: string; version: string; entity: { title: string } } }>).filter((one) => one.postEvents.id === created.createPost.id)
+    await seen.until(() => mine().length === 1)
+    const event = mine()[0] as { postEvents: { type: string; version: string; entity: { title: string } } }
     expect(event.postEvents.type).toBe('CREATED')
     expect(event.postEvents.entity.title).toBe('live one')
     expect(typeof event.postEvents.version).toBe('string')

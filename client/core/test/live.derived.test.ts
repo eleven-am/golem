@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Transport } from '../src/index.js'
-import { DELETE_POST, sleep, until, watch, world, type World } from './harness/live.js'
+import { DELETE_POST, idle, sleep, until, watch, world, type World } from './harness/live.js'
 import { actor, CREATE_POST, headerSocket, manifest, postInput, signUp, socialUrl } from './harness/social.js'
 
 const open: World[] = []
@@ -29,7 +29,7 @@ const count = (data: unknown): string | undefined => (data as { aggregatePosts?:
 async function settledCount(w: World, mine: string, expected: string) {
   const view = watch(w, COUNT, { t: mine })
   await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && count(view.data()) === expected)
-  await sleep(1000)
+  await idle(view)
   return view
 }
 
@@ -64,15 +64,40 @@ describe('a live aggregate', () => {
   it('refetches once for a transaction that deletes many rows', async () => {
     const w = await fresh()
     const mine = token()
+    const ids: string[] = []
     for (let index = 0; index < 10; index++) {
-      await w.createPost(`${mine}-${index}`)
+      ids.push(await w.createPost(`${mine}-${index}`))
     }
     const view = await settledCount(w, mine, '10')
     const before = view.fetches()
+    const feed = await w.publication()
     await w.run(DELETE_MANY, { t: mine })
+    await feed?.published(ids, 'DELETED')
+    feed?.close()
     await until(() => count(view.data()) === '0')
-    await sleep(800)
+    await idle(view)
     expect(view.fetches()).toBe(before + 1)
+  })
+
+  it('does not report a view settled while a follow-up refetch is queued', async () => {
+    const w = await fresh()
+    const mine = token()
+    const ids: string[] = []
+    for (let index = 0; index < 2; index++) {
+      ids.push(await w.createPost(`${mine}-${index}`))
+    }
+    const view = await settledCount(w, mine, '2')
+    const before = view.fetches()
+    w.gate.hold()
+    await w.run(DELETE_POST, { id: ids[0] })
+    await until(() => view.fetches() === before + 1)
+    await w.run(DELETE_POST, { id: ids[1] })
+    await until(() => view.queued())
+    w.gate.release()
+    await idle(view)
+    expect(view.queued()).toBe(false)
+    expect(count(view.data())).toBe('0')
+    expect(view.fetches()).toBe(before + 2)
   })
 
   it('is correct after a disconnect and reconnect', async () => {

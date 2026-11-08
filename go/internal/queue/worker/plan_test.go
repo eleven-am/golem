@@ -173,11 +173,35 @@ func TestPlanOverridesReachTheNextClaim(t *testing.T) {
 	dispatchOnce(t, worker)
 	capped, _ = claimFor(*claims, "gate.plan.capped")
 	pooled, _ = claimFor(*claims, "gate.plan.pooled")
-	if capped.Limit != 1 || pooled.Limit != 1 || pooled.Resource.Concurrency != 3 {
-		t.Fatalf("a plan restates every field; absent ones return to the Open value: capped=%#v pooled=%#v", capped, pooled)
+	if capped.Limit != 1 || pooled.Limit != 1 || pooled.Resource.Concurrency != 6 {
+		t.Fatalf("absent fields keep the active value: capped=%#v pooled=%#v", capped, pooled)
 	}
-	if got := worker.Plan(); got.Generation != 3 || got.MaxConcurrent["gate.plan.capped"] != 0 || got.Concurrency != 1 || got.ClaimBatch != 8 {
+	if got := worker.Plan(); got.Generation != 3 || got.MaxConcurrent["gate.plan.capped"] != 0 || got.Concurrency != 1 || got.ClaimBatch != 2 || got.Capacities["gate.shared"] != 6 {
 		t.Fatalf("plan after the uncapped restatement = %#v", got)
+	}
+}
+
+func TestPlanOmittedFieldsKeepTheActiveValues(t *testing.T) {
+	fixture := newHarness(t)
+	worker := planWorker(t, fixture.store, gateLimits(), "", nil, queue.Resource{Name: "gate.shared", Concurrency: 3, Costs: map[string]int{"gate.plan.pooled": 2}})
+	if _, err := worker.Apply(context.Background(), queue.Plan{
+		Concurrency: 9, MaxConcurrent: map[string]int{"gate.plan.capped": 5}, Capacities: map[string]int{"gate.shared": 8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := worker.Apply(context.Background(), queue.Plan{ClaimBatch: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Concurrency != 9 || status.ClaimBatch != 2 || status.MaxConcurrent["gate.plan.capped"] != 5 || status.Capacities["gate.shared"] != 8 {
+		t.Fatalf("reconfiguring one field reverted the others: %#v", status)
+	}
+	status, err = worker.Apply(context.Background(), queue.Plan{Capacities: map[string]int{"gate.shared": 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Concurrency != 9 || status.ClaimBatch != 2 || status.MaxConcurrent["gate.plan.capped"] != 5 || status.Capacities["gate.shared"] != 4 {
+		t.Fatalf("reconfiguring one capacity reverted the others: %#v", status)
 	}
 }
 

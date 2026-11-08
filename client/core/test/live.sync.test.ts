@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Transport, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../src/index.js'
-import { analyzer, CREATE_COMMENT, DELETE_COMMENT, DELETE_POST, LIST, POST_WITH_COMMENTS, sleep, titles, until, watch, world, type Watch, type World } from './harness/live.js'
+import { analyzer, CREATE_COMMENT, DELETE_COMMENT, DELETE_POST, idle, LIST, POST_WITH_COMMENTS, sleep, titles, until, watch, world, type Watch, type World } from './harness/live.js'
 import { actor, CREATE_POST, headerSocket, manifest, postInput, signUp, socialUrl } from './harness/social.js'
 
 const open: World[] = []
@@ -19,8 +19,7 @@ afterEach(async () => {
 })
 
 async function settled(view: Watch): Promise<void> {
-  await sleep(1000)
-  expect(view.query.state.fetchStatus).toBe('idle')
+  await idle(view)
 }
 
 const token = () => `t${randomUUID().slice(0, 8)}`
@@ -54,7 +53,6 @@ describe('subscribe, ack, fetch', () => {
     await sleep(300)
     expect(view.fetches()).toBe(0)
     await w.createPost(`${mine}-gap`)
-    await sleep(800)
     w.proxy.release('upstream')
     await until(() => titles(view.data()).length === 1)
     expect(titles(view.data())).toEqual([`${mine}-gap`])
@@ -112,14 +110,15 @@ describe('ordering between responses and events', () => {
     await until(() => titles(view.data()).length === 1)
     await settled(view)
     w.proxy.hold('downstream')
+    const delivered = w.deliveries()
     await w.updatePost(id, { title: { set: `${mine}-b` } })
-    await sleep(800)
     await w.updatePost(id, { title: { set: `${mine}-c` } })
-    await sleep(800)
     await w.queryClient.refetchQueries({ queryKey: view.query.queryKey, exact: true })
     await until(() => titles(view.data())[0] === `${mine}-c`)
     w.proxy.release('downstream')
-    await sleep(700)
+    await until(() => w.deliveries() >= delivered + 2)
+    await sleep(w.windowMs + 1)
+    await idle(view)
     expect(titles(view.data())).toEqual([`${mine}-c`])
     const shown = view.frames.map((frame) => titles(frame)[0])
     expect(shown).not.toContain(`${mine}-b`)
@@ -171,13 +170,14 @@ describe('ordering between responses and events', () => {
 describe('reconnect', () => {
   it('refetches each live query exactly once after the socket drops', async () => {
     const w = await fresh()
-    const first = watch(w, LIST, { t: token() })
     const mine = token()
     const post = await w.createPost(`${mine}-p`)
+    const first = watch(w, LIST, { t: token() })
     const second = watch(w, POST_WITH_COMMENTS, { id: post })
     await until(() => w.live.statusOf(first.query)?.state === 'LIVE' && w.live.statusOf(second.query)?.state === 'LIVE')
     await until(() => first.fetches() >= 1 && second.fetches() >= 1)
-    await sleep(1200)
+    await idle(first)
+    await idle(second)
     const baseFirst = first.fetches()
     const baseSecond = second.fetches()
     w.proxy.drop()
@@ -213,7 +213,10 @@ describe('coalescing', () => {
     const view = watch(w, document, { t: mine })
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && view.data() !== undefined)
     expect(titles(view.data())).toHaveLength(0)
+    await idle(view)
     const initial = view.fetches()
+    const feed = await w.publication()
+    w.proxy.hold('downstream')
     for (let batch = 0; batch < 10; batch++) {
       await Promise.all(
         ids.slice(batch * 10, batch * 10 + 10).map((id) =>
@@ -221,8 +224,11 @@ describe('coalescing', () => {
         ),
       )
     }
+    await feed?.published(ids, 'UPDATED')
+    feed?.close()
+    w.proxy.release('downstream')
     await until(() => titles(view.data()).length === 100, 15_000)
-    await sleep(800)
+    await idle(view)
     const refetches = view.fetches() - initial
     expect(refetches).toBeGreaterThanOrEqual(1)
     expect(refetches).toBeLessThanOrEqual(3)

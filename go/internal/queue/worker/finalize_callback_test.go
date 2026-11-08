@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,13 @@ func (recorder *failRecorder) fail(ctx context.Context, record queueprovider.Rec
 	return recorder.store.Fail(ctx, nil, record.ID, record.LeaseToken, code)
 }
 
+func (recorder *failRecorder) hook(types ...string) *FailHook {
+	return &FailHook{
+		Has: func(name string) bool { return len(types) == 0 || slices.Contains(types, name) },
+		Run: recorder.fail,
+	}
+}
+
 func (recorder *failRecorder) snapshot() []failCall {
 	recorder.mutex.Lock()
 	defer recorder.mutex.Unlock()
@@ -49,7 +57,7 @@ func (recorder *failRecorder) snapshot() []failCall {
 
 func startFailing(t *testing.T, fixture *harness, registry *queue.Registry, limits queue.Limits, recorder *failRecorder) func() {
 	t.Helper()
-	worker, err := New(fixture.store, registry, limits, "", nil, recorder.fail)
+	worker, err := New(fixture.store, registry, limits, "", nil, recorder.hook())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +220,45 @@ func TestTerminalIntentIsPersistedBeforeTheCallbackRuns(t *testing.T) {
 	awaitState(t, fixture, identity, queueprovider.StateFailed)
 	if code, _ := observed.Load().(string); code != "terminal" {
 		t.Fatalf("last code before the callback=%q", code)
+	}
+}
+
+func TestTypesWithoutACallbackSkipTheDeferredIntent(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	plain := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.failed.plain", MaxAttempts: 5,
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return queue.Terminal(errors.New("poison")) },
+	})
+	hooked := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.failed.hooked", MaxAttempts: 5,
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return queue.Terminal(errors.New("poison")) },
+	})
+	plainID := fixture.enqueue(t, newPending(t, plain))
+	hookedID := fixture.enqueue(t, newPending(t, hooked))
+	var mutex sync.Mutex
+	var deferredFor []string
+	store := stubStore{Store: fixture.store, deferred: func(ctx context.Context, id, token, code string) (bool, error) {
+		mutex.Lock()
+		deferredFor = append(deferredFor, id)
+		mutex.Unlock()
+		return fixture.store.DeferFailure(ctx, id, token, code)
+	}}
+	recorder := &failRecorder{store: fixture.store}
+	worker, err := New(store, registry, gateLimits(), "", nil, recorder.hook("gate.failed.hooked"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startWorker(t, worker)
+	awaitState(t, fixture, plainID, queueprovider.StateFailed)
+	awaitState(t, fixture, hookedID, queueprovider.StateFailed)
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(deferredFor) != 1 || deferredFor[0] != hookedID {
+		t.Fatalf("deferred intent was written for %v, want only %s", deferredFor, hookedID)
+	}
+	if calls := recorder.snapshot(); len(calls) != 1 || calls[0].record.ID != hookedID {
+		t.Fatalf("callback calls = %#v", calls)
 	}
 }
 

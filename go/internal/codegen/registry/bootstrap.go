@@ -101,9 +101,11 @@ func EmitShell(request ShellRequest) (File, error) {
 	}
 	fmt.Fprintf(&source, "\nfunc (caller *Caller[P]) Transaction(_ %s.Context, _ func(*CallerTx[P]) error, _ ...%s.TransactionOption) error { return nil }\n", contextAlias, golemAlias)
 	fmt.Fprintf(&source, "func (transaction *CallerTx[P]) Enqueue(_ %s.Context, _ %s.Pending) (%s.JobID, error) { return \"\", nil }\n", contextAlias, queueAlias, queueAlias)
+	fmt.Fprintf(&source, "func (transaction *CallerTx[P]) CancelJob(_ %s.Context, _ %s.JobID) (bool, error) { return false, nil }\n", contextAlias, queueAlias)
 	fmt.Fprintf(&source, "func (transaction *CallerTx[P]) LockKeys(_ %s.Context, _ ...%s.LockKey) error { return nil }\n", contextAlias, golemAlias)
 	source.WriteString("func SystemEscape[P any](transaction *CallerTx[P]) *SystemTx[P] { return &SystemTx[P]{} }\n")
 	fmt.Fprintf(&source, "func (transaction *SystemTx[P]) Enqueue(_ %s.Context, _ %s.Pending) (%s.JobID, error) { return \"\", nil }\n", contextAlias, queueAlias, queueAlias)
+	fmt.Fprintf(&source, "func (transaction *SystemTx[P]) CancelJob(_ %s.Context, _ %s.JobID) (bool, error) { return false, nil }\n", contextAlias, queueAlias)
 	fmt.Fprintf(&source, "func (transaction *SystemTx[P]) LockKeys(_ %s.Context, _ ...%s.LockKey) error { return nil }\n", contextAlias, golemAlias)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {

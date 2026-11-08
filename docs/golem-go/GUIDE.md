@@ -1220,6 +1220,11 @@ database. It may open `caller.Transaction` itself. A custom mutation can be
 granted writes the caller cannot perform directly; see
 [Operations that own a write](#operations-that-own-a-write).
 
+Inside `caller.Transaction`, `tx.Enqueue` adds a durable job and `tx.CancelJob(ctx, jobID)`
+cancels one, both committing or rolling back with the transaction. Cancel only a
+job ID you read, in the same transaction, from a row the caller's policy allowed,
+never an ID taken from arguments. See [the queue](QUEUE.md#inspecting-and-operating).
+
 #### What a custom operation returns
 
 A custom query, a custom mutation or a computed field may return model rows

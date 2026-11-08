@@ -110,6 +110,14 @@ type stubStore struct {
 	canceled  func(context.Context, string, string, string) (bool, error)
 	release   func(context.Context, string, string) (bool, error)
 	retention func(context.Context, queueprovider.RetentionPolicy) (int, error)
+	deferred  func(context.Context, string, string, string) (bool, error)
+}
+
+func (stub stubStore) DeferFailure(ctx context.Context, id, token, code string) (bool, error) {
+	if stub.deferred != nil {
+		return stub.deferred(ctx, id, token, code)
+	}
+	return stub.Store.DeferFailure(ctx, id, token, code)
 }
 
 func (stub stubStore) Renew(ctx context.Context, id, token string, duration time.Duration) (queueprovider.Renewal, error) {
