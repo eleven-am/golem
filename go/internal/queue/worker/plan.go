@@ -65,18 +65,20 @@ func (worker *Worker) Plan() queue.PlanStatus {
 }
 
 func (worker *Worker) Apply(ctx context.Context, request queue.Plan) (queue.PlanStatus, error) {
-	next, err := worker.resolvePlan(request)
-	if err != nil {
-		worker.emitPlan(observe.OutcomeFailure, observe.ReasonInvalidInput, 1)
-		return queue.PlanStatus{}, err
-	}
 	select {
 	case worker.dispatchLock <- struct{}{}:
 	case <-ctx.Done():
 		return queue.PlanStatus{}, ctx.Err()
 	}
+	active := worker.currentPlan()
+	next, err := worker.resolvePlan(active, request)
+	if err != nil {
+		<-worker.dispatchLock
+		worker.emitPlan(observe.OutcomeFailure, observe.ReasonInvalidInput, 1)
+		return queue.PlanStatus{}, err
+	}
+	next.generation = active.generation + 1
 	worker.mutex.Lock()
-	next.generation = worker.plan.generation + 1
 	worker.plan = next
 	worker.mutex.Unlock()
 	<-worker.dispatchLock
@@ -85,8 +87,7 @@ func (worker *Worker) Apply(ctx context.Context, request queue.Plan) (queue.Plan
 	return next.status(), nil
 }
 
-func (worker *Worker) resolvePlan(request queue.Plan) (*activePlan, error) {
-	base := worker.basePlan
+func (worker *Worker) resolvePlan(base *activePlan, request queue.Plan) (*activePlan, error) {
 	if request.Concurrency < 0 {
 		return nil, queue.Fail(queue.CodeConfigInvalid, "plan concurrency must not be negative")
 	}

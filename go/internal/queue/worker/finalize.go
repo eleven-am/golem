@@ -17,6 +17,11 @@ var errCallbackPanic = errors.New("QUEUE_FAILURE_CALLBACK_PANIC: failure callbac
 
 type FailFunc func(ctx context.Context, record queueprovider.Record, code string) (bool, error)
 
+type FailHook struct {
+	Has func(typeName string) bool
+	Run FailFunc
+}
+
 type CallbackError struct {
 	Err error
 }
@@ -36,7 +41,7 @@ func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, re
 	book, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseUntil.Add(-worker.limits.LeaseDuration/leaseMarginDivisor))
 	defer cancel()
 	started := time.Now()
-	if worker.fail != nil && !record.Finalize {
+	if worker.hasCallback(record.Type) && !record.Finalize {
 		persisted, err := worker.store.DeferFailure(book, record.ID, record.LeaseToken, code)
 		if err != nil {
 			worker.emit(observer, record, observe.PhaseCommit, observe.OutcomeFailure, observe.ReasonProvider, time.Since(started))
@@ -62,8 +67,12 @@ func (worker *Worker) failJob(ctx context.Context, observer observe.Observer, re
 	}
 }
 
+func (worker *Worker) hasCallback(typeName string) bool {
+	return worker.fail != nil && worker.fail.Has(typeName)
+}
+
 func (worker *Worker) callFail(ctx context.Context, record queueprovider.Record, code string) (changed bool, err error) {
-	if worker.fail == nil {
+	if !worker.hasCallback(record.Type) {
 		return worker.store.Fail(ctx, nil, record.ID, record.LeaseToken, code)
 	}
 	defer func() {
@@ -72,5 +81,5 @@ func (worker *Worker) callFail(ctx context.Context, record queueprovider.Record,
 			err = &CallbackError{Err: fmt.Errorf("%w: %v", errCallbackPanic, recovered)}
 		}
 	}()
-	return worker.fail(ctx, record, code)
+	return worker.fail.Run(ctx, record, code)
 }

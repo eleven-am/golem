@@ -29,7 +29,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 **Upgrade every worker before relying on `OnJobFailed`:** a go/v0.8.2 worker still fails exhausted leases inside `Claim` without calling it.
 
 **Queue limits change on a running application.** `app.ReconfigureQueue(ctx, queue.Plan{...})` changes `Concurrency`, `ClaimBatch`, per-type `MaxConcurrent` and resource capacities without a restart, and `app.QueuePlan()` reports the active plan and its generation.
-- A plan restates the full configuration: start from `QueuePlan()` and change the fields you need.
+- A plan names only the fields it changes; everything else keeps its value in the active plan.
 - A plan that fails validation changes nothing.
 - Lowering a cap lets running jobs finish.
 - Costs, resource membership and lease settings still require a restart.

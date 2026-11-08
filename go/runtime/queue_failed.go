@@ -51,15 +51,16 @@ func (app *App[P, A]) failedCallbacks(config *QueueConfig, declared []JobFailed[
 	return callbacks, nil
 }
 
-func (app *App[P, A]) failJob(callbacks map[string]JobFailed[P, A]) queueworker.FailFunc {
+func (app *App[P, A]) failJob(callbacks map[string]JobFailed[P, A]) *queueworker.FailHook {
 	if len(callbacks) == 0 {
 		return nil
 	}
-	return func(ctx context.Context, record queueprovider.Record, code string) (bool, error) {
-		callback, declared := callbacks[record.Type]
-		if !declared {
-			return app.queueStore.Fail(ctx, nil, record.ID, record.LeaseToken, code)
-		}
+	has := func(typeName string) bool {
+		_, declared := callbacks[typeName]
+		return declared
+	}
+	return &queueworker.FailHook{Has: has, Run: func(ctx context.Context, record queueprovider.Record, code string) (bool, error) {
+		callback := callbacks[record.Type]
 		meta := queue.Meta{ID: queue.JobID(record.ID), Attempt: int(record.AttemptCount), MaxAttempts: int(record.MaxAttempts), EnqueuedAt: record.EnqueuedAt}
 		var changed bool
 		err := SystemTransaction(ctx, System[P, A]{app: app}, func(transaction *SystemTx[P, A]) error {
@@ -86,5 +87,5 @@ func (app *App[P, A]) failJob(callbacks map[string]JobFailed[P, A]) queueworker.
 			return false, err
 		}
 		return changed, nil
-	}
+	}}
 }
