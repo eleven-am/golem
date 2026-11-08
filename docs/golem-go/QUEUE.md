@@ -587,7 +587,7 @@ func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestE
 			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
 		)
 		return err
-	})
+	}, golem.RetryConflicts(3))
 	return handle, err
 }
 
@@ -623,24 +623,29 @@ func MarkExportFailed(ctx context.Context, tx *SystemTx[Principal], failure queu
 func CancelExport(ctx context.Context, caller *Caller[Principal], args CancelExportArgs) (golem.Row[Export], error) {
 	var handle golem.Row[Export]
 	err := caller.Transaction(ctx, func(tx *CallerTx[Principal]) error {
-		_, err := tx.Exports.UpdateMany(ctx,
-			Exports.ID.Eq(args.ID).And(Exports.Status.Eq(StatusQueued)),
-			Exports.UpdateMany(Exports.CancelRequested.Set(true), Exports.Status.Set(StatusCanceled)),
-		)
-		if err != nil {
-			return err
-		}
+		var err error
 		handle, err = tx.Exports.FindUnique(ctx, Exports.ByID.Value(args.ID))
 		if err != nil {
 			return err
 		}
 		jobID, _ := golem.Value(handle, Exports.JobID).Get()
-		_, err = tx.CancelJob(ctx, queue.JobID(jobID))
+		if _, err = tx.CancelJob(ctx, queue.JobID(jobID)); err != nil {
+			return err
+		}
+		_, err = tx.Exports.UpdateMany(ctx,
+			Exports.ID.Eq(args.ID).And(Exports.Status.Eq(StatusQueued)),
+			Exports.UpdateMany(Exports.CancelRequested.Set(true), Exports.Status.Set(StatusCanceled)),
+		)
 		return err
-	})
+	}, golem.RetryConflicts(3))
 	return handle, err
 }
 ```
+
+`CancelExport` calls `tx.CancelJob` before it touches the status row because
+the failure callback locks the job row first and its status row second; taking
+them in the other order deadlocks on PostgreSQL. Both mutations also pass
+`golem.RetryConflicts(3)`, since a conflict is a normal outcome there.
 
 The program accepts three exports, cancels one before the worker starts, makes
 one fail, and prints each final status:

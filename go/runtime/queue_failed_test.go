@@ -27,6 +27,8 @@ type failedFixture struct {
 	database *sqlx.DB
 	insert   string
 	count    string
+	rename   string
+	lookup   string
 }
 
 func openFailedFixture(t *testing.T, kind string, config *QueueConfig, failed []JobFailed[testPrincipal, testActor]) failedFixture {
@@ -44,7 +46,7 @@ func openFailedApp(t *testing.T, kind string, config *QueueConfig, failed []JobF
 	var schemaFixture schematest.Fixture
 	var database *sqlx.DB
 	var provider golem.Provider
-	var insert, count string
+	var insert, count, rename, lookup string
 	if kind == "postgresql" {
 		dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 		if dsn == "" {
@@ -71,6 +73,8 @@ func openFailedApp(t *testing.T, kind string, config *QueueConfig, failed []JobF
 		provider = golem.PostgreSQL
 		insert = `INSERT INTO "` + string(namespace) + `"."users"("id","name") VALUES ($1,$2)`
 		count = `SELECT COUNT(*) FROM "` + string(namespace) + `"."users" WHERE "name"=$1`
+		rename = `UPDATE "` + string(namespace) + `"."users" SET "name"=$1 WHERE "id"=$2 AND "name"<>$3`
+		lookup = `SELECT "name" FROM "` + string(namespace) + `"."users" WHERE "id"=$1`
 	} else {
 		schemaFixture = schematest.New(t)
 		var err error
@@ -85,6 +89,8 @@ func openFailedApp(t *testing.T, kind string, config *QueueConfig, failed []JobF
 		provider = golem.SQLite
 		insert = `INSERT INTO "users"("id","name") VALUES (?,?)`
 		count = `SELECT COUNT(*) FROM "users" WHERE "name"=?`
+		rename = `UPDATE "users" SET "name"=? WHERE "id"=? AND "name"<>?`
+		lookup = `SELECT "name" FROM "users" WHERE "id"=?`
 	}
 	userDescriptor := golem.GeneratedModelDescriptor[testUser](schemaFixture.User, golem.GeneratedDescriptorShape([]golem.FieldID{schemaFixture.UserID, schemaFixture.UserName}, nil, nil, nil))
 	postDescriptor := golem.GeneratedModelDescriptor[testPost](schemaFixture.Post, golem.GeneratedDescriptorShape([]golem.FieldID{schemaFixture.PostID, schemaFixture.AuthorID, schemaFixture.PostTitle}, nil, nil, nil))
@@ -118,7 +124,7 @@ func openFailedApp(t *testing.T, kind string, config *QueueConfig, failed []JobF
 	if err != nil {
 		return failedFixture{}, err
 	}
-	return failedFixture{app: app, database: database, insert: insert, count: count}, nil
+	return failedFixture{app: app, database: database, insert: insert, count: count, rename: rename, lookup: lookup}, nil
 }
 
 func (fixture failedFixture) users(t *testing.T, name string) int {
