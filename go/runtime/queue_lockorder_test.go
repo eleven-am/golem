@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -115,5 +116,55 @@ func TestStatusRowFirstCancelDeadlocksWithTheFailureCallback(t *testing.T) {
 	callbackErr := run.callbackErr.Load()
 	if !isConflict(run.cancelErr) && callbackErr == nil {
 		t.Fatalf("no side reported the deadlock: cancel err=%v", run.cancelErr)
+	}
+}
+
+func TestRecipeCancelGuardsOnTheObservedJob(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		name := "unguarded"
+		if guarded {
+			name = "guarded"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := openFailedFixture(t, "postgresql", nil, nil)
+			if _, err := fixture.database.ExecContext(ctx, fixture.insert, lockOrderStatusID, "queued:A"); err != nil {
+				t.Fatal(err)
+			}
+			caller, err := fixture.app.ForPrincipal(ctx, testPrincipal{Allow: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			statement := strings.Replace(fixture.rename, `"name"<>`, `"name"=`, 1)
+			err = CallerTransaction(ctx, caller, func(transaction *CallerTx[testPrincipal, testActor]) error {
+				var observed string
+				if err := transaction.caller.executor.transaction.QueryRowContext(ctx, fixture.lookup, lockOrderStatusID).Scan(&observed); err != nil {
+					return err
+				}
+				if _, err := fixture.database.ExecContext(ctx, fixture.rename, "queued:B", lockOrderStatusID, "none"); err != nil {
+					return err
+				}
+				guard := observed
+				if !guarded {
+					guard = "queued:B"
+				}
+				_, err := transaction.caller.executor.transaction.ExecContext(ctx, statement, "canceled", lockOrderStatusID, guard)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status string
+			if err := fixture.database.QueryRowContext(ctx, fixture.lookup, lockOrderStatusID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			want := "canceled"
+			if guarded {
+				want = "queued:B"
+			}
+			if status != want {
+				t.Fatalf("status=%q want %q", status, want)
+			}
+		})
 	}
 }
