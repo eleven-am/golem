@@ -155,7 +155,7 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 		result := make(chan queueprovider.CancelResult, 1)
 		failure := make(chan error, 1)
 		go func() {
-			canceled, cancelErr := store.Cancel(ctx, identity)
+			canceled, cancelErr := store.Cancel(ctx, nil, identity)
 			result <- canceled
 			failure <- cancelErr
 		}()

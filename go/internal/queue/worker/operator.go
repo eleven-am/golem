@@ -120,14 +120,18 @@ func (control operator) Cancel(ctx context.Context, id queue.JobID) (bool, error
 	if err := queueprovider.ValidateOperatorIDs([]string{value}); err != nil {
 		return false, queue.Fail(queue.CodeConfigInvalid, "%v", err)
 	}
-	result, err := control.store.Cancel(ctx, value)
+	result, err := control.store.Cancel(ctx, nil, value)
 	if err != nil {
 		return false, queue.Fail(queue.CodeStoreFailure, "cancel job %s: %v", id, err)
 	}
-	if result.Changed && result.Terminal {
-		observeexec.EmitQueue(control.observer, control.provider, result.Type, observe.PhaseCancel, observe.OutcomeCancelled, observe.ReasonNone, int(result.AttemptCount), 0)
-	}
+	EmitCanceled(control.observer, control.provider, result)
 	return result.Changed, nil
+}
+
+func EmitCanceled(observer observe.Observer, provider golem.Provider, result queueprovider.CancelResult) {
+	if result.Changed && result.Terminal {
+		observeexec.EmitQueue(observer, provider, result.Type, observe.PhaseCancel, observe.OutcomeCancelled, observe.ReasonNone, int(result.AttemptCount), 0)
+	}
 }
 
 func (control operator) CancelMany(ctx context.Context, ids []queue.JobID) (int, error) {
