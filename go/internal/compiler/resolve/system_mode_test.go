@@ -140,3 +140,20 @@ func TestSystemReadOnlyStructTagFailsToResolveNamingBothModes(t *testing.T) {
 	}
 	t.Fatalf("diagnostics = %#v", result.Diagnostics)
 }
+
+func TestInternalPrimaryKeyIsRefusedWithADedicatedCode(t *testing.T) {
+	result := systemModeRaw(t, "ID", "internal")
+	found := false
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code != "P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY" {
+			continue
+		}
+		found = true
+		if !strings.Contains(diagnostic.Message, "ID") || !strings.Contains(diagnostic.Message, "primary key") {
+			t.Fatalf("diagnostic message = %q", diagnostic.Message)
+		}
+	}
+	if !found {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+}

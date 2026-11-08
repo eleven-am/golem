@@ -9,6 +9,9 @@ func resolveModes(field ir.RawFieldDecl) ([]ir.FieldMode, []ir.Diagnostic) {
 	if diagnostics != nil || !hasAttribute(field.GolemAttrs, "internal") {
 		return modes, diagnostics
 	}
+	if hasAttribute(field.GolemAttrs, "pk") {
+		return nil, []ir.Diagnostic{errorf("P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY", field.Span, "field %s is a primary key and cannot be internal: the primary key identifies rows in every API surface", field.GoName)}
+	}
 	if hasAttribute(field.GolemAttrs, "hidden") {
 		return nil, []ir.Diagnostic{errorf("P1_EXPOSURE_MODE_CONFLICT", field.Span, "field %s combines internal and hidden: hidden already removes the field from the Go API, internal keeps it", field.GoName)}
 	}
