@@ -396,3 +396,65 @@ func TestHookEnqueueInsideABatchHookRollsBackWithTheBatch(t *testing.T) {
 		fixture.requireNoJob(t, id)
 	})
 }
+
+func requireWorkerClaimsCommittedJob(t *testing.T, fixture *hookEnqueueFixture, trigger func(context.Context)) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	running := make(chan error, 1)
+	go func() { running <- fixture.app.RunQueueWorker(ctx) }()
+	trigger(ctx)
+	select {
+	case <-fixture.handled:
+	case <-ctx.Done():
+		t.Fatal("the worker never claimed the committed job")
+	}
+	cancel()
+	<-running
+}
+
+func TestHookEnqueueInsideABatchHookWakesTheWorkerAfterCommit(t *testing.T) {
+	limits := queue.DefaultLimits()
+	limits.PollInterval = time.Minute
+	forEachHookEnqueueProvider(t, true, limits, func(t *testing.T, fixture *hookEnqueueFixture) {
+		author := golem.UUID{15: 1}
+		if _, err := SystemCreate(context.Background(), fixture.app.System(), fixture.postDescriptor, systemAuthorPost(fixture.mutationVocabularyFixture, 10, &author, "seed")); err != nil {
+			t.Fatal(err)
+		}
+		fixture.hook = func(hookContext context.Context, executor golem.HookExecutor) error {
+			_, err := golem.HookEnqueue(hookContext, executor, fixture.pending(t, "batch-wake"))
+			return err
+		}
+		requireWorkerClaimsCommittedJob(t, fixture, func(ctx context.Context) {
+			caller := mustMutationResultCaller(t, fixture.mutationResultFixture)
+			if _, err := CallerUpdateMany(ctx, caller, fixture.postDescriptor, fixture.postID.Eq(golem.UUID{15: 10}), fixture.updateManyTitle("batched")); err != nil {
+				t.Error(errorChain(err))
+			}
+		})
+	})
+}
+
+func TestHookEnqueueInsideANestedCreateHookWakesTheWorkerAfterCommit(t *testing.T) {
+	limits := queue.DefaultLimits()
+	limits.PollInterval = time.Minute
+	forEachHookEnqueueProvider(t, true, limits, func(t *testing.T, fixture *hookEnqueueFixture) {
+		fixture.onPost = func(hookContext context.Context, executor golem.HookExecutor) error {
+			_, err := golem.HookEnqueue(hookContext, executor, fixture.pending(t, "nested-wake"))
+			return err
+		}
+		schema := fixture.schema
+		child := systemAuthorPost(fixture.mutationVocabularyFixture, 20, nil, "nested-child")
+		target := golem.GeneratedUniqueSelectorValue[mutationResultUser](schema.User, schema.UserKey,
+			golem.GeneratedSelectorComponent(schema.UserID, golem.UUID{15: 1}))
+		update := golem.GeneratedUpdateInput[mutationResultUser](schema.User,
+			golem.GeneratedSetFieldValue(schema.User, fixture.userName, "nested-trigger"),
+			golem.GeneratedNestedCreate[mutationResultUser, mutationResultPost](schema.User, schema.UserPosts, schema.Authorship, schema.Post, child),
+		)
+		requireWorkerClaimsCommittedJob(t, fixture, func(ctx context.Context) {
+			caller := mustMutationResultCaller(t, fixture.mutationResultFixture)
+			if _, err := CallerUpdate(ctx, caller, fixture.userDescriptor, target, update); err != nil {
+				t.Error(errorChain(err))
+			}
+		})
+	})
+}

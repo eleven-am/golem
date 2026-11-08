@@ -12,9 +12,7 @@ import (
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
-	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	"github.com/eleven-am/golem/go/observe"
-	"github.com/eleven-am/golem/go/queue"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -56,7 +54,7 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 					return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: enqueue request is invalid")
 				}
 				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-					id, err := hookEnqueue(ctx, caller.app, binding, pending)
+					id, err := txEnqueue(ctx, caller.app, binding, pending)
 					if err != nil {
 						return golem.RuntimeHookExecutorResult{}, err
 					}
@@ -67,28 +65,6 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 			}
 		})
 	})
-}
-
-func hookEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *executionBinding, pending queue.Pending) (queue.JobID, error) {
-	if app == nil || app.queueStore == nil {
-		return "", queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
-	}
-	if callErr := binding.requireAdmitted(ctx); callErr != nil {
-		return "", callErr
-	}
-	if _, err := binding.queryerFor(app.database); err != nil {
-		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")
-	}
-	executor, ok := binding.executor.(queueprovider.Executor)
-	if !ok || !binding.scoped {
-		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")
-	}
-	stored, err := app.enqueueOn(ctx, executor, pending)
-	if err != nil {
-		return "", err
-	}
-	binding.queueEnqueued(app.queueWorker.Wake)
-	return queue.JobID(stored.ID), nil
 }
 
 func withinHookWriteSavepoint[R any](ctx context.Context, binding *executionBinding, run func() (R, error)) (R, error) {

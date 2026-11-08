@@ -165,8 +165,11 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 	if callErr := binding.requireAdmitted(ctx); callErr != nil {
 		return "", callErr
 	}
-	executor, err := binding.transactionFor(app.database)
-	if err != nil {
+	if _, err := binding.queryerFor(app.database); err != nil {
+		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")
+	}
+	executor, ok := binding.executor.(queueprovider.Executor)
+	if !ok || !binding.scoped {
 		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")
 	}
 	stored, err := app.enqueueOn(ctx, executor, pending)
