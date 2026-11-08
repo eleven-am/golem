@@ -437,8 +437,12 @@ from a row the caller's policy allowed; never cancel an ID taken from the
 arguments. Cancellation is cooperative, not a
 rollback. A job that has not started is cancelled at once. A job that is
 running is told at its next lease renewal, and may finish first. Work already
-done stays done. That is why the handler checks the row before it writes: a
-handler that finishes after the cancel must not overwrite `canceled` with `succeeded`. A
+done stays done. That is why the handler's success write is conditional on the row still being
+`queued`: a handler that finishes after the cancel must not overwrite `canceled`
+with `succeeded`. Reading the status first is not enough. Under PostgreSQL's
+default Read Committed isolation a cancel or failure can commit between the read
+and an unconditional write, so the write itself carries the status predicate and
+zero affected rows means the export was cancelled or failed meanwhile. A
 handler with several steps repeats the check between steps. In the program
 below the mutation marks a queued row `canceled` in its own transaction, and
 `RunExport` declines any row that is no longer `queued`.
@@ -603,8 +607,10 @@ func RunExport(ctx context.Context, system System[Principal], payload ExportPayl
 		if payload.Fail {
 			return errors.New("renderer unavailable")
 		}
-		_, err = tx.Exports.Update(ctx, Exports.ByID.Value(payload.ID),
-			Exports.Update(Exports.Status.Set(StatusSucceeded), Exports.Result.Set("export-"+payload.ID+".zip")))
+		_, err = tx.Exports.UpdateMany(ctx,
+			Exports.ID.Eq(payload.ID).And(Exports.Status.Eq(StatusQueued)),
+			Exports.UpdateMany(Exports.Status.Set(StatusSucceeded), Exports.Result.Set("export-"+payload.ID+".zip")),
+		)
 		return err
 	})
 }
