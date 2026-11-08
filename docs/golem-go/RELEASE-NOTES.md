@@ -5,12 +5,26 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.3
+go get github.com/eleven-am/golem/go@v0.8.4
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.4
+
+**Custom operations can cancel jobs on their own transaction.** `tx.CancelJob(ctx, jobID)` on `CallerTx` and `SystemTx` returns the same `(bool, error)` as `QueueOperator().Cancel`, but the cancellation commits or rolls back with the operation's other writes. Cancel only a job ID read in the same transaction from a row the caller's policy allowed, never an ID taken from arguments. A PostgreSQL serialization failure during `CancelJob` or `tx.Enqueue` is now reported as a conflict, so `RetryConflicts` retries it. The durable-actions recipe no longer needs an `Operator` package variable.
+
+**A queue plan names only what it changes.** Fields left out of a `ReconfigureQueue` plan keep their value in the active plan, so raising one cap no longer reverts an earlier change to another. In go/v0.8.3 a plan restated the full configuration.
+
+**Fewer writes on terminal failure.** Only job types that have an `OnJobFailed` callback persist a deferred failure intent. Other types fail with a single write.
+
+**An `internal` primary key is refused at compile time** with `P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`, instead of a client-manifest error.
+
+**One enqueue path for every hook.** `HookEnqueue` in single-row, batch and nested hooks uses the same transactional path. Tests prove the queue worker wakes right after commit on each of them.
 
 ---
 
