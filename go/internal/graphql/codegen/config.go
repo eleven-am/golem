@@ -651,9 +651,15 @@ func hasCustomOperation(compilation *ir.CompilationIR, kind ir.CustomOperationKi
 	return false
 }
 
+const formatPasses = 4
+
 func formatGeneratedSource(source []byte) ([]byte, error) {
-	for pass := 0; pass < 4; pass++ {
-		formatted, err := format.Source(source)
+	return formatToFixedPoint(source, format.Source, formatPasses)
+}
+
+func formatToFixedPoint(source []byte, run func([]byte) ([]byte, error), passes int) ([]byte, error) {
+	for pass := 0; pass < passes; pass++ {
+		formatted, err := run(source)
 		if err != nil {
 			return nil, err
 		}
@@ -662,5 +668,5 @@ func formatGeneratedSource(source []byte) ([]byte, error) {
 		}
 		source = formatted
 	}
-	return source, nil
+	return nil, fmt.Errorf("generated GraphQL source did not reach a gofmt fixed point after %d passes", passes)
 }

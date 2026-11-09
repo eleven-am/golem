@@ -739,3 +739,20 @@ func TestFormatGeneratedSourceIsStableUnderGofmt(t *testing.T) {
 		t.Fatalf("formatted source changes under gofmt:\n%s\n---\n%s", formatted, again)
 	}
 }
+
+func TestFormatToFixedPointFailsWhenFormattingNeverConverges(t *testing.T) {
+	alternate := func(source []byte) ([]byte, error) {
+		if bytes.Equal(source, []byte("a")) {
+			return []byte("b"), nil
+		}
+		return []byte("a"), nil
+	}
+	if _, err := formatToFixedPoint([]byte("a"), alternate, 4); err == nil {
+		t.Fatal("non-converging formatting returned no error")
+	}
+	stable := func(source []byte) ([]byte, error) { return source, nil }
+	formatted, err := formatToFixedPoint([]byte("a"), stable, 4)
+	if err != nil || string(formatted) != "a" {
+		t.Fatalf("formatted = %q, %v; want a, nil", formatted, err)
+	}
+}
