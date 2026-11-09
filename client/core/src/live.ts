@@ -192,7 +192,7 @@ export class LiveSync {
     return this.statuses.get(query.queryHash)
   }
 
-  hasQueuedRefetch(query: Query): boolean {
+  private hasQueuedRefetch(query: Query): boolean {
     const entry = this.entries.get(query.queryHash)
     return entry !== undefined && (entry.coalescer.pending || entry.derivedStale)
   }

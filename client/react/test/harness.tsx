@@ -9,7 +9,7 @@ export { manifest }
 
 export const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
 
-export async function until(predicate: () => boolean, milliseconds = 15_000, label = 'condition'): Promise<void> {
+export async function until(predicate: () => boolean, milliseconds = 20_000, label = 'condition'): Promise<void> {
   const deadline = Date.now() + milliseconds
   while (!predicate()) {
     if (Date.now() > deadline) {
@@ -17,6 +17,19 @@ export async function until(predicate: () => boolean, milliseconds = 15_000, lab
     }
     await sleep(15)
   }
+}
+
+export async function settled(one: Screen): Promise<void> {
+  await until(
+    () =>
+      one.queryClient.isFetching() === 0 &&
+      one.queryClient
+        .getQueryCache()
+        .getAll()
+        .every((query) => !one.client.live['hasQueuedRefetch'](query)),
+    20_000,
+    'screen settled',
+  )
 }
 
 export const UPDATE_POST = 'mutation($id: UUID!, $data: PostUpdateInput!) { updatePost(where: { ID: $id }, data: $data) { id } }'

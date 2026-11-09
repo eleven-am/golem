@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GolemNotLiveError } from '@eleven-am/golem-client'
-import { GolemProvider, useGolemInfiniteQuery, useGolemMutation, useGolemQuery, useGolemStaticQuery, useGolemStatus } from '../src/index.js'
+import { GolemProvider, useGolemInfiniteQuery, useGolemConnection, useGolemMutation, useGolemQuery, useGolemStaticQuery, useGolemStatus } from '../src/index.js'
 import { postInput } from '../../core/test/harness/social.js'
 import { Boundary } from './boundary.js'
-import { DELETE_POST, UPDATE_POST, until, type Screen, screen } from './harness.js'
+import { DELETE_POST, settled, UPDATE_POST, until, type Screen, screen } from './harness.js'
 
 const LIST = 'query($t: String!) { posts(where: { title: { contains: $t }, published: { equals: true } }, orderBy: [{ title: asc }]) { id title } }'
 
@@ -35,6 +35,11 @@ function PostList({ token }: { token: string }) {
       </ul>
     </div>
   )
+}
+
+function Connection() {
+  const connection = useGolemConnection()
+  return <p data-testid="connection">{connection}</p>
 }
 
 function StatusOnly({ token }: { token: string }) {
@@ -132,7 +137,7 @@ describe('useGolemQuery against the social server', () => {
     )
     await until(() => stateOf(one) === 'LIVE' && listed(one).length === 2, 15_000, 'first render')
     expect(listed(one)).toEqual([`${tag}-exit`, `${tag}-keep`])
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await settled(one)
 
     const added = await one.createPost(`${tag}-added`)
     await until(() => listed(one).includes(`${tag}-added`), 15_000, 'create')
@@ -159,7 +164,7 @@ describe('useGolemQuery against the social server', () => {
       </GolemProvider>,
     )
     await until(() => stateOf(one) === 'LIVE', 15_000, 'live')
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await settled(one)
     one.container.querySelector<HTMLButtonElement>('[data-testid="compose"]')?.click()
     await until(() => listed(one).includes(`${tag}-composed`), 15_000, 'mutation row')
     expect(mutate).toHaveBeenCalledTimes(1)
@@ -189,7 +194,7 @@ describe('useGolemQuery against the social server', () => {
       { strict: true },
     )
     await until(() => stateOf(one) === 'LIVE' && listed(one).length === 1, 15_000, 'strict first render')
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await settled(one)
     await one.createPost(`${tag}-two`)
     await until(() => listed(one).length === 2, 15_000, 'strict create')
   })
@@ -223,7 +228,7 @@ describe('other hooks', () => {
     )
     const pages = () => one.container.querySelector('[data-testid="pages"]')?.textContent
     await until(() => pages() === `${tag}-a,${tag}-b`, 15_000, 'first page')
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await settled(one)
     one.container.querySelector<HTMLButtonElement>('[data-testid="more"]')?.click()
     await until(() => pages() === `${tag}-a,${tag}-b,${tag}-c`, 15_000, 'second page')
     await one.createPost(`${tag}-aa`)
@@ -255,5 +260,26 @@ describe('other hooks', () => {
       </GolemProvider>,
     )
     await until(() => one.text() === '1', 15_000, 'count')
+  })
+})
+
+describe('useGolemConnection', () => {
+  it('is idle before any live query and open once one is live', async () => {
+    const one = await fresh()
+    const tag = token()
+    const connection = () => one.container.querySelector('[data-testid="connection"]')?.textContent
+    one.render(
+      <GolemProvider client={one.client}>
+        <Connection />
+      </GolemProvider>,
+    )
+    await until(() => connection() === 'idle')
+    one.render(
+      <GolemProvider client={one.client}>
+        <Connection />
+        <PostList token={tag} />
+      </GolemProvider>,
+    )
+    await until(() => stateOf(one) === 'LIVE' && connection() === 'open')
   })
 })

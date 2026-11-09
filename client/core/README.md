@@ -151,18 +151,7 @@ The client adds `_version` and `__typename` to every selection of a model with e
 - `golem.transport.status`: `idle`, `connecting`, `open`, `reconnecting`, `unauthenticated`, `forbidden`, `invalid`, `protocol-mismatch`, `contract-mismatch` or `deadline-required`.
 - `golem.transport.onStatus(listener)`: calls you on every change and returns an unsubscribe function.
 
-Wrap them in your framework's external-store primitive. In React that is `useSyncExternalStore`:
-
-```tsx
-import { useSyncExternalStore } from 'react'
-
-function useConnection() {
-  return useSyncExternalStore(
-    (notify) => golem.transport.onStatus(notify),
-    () => golem.transport.status,
-  )
-}
-```
+Wrap them in your framework's external-store primitive. In React, `useGolemConnection()` from `@eleven-am/golem-react` does it.
 
 #### Why there is a manifest
 
