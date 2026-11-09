@@ -1,13 +1,13 @@
 # Golem (Go): a working guide for an AI agent
 
-**Describes go/v0.8.5 and the TypeScript client 0.2.0.** Module path:
+**Describes go/v0.8.6 and the TypeScript client 0.2.0.** Module path:
 `github.com/eleven-am/golem/go`. The `go/` suffix is part of the path. Tags
 are `go/vX.Y.Z`; a plain `vX.Y.Z` tag belongs to the TypeScript packages in the
 same repository and does not describe this module. The module needs Go 1.26.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.5
-go install github.com/eleven-am/golem/go/cmd/golem@v0.8.5
+go get github.com/eleven-am/golem/go@v0.8.6
+go install github.com/eleven-am/golem/go/cmd/golem@v0.8.6
 ```
 
 Keep the CLI and the library on one version. Generated code carries a contract
@@ -21,7 +21,7 @@ npm install @eleven-am/golem-client@0.2.0 @eleven-am/golem-react@0.2.0 @tanstack
 ```
 
 This file is meant to be enough to build with golem without reading its
-source. Every Go code block passes `go vet` against go/v0.8.5 (fragments inside
+source. Every Go code block passes `go vet` against go/v0.8.6 (fragments inside
 a complete program; schema-package blocks are files of the verified example).
 The end-to-end program in section 27 was generated, migrated and run as shown
 against SQLite, and with the provider swapped, against PostgreSQL. Where the shipped docs and the code disagree, this file
@@ -78,7 +78,7 @@ follows the code and says so.
    mutations too: a resolver that returns the row of an `Upsert` or `Create`
    made without `Select` fails over GraphQL with
    `COMMITTED_RESULT_UNAVAILABLE` ("result row has no identity") after its
-   writes committed. Verified; the QUEUE.md recipe has this defect.
+   writes committed. Verified.
 4. **`Get()` returns `(value, present)`.** It reports `false` for an
    unselected field, a stored null and a policy-masked field. Never ignore the
    second return.
@@ -145,11 +145,12 @@ follows the code and says so.
 23. **Every list a custom operation or computed field returns declares its
     maximum** with `golem.MaxItems` or `golem.GraphQLList(type, max)`, or
     `generate` fails with `P5_GRAPHQL_LIST_MAX_REQUIRED`.
-24. **`golem.ActorFrom` is empty in a custom query resolver.** At go/v0.8.5 it
-    returns the actor in hooks and in custom mutations (over GraphQL and
-    through `Mutate`), but a zero actor in a custom query served over GraphQL,
-    although the 0.8.3 notes say otherwise. Verified. Let the caller's policy
-    scope a custom query instead of filtering on the actor.
+24. **`golem.ActorFrom` works in hooks and in custom operations.** Since
+    go/v0.8.6 a custom query served over GraphQL receives the caller's actor
+    like a custom mutation (over GraphQL or through `Mutate`). Before
+    go/v0.8.6 a custom query got the zero actor, so a server older than that
+    must let the caller's policy scope the query instead of filtering on the
+    actor. Calling a resolver function directly skips the actor.
 25. **Never hand-edit `zz_golem_*`, and never change a `golem:"id=..."`
     identity.**
 26. **On SQLite, writes to a full-text-indexed table need a connection opened
@@ -410,7 +411,7 @@ a GraphQL create root, a required `internal` field with no default must also be
 `system` or hook-owned (`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`), and a unique
 one must be `system`. Kernel-mode schemas have no such requirement. Verified:
 `KeyHash` above appears nowhere in the SDL or `zz_golem_client.gen.ts`, and
-`Authors.ByKeyHash` works from Go.
+`FindUnique(ctx, Authors.ByKeyHash.Value(hash))` works from Go.
 
 **Writing a `system` field.** The generated field has no `Create`/`Set` of its
 own. Use the system field set: `Authors.System().KeyHash.Create(v)` (and
@@ -599,7 +600,9 @@ version, err := caller.Notes.FindUnique(ctx, notes.Notes.ByID.Value(id), notes.N
 - Relations: `golem.One(row, X.Rel.ToOne)`, `golem.Many(row, X.Rel.ToMany)`,
   `golem.RelationCount(row, X.Rel.ToMany)`. To-many predicates: `Some`,
   `Every`, `None`; to-one: `Is`, `IsNot`, `IsNull`, `IsNotNull`.
-- Unique selectors are generated per non-null key: `ByID`, `ByHandle`,
+- `By<Field>` selectors exist only for non-null unique fields (never for a
+  `golem.Null[T]` field), and are used inside `FindUnique(ctx, X.ByField.Value(v))`.
+  Selectors are generated per non-null key: `ByID`, `ByHandle`,
   `ByKeyHash`.
 - `X.GolemVersion` is the row version of a model with `Subscriptions`
   (section 14); it works in `Select` and predicates and is never writable.
@@ -878,8 +881,7 @@ AfterCommitError: func(_ context.Context, failure golem.AfterCommitFailure) {
 ```
 
 - **`golem.ActorFrom[Actor](ctx)`** returns the caller's actor in hooks and in
-  custom mutation resolvers. In a custom query resolver served over GraphQL it
-  returns the zero actor at go/v0.8.5 (rule 24).
+  custom query and mutation resolvers (custom queries since go/v0.8.6, rule 24).
 - **Input values.** `golem.RuntimeFreezeCreateInput` /
   `RuntimeFreezeUpdateInput` then `FrozenMutationField.Value()` give the same
   Go value on every path: the field's Go type, an enum as its wire `string`, a
@@ -898,8 +900,8 @@ Three kinds of operation own writes:
 | custom mutation | `golem.Mutation(graphql, "name", Fn)` in `DefineGraphQL` | GraphQL, or Go through `Mutate` | `*Caller[P]`, args |
 | transaction operation | `golem.TxOperation(ops, "name", Fn)` in `DefineOperations` | Go through `Run` on a `CallerTx` | `*CallerTx[P]`, args |
 
-There is no generated Go dispatcher for custom queries: `golem.Query` is only
-the declaration (verified). A resolver never receives `System`, a transaction
+There is no generated `Query` dispatcher: `golem.Query` is only the
+declaration, and a custom query runs only over GraphQL (verified). A resolver never receives `System`, a transaction
 or a database; it may open `caller.Transaction` itself, and inside it use
 `tx.Enqueue` and `tx.CancelJob`.
 
@@ -1906,9 +1908,9 @@ The race guards, each one load-bearing:
    still returns the old job: the same ID means coalesced (return the row
    untouched); a different ID means a new job, so reset the row to `queued`.
 3. **Project the upsert.** `Exports.Select(Exports.ID)` on the upsert is
-   required for the mutation to work over GraphQL (rule 3). QUEUE.md omits it;
-   its `requestExport` fails with `COMMITTED_RESULT_UNAVAILABLE` over GraphQL
-   (verified) and works only through `Mutate`.
+   required for the mutation to work over GraphQL (rule 3). QUEUE.md omitted it
+   before go/v0.8.6, so its `requestExport` failed with
+   `COMMITTED_RESULT_UNAVAILABLE` over GraphQL and worked only through `Mutate`.
 4. **Handler is idempotent and writes conditionally.** It returns early unless
    the row is `queued`, and its success write is an `UpdateMany` that also
    matches `status = queued`. Under PostgreSQL Read Committed a cancel or
@@ -2506,7 +2508,7 @@ migration.
 
 ---
 
-## 29. Recent changes (go/v0.6.5 to go/v0.8.5)
+## 29. Recent changes (go/v0.6.5 to go/v0.8.6)
 
 Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
@@ -2527,6 +2529,7 @@ Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
 | Release | What changed |
 |---|---|
+| go/v0.8.6 | custom query resolvers receive the caller's actor (`ActorFrom` works in custom queries as in mutations); generated GraphQL Go code is gofmt-clean; doc fixes: no generated `Query` dispatcher, `FindUnique(ctx, Keys.ByKeyHash.Value(hash))`, QUEUE.md `requestExport` selects `Exports.ID`, `By<Field>` only for non-null unique fields |
 | go/v0.8.5 | publisher wakes on commit (~20 ms); recipe race guards (cancel order, job-ID match, conditional success write) |
 | go/v0.8.4 | `tx.CancelJob`; serialization failures in `CancelJob`/`Enqueue` are `CONFLICT`; partial queue plans; failure intent only for types with `OnJobFailed`; `internal` primary key refused at compile time; one `HookEnqueue` path |
 | go/v0.8.3 | `HookEnqueue`; `OnJobFailed`; `ReconfigureQueue`/`QueuePlan`; `ActorFrom` in custom mutations; `internal`; `relationGroupBy` models in the manifest; durable-actions recipe |
