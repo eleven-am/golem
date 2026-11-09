@@ -147,17 +147,11 @@ type renderContext struct {
 }
 
 func (context *renderContext) bindRowVersion(model schema.Model) error {
-	field, enabled := model.RowVersion()
-	if !enabled {
-		return nil
-	}
-	value := policyir.FieldID(field)
-	namespace, _ := context.registry.PhysicalSystemNamespace(golem.PostgreSQL)
-	next, err := rowversion.Next(context.provider, namespace)
+	version, next, err := rowversion.Bind(context.provider, context.registry, model)
 	if err != nil {
-		return fail(CodeSchema, context.modelID(), value, "row version expression is unavailable", err)
+		return fail(CodeSchema, context.modelID(), *version, "row version expression is unavailable", err)
 	}
-	context.version, context.versionNext = &value, next
+	context.version, context.versionNext = version, next
 	return nil
 }
 
@@ -169,8 +163,7 @@ func (context renderContext) advanceVersion() ([]Statement, error) {
 	if !ok {
 		return nil, fail(CodeSchema, context.modelID(), *context.version, "row version field has no physical descriptor", nil)
 	}
-	projected := policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(rowversion.AdvanceColumn()))
-	text := rowversion.Advance(projected + " AS " + context.dialect.Quote("golem_c0"))
+	text := rowversion.AdvanceSQL(context.provider, context.dialect, field.Type)
 	return []Statement{{role: StampVersion, text: text, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyCapturedRows, expected: 1}}, nil
 }
 
