@@ -15,6 +15,7 @@ them is code that ran.
   for a real application.
 - **[REACT.md](./REACT.md)** — a live React front end on your golem server:
   provider, live lists, mutations, infinite scroll and counts.
+- **[AGENTS.md](./AGENTS.md)** — one-file working guide for AI agents: rules that bite, every capability, a verified end-to-end example.
 
 ## Capabilities
 
