@@ -97,7 +97,7 @@ On a real field:
 Use `hidden` for a column no code should touch through golem, and `internal`
 for one your own Go code must still read, filter or look up by but no client
 may see: an API key hash is a non-null `string` field tagged `golem:"unique;internal;system"`,
-found with `FindUnique(Keys.ByKeyHash(hash))` in authentication middleware and absent from every GraphQL type,
+found with `FindUnique(ctx, Keys.ByKeyHash.Value(hash))` in authentication middleware and absent from every GraphQL type,
 input, enum, subscription payload and the client manifest. A `By<Field>` selector is generated only for a non-null unique field, never for a `golem.Null[T]` one. `internal` combines
 with everything except `hidden`, and a primary key cannot be `internal`
 (`P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`). On a model with a GraphQL create root, a
