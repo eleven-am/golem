@@ -146,11 +146,12 @@ follows the code and says so.
     maximum** with `golem.MaxItems` or `golem.GraphQLList(type, max)`, or
     `generate` fails with `P5_GRAPHQL_LIST_MAX_REQUIRED`.
 24. **`golem.ActorFrom` works in hooks and in custom operations.** Since
-    go/v0.8.6 a custom query served over GraphQL receives the caller's actor
-    like a custom mutation (over GraphQL or through `Mutate`). Before
-    go/v0.8.6 a custom query got the zero actor, so a server older than that
-    must let the caller's policy scope the query instead of filtering on the
-    actor. Calling a resolver function directly skips the actor.
+    go/v0.8.6 a custom query receives the caller's actor over GraphQL or from
+    Go through the generated `Query`, and a custom mutation over GraphQL or
+    through `Mutate`. Before go/v0.8.6 a custom query got the zero actor and
+    could not be called from Go with one, so a server older than that must let
+    the caller's policy scope the query instead of filtering on the actor.
+    Calling a resolver function directly skips the actor.
 25. **Never hand-edit `zz_golem_*`, and never change a `golem:"id=..."`
     identity.**
 26. **On SQLite, writes to a full-text-indexed table need a connection opened
@@ -896,12 +897,13 @@ Three kinds of operation own writes:
 
 | Kind | Declared with | Runs from | Receives |
 |---|---|---|---|
-| custom query | `golem.Query(graphql, "name", Fn, golem.MaxItems(...))` in `DefineGraphQL` | GraphQL only | `*Caller[P]`, args |
+| custom query | `golem.Query(graphql, "name", Fn, golem.MaxItems(...))` in `DefineGraphQL` | GraphQL, or Go through the generated `Query` (since go/v0.8.6) | `*Caller[P]`, args |
 | custom mutation | `golem.Mutation(graphql, "name", Fn)` in `DefineGraphQL` | GraphQL, or Go through `Mutate` | `*Caller[P]`, args |
 | transaction operation | `golem.TxOperation(ops, "name", Fn)` in `DefineOperations` | Go through `Run` on a `CallerTx` | `*CallerTx[P]`, args |
 
-There is no generated `Query` dispatcher: `golem.Query` is only the
-declaration, and a custom query runs only over GraphQL (verified). A resolver never receives `System`, a transaction
+`golem.Query` declares a custom query; since go/v0.8.6 the generated
+`Query[P, Args, R](ctx, caller, resolver, args)` runs it from Go with the
+caller's actor, the read-side twin of `Mutate`. A resolver never receives `System`, a transaction
 or a database; it may open `caller.Transaction` itself, and inside it use
 `tx.Enqueue` and `tx.CancelJob`.
 
@@ -2529,7 +2531,7 @@ Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
 | Release | What changed |
 |---|---|
-| go/v0.8.6 | custom query resolvers receive the caller's actor (`ActorFrom` works in custom queries as in mutations); generated GraphQL Go code is gofmt-clean; doc fixes: no generated `Query` dispatcher, `FindUnique(ctx, Keys.ByKeyHash.Value(hash))`, QUEUE.md `requestExport` selects `Exports.ID`, `By<Field>` only for non-null unique fields |
+| go/v0.8.6 | custom queries receive the caller's actor over GraphQL and from Go through the new generated `Query` (the read-side twin of `Mutate`); generated GraphQL Go code is gofmt-clean and generation fails if gofmt does not converge; doc fixes: `FindUnique(ctx, Keys.ByKeyHash.Value(hash))`, QUEUE.md `requestExport` selects `Exports.ID`, `By<Field>` only for non-null unique fields |
 | go/v0.8.5 | publisher wakes on commit (~20 ms); recipe race guards (cancel order, job-ID match, conditional success write) |
 | go/v0.8.4 | `tx.CancelJob`; serialization failures in `CancelJob`/`Enqueue` are `CONFLICT`; partial queue plans; failure intent only for types with `OnJobFailed`; `internal` primary key refused at compile time; one `HookEnqueue` path |
 | go/v0.8.3 | `HookEnqueue`; `OnJobFailed`; `ReconfigureQueue`/`QueuePlan`; `ActorFrom` in custom mutations; `internal`; `relationGroupBy` models in the manifest; durable-actions recipe |
