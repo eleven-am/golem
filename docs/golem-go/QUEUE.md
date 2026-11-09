@@ -523,7 +523,7 @@ func DefineSchema(schema *golem.Schema) {
 	golem.SchemaName(schema, "durable")
 	golem.Actor[Actor](schema)
 	golem.Model[Export](schema)
-	golem.Providers(schema, golem.SQLite)
+	golem.Providers(schema, golem.SQLite, golem.PostgreSQL)
 }
 ```
 
@@ -660,6 +660,11 @@ stays queued, and the row read back at the end shows that. The mutation returns
 that row, so the caller sees the cancelled status and not the pre-cancel values.
 Both mutations also pass `golem.RetryConflicts(3)`, since a conflict is a normal
 outcome there.
+
+`main` passes `events.NewMemoryTransport` and a no-op operator audit because it
+is one process with no audit sink. `Open` requires both on purpose: a memory
+transport reaches no second replica, and a silent audit default would drop
+operator actions unrecorded.
 
 The program accepts three exports, cancels one before the worker starts, makes
 one fail, and prints each final status:
