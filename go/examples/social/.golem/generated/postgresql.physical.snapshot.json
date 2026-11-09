@@ -1,12 +1,12 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "physical_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
-  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
+  "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
+  "contractFingerprint": "e7e5839610ae16bb2c9950183005c2bf8f5c5c28862ef84e38047f0e016a9fc4",
   "provider": "postgresql",
-  "physicalFingerprint": "7e8a6410722d0334686a5401333c34ae458da530483ea8c95ead5685bd5d8389",
+  "physicalFingerprint": "0af7db4a93dfb7f4993775990912fea9a12787aa84c7030e731da9da7eec86c7",
   "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
+  "generationDigest": "50dfa549e77e42ebe5900cc9e1a588037cb8c936716bdd27994a09914693da7d",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -382,6 +382,30 @@
             "Default": {
               "Kind": "none",
               "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "dcb5853ddbc2df1da3531a87a4a6eab1",
+            "Name": "golem_version",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.bigint",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "literal",
+              "Literal": {
+                "kind": "integer",
+                "canonical": "0"
+              },
               "Expression": null
             },
             "Generated": null,
