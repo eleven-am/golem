@@ -62,7 +62,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 - Costs, resource membership and lease settings still require a restart.
 - Raising a shared resource takes full effect once the jobs leased under the old capacity end.
 
-**Custom operations see the caller's actor.** Custom query and mutation resolvers now receive the caller's actor, so `golem.ActorFrom[Actor](ctx)` works in them as it does in hooks. Call resolvers through the generated `Mutate` or `Query`; calling the resolver function directly skips the actor.
+**Custom operations see the caller's actor.** Custom query and mutation resolvers now receive the caller's actor, so `golem.ActorFrom[Actor](ctx)` works in them as it does in hooks. Call a custom mutation through the generated `Mutate`; calling the resolver function directly skips the actor. There is no generated `Query` dispatcher.
 
 **The `internal` field tag.** A field tagged `golem:"internal"` stays fully available to Go and system code, including unique lookups, filters and order. It is removed from:
 - every GraphQL type, input, enum and aggregate;

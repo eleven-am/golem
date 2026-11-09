@@ -589,6 +589,7 @@ func RequestExport(ctx context.Context, caller *Caller[Principal], args RequestE
 		handle, err = tx.Exports.Upsert(ctx, Exports.ByID.Value(args.ID),
 			Exports.Create(Exports.ID.Create(args.ID), Exports.OwnerID.Create(golem.ActorFrom[Actor](ctx).UserID), Exports.JobID.Create(string(jobID)), Exports.ErrorCode.Create(""), Exports.Result.Create("")),
 			Exports.Update(Exports.JobID.Set(string(jobID)), Exports.Status.Set(StatusQueued), Exports.CancelRequested.Set(false), Exports.ErrorCode.Set("")),
+			Exports.Select(Exports.ID),
 		)
 		return err
 	}, golem.RetryConflicts(3))
