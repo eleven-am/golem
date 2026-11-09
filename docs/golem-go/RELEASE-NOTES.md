@@ -5,12 +5,25 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.5
+go get github.com/eleven-am/golem/go@v0.8.6
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.6
+
+**Custom query resolvers receive the caller's actor.** `golem.ActorFrom` now returns the caller's actor inside a custom query served over GraphQL, as it already did for custom mutations. go/v0.8.3 installed the actor only for mutations. Queries and mutations now share one dispatch function, `runtime.CallerOperationContext`, which generated code calls. Regenerate with `golem generate`.
+
+**Generated GraphQL code is gofmt-clean.** Apps with full-text search resolvers previously generated a `zz_golem_graphql.gen.go` that `gofmt -l` listed. Regenerate to pick up the fix.
+
+**Documentation corrections.**
+- There is no generated `Query` dispatcher; custom mutations are called from Go through `Mutate`.
+- The durable-actions recipe's `requestExport` selects the row's ID. Without that select, it failed over GraphQL with `COMMITTED_RESULT_UNAVAILABLE`.
+- `By<Field>` selectors exist only for non-null unique fields, and are used as `Model.ByField.Value(v)`.
 
 ---
 
