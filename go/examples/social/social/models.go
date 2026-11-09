@@ -170,6 +170,7 @@ type PostTag struct {
 
 func (PostTag) GolemModel() golem.ModelSpec[PostTag] {
 	return golem.DefineModel(
+		golem.Subscriptions[PostTag](),
 		golem.RelationOptions(PostTags.Post).OnDelete(golem.Cascade),
 		golem.RelationOptions(PostTags.Tag).OnDelete(golem.Cascade),
 	)

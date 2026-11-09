@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cursorOf, DocumentAnalyzer, GolemConfigurationError, GolemDocumentError, GolemError, golemInfiniteQuery, pageSpec } from '../src/index.js'
 import { DELETE_POST, until, world, type World } from './harness/live.js'
 import { collector, manifest } from './harness/social.js'
-import { socialWithoutPostUniqueInput, socialWithPostTagEvents, socialWithRenamedPostUniqueInput } from './fixtures/manifests.js'
+import { socialWithoutPostUniqueInput, socialManifest, socialWithRenamedPostUniqueInput } from './fixtures/manifests.js'
 
 const PAGED =
   'query($t: String!, $take: Int!) { posts(where: { title: { contains: $t }, published: { equals: true } }, orderBy: [{ title: asc }], take: $take) { title } }'
@@ -231,7 +231,7 @@ describe('infinite query on the real social server', () => {
       await w.run(CREATE_TAG, { data: { name } })
       await w.run(CREATE_POST_TAG, { data: { post: { connect: { ID: post } }, tag: { connect: { Name: name } } } })
     }
-    const spec = pageSpec(analyzer.analyze(POST_TAGS), socialWithPostTagEvents)
+    const spec = pageSpec(analyzer.analyze(POST_TAGS), socialManifest)
     const prefix = `pg-${tag}`
     const first = await w.run<{ postTags: Array<{ postID: string; tagName: string }> }>(POST_TAGS, { p: prefix, take: 2 })
     const mine = first.postTags
@@ -252,12 +252,12 @@ describe('cursor shape from the manifest', () => {
   })
 
   it('builds an object keyed by the primary key for a compound key', () => {
-    const spec = pageSpec(tags, socialWithPostTagEvents)
+    const spec = pageSpec(tags, socialManifest)
     expect(cursorOf(spec, { postID: 'p', tagName: 'n', extra: 1 })).toEqual({ PostID_TagName: { postID: 'p', tagName: 'n' } })
   })
 
   it('refuses a row that lacks a key field', () => {
-    const spec = pageSpec(tags, socialWithPostTagEvents)
+    const spec = pageSpec(tags, socialManifest)
     expect(() => cursorOf(spec, { postID: 'p' })).toThrow(/tagName/)
   })
 

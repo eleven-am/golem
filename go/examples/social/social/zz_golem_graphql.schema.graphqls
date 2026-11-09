@@ -719,6 +719,7 @@ type PostTag {
   tagName: String
   post: Post
   tag: Tag
+  _version: String!
 }
 
 input PostTagWhereInput {
@@ -1415,7 +1416,24 @@ type PostEvent {
   entity: Post
 }
 
+type PostTagEventIdentity {
+  postID: UUID!
+  tagName: String!
+}
+
+type PostTagEvent {
+  eventID: UUID!
+  causationID: UUID!
+  transactionOrdinal: Int!
+  recordedAt: DateTime!
+  version: String!
+  type: GolemEventType!
+  id: PostTagEventIdentity!
+  entity: PostTag
+}
+
 type Subscription {
   commentEvents(where: CommentWhereInput): CommentEvent!
   postEvents(where: PostWhereInput): PostEvent!
+  postTagEvents(where: PostTagWhereInput): PostTagEvent!
 }

@@ -89,15 +89,11 @@ func render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 	} else if versioned {
 		return Program{}, fail(CodeInput, node.ModelID(), policyir.FieldID{}, "explicit concurrency rendering requires a concurrency-enabled model", nil)
 	}
-	if field, enabled := logicalModel.RowVersion(); enabled {
-		value := policyir.FieldID(field)
-		namespace, _ := registry.PhysicalSystemNamespace(golem.PostgreSQL)
-		next, nextErr := rowversion.Next(provider, namespace)
-		if nextErr != nil {
-			return Program{}, fail(CodeSchema, node.ModelID(), value, "row version expression is unavailable", nextErr)
-		}
-		context.version, context.versionNext = &value, next
+	version, next, versionErr := rowversion.Bind(provider, registry, logicalModel)
+	if versionErr != nil {
+		return Program{}, fail(CodeSchema, node.ModelID(), *version, "row version expression is unavailable", versionErr)
 	}
+	context.version, context.versionNext = version, next
 	if node.IdentityBehavior() == mutationir.IdentityMayChange && registry.IdentityChangeRequiresReferentialEnumeration(golem.ModelID(node.ModelID()), golemFields(scalarOperationFields(node.ScalarOperations()))) {
 		return Program{}, fail(CodeUnsupported, node.ModelID(), policyir.FieldID{}, "identity-changing scalar update has relation effects that are not enumerated by this mutation graph", nil)
 	}
@@ -177,8 +173,7 @@ func (context renderContext) advanceVersionStatement() ([]Statement, error) {
 	if !ok {
 		return nil, fail(CodeSchema, context.node.ModelID(), *context.version, "row version field has no physical descriptor", nil)
 	}
-	projected := policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(rowversion.AdvanceColumn()))
-	text := rowversion.Advance(projected + " AS " + context.dialect.Quote("golem_c0"))
+	text := rowversion.AdvanceSQL(context.provider, context.dialect, field.Type)
 	return []Statement{{role: StampVersion, text: text, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyOneRow}}, nil
 }
 

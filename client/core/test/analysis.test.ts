@@ -6,7 +6,6 @@ import {
   socialHiddenCommentInverse,
   socialManifest,
   socialWithEventfulUsers,
-  socialWithPostTagEvents,
   teamsManifest,
   socialPostNotNullable,
   socialWithRoot,
@@ -45,8 +44,7 @@ describe('identity injection', () => {
   })
 
   it('adds the whole compound key and _version on a keyed model with events', () => {
-    const analyzer = new DocumentAnalyzer(socialWithPostTagEvents)
-    expect(analyzer.analyze('{ postTags { tagName } }').query).toBe(
+    expect(social.analyze('{ postTags { tagName } }').query).toBe(
       normal('{ postTags { tagName postID _version __typename } }'),
     )
   })
@@ -104,8 +102,7 @@ describe('stream set', () => {
   })
 
   it('translates a compound unique root', () => {
-    const analyzer = new DocumentAnalyzer(socialWithPostTagEvents)
-    const [stream] = analyzer.analyze(
+    const [stream] = social.analyze(
       'query($p: UUID!, $t: String!) { postTag(where: { PostID_TagName: { postID: $p, tagName: $t } }) { tagName } }',
     ).streams
     expect(flat(stream?.query)).toContain('postTagEvents(where: {postID: {equals: $p}, tagName: {equals: $t}})')
@@ -234,15 +231,9 @@ describe('G7: a query is live, or it says it is not', () => {
   }
 
   it('names a model without events', () => {
-    const error = notLive(social, '{ postTags { tagName } }')
-    expect([error.reason, error.subject]).toEqual(['model-without-events', 'PostTag'])
-    expect(error.message).toContain('PostTag')
-  })
-
-  it('goes live once the model declares Subscriptions', () => {
-    const analysis = new DocumentAnalyzer(socialWithPostTagEvents).analyze('{ postTags { tagName } }')
-    expect(analysis.live).toBe(true)
-    expect(analysis.streams.map((stream) => stream.eventsRoot)).toEqual(['postTagEvents'])
+    const error = notLive(social, '{ users { handle } }')
+    expect([error.reason, error.subject]).toEqual(['model-without-events', 'User'])
+    expect(error.message).toContain('User')
   })
 
   it('names the model reached through a relation', () => {
@@ -278,13 +269,13 @@ describe('G7: a query is live, or it says it is not', () => {
   })
 
   it('keeps every reason, not only the first', () => {
-    const analysis = social.analyze('{ postTags { tagName } publishPost }')
-    expect(analysis.notLive.map((error) => error.subject)).toEqual(['PostTag', 'publishPost'])
+    const analysis = social.analyze('{ users { handle } publishPost }')
+    expect(analysis.notLive.map((error) => error.subject)).toEqual(['User', 'publishPost'])
   })
 
   it('lets static data keep the injected document', () => {
-    const analysis = social.analyze('{ postTags { tagName } }')
-    expect(analysis.query).toBe(normal('{ postTags { tagName postID __typename } }'))
+    const analysis = social.analyze('{ users { handle } }')
+    expect(analysis.query).toBe(normal('{ users { handle id __typename } }'))
   })
 })
 
@@ -462,7 +453,7 @@ describe('nullable roots from the manifest', () => {
 
 describe('composite keys', () => {
   it('selects the identity object of a composite-key model in its stream', () => {
-    const analysis = new DocumentAnalyzer(socialWithPostTagEvents).analyze('{ postTags { tagName } }')
+    const analysis = new DocumentAnalyzer(socialManifest).analyze('{ postTags { tagName } }')
     expect(flat(analysis.streams[0]?.query)).toContain('id { postID tagName }')
   })
 

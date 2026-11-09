@@ -2,7 +2,7 @@ import { QueryClient, QueryObserver, type Query } from '@tanstack/query-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DocumentAnalyzer, GolemNotFoundError, LiveSync, Mutations, type ClientManifest, type LiveTransport, type StreamHandlers, type SubscriptionRequest } from '../src/index.js'
 import { sleep, until } from './harness/live.js'
-import { socialManifest, socialStrictCommentPost, socialWithPostTagEvents } from './fixtures/manifests.js'
+import { socialManifest, socialStrictCommentPost } from './fixtures/manifests.js'
 
 class ScriptedTransport implements LiveTransport {
   readonly streams: StreamHandlers[] = []
@@ -69,7 +69,7 @@ const post = (id: string, version: string, extra: Record<string, unknown> = {}) 
 describe('composite primary keys on events', () => {
   it('removes the row named by the identity object of a DELETED event with no entity', async () => {
     const tag = (name: string) => ({ __typename: 'PostTag', postID: 'p', tagName: name, _version: '1' })
-    const view = await mount(socialWithPostTagEvents, '{ postTags { tagName } }', () => ({ postTags: [tag('a'), tag('b')] }))
+    const view = await mount(socialManifest, '{ postTags { tagName } }', () => ({ postTags: [tag('a'), tag('b')] }))
     expect((view.transport.requests[0]?.query ?? '').replace(/\s+/g, ' ')).toContain('id { postID tagName }')
     view.emit('postTagEvents', { version: '2', type: 'DELETED', id: { tagName: 'a', postID: 'p' }, entity: null })
     expect((view.query.state.data as { postTags: Array<{ tagName: string }> }).postTags.map((row) => row.tagName)).toEqual(['b'])

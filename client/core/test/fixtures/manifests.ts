@@ -6,14 +6,6 @@ export const socialManifest: ClientManifest = social
 
 export const teamsManifest: ClientManifest = teams
 
-export const socialWithPostTagEvents: ClientManifest = {
-  ...social,
-  models: {
-    ...social.models,
-    PostTag: { ...social.models.PostTag, events: 'postTagEvents' },
-  },
-}
-
 export const socialWithRenamedPostUniqueInput: ClientManifest = {
   ...social,
   models: {

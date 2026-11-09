@@ -107,15 +107,15 @@ describe('document analysis against the real social server', () => {
     client.dispose()
   })
 
-  it('says PostTag is not live, and the server really has no PostTag events', async () => {
-    const analysis = analyzer.analyze('{ postTags { tagName } }')
+  it('says User is not live, and the server really has no User events', async () => {
+    const analysis = analyzer.analyze('{ users { handle } }')
     expect(analysis.live).toBe(false)
-    expect(analysis.notLive.map((error) => [error.reason, error.subject])).toEqual([['model-without-events', 'PostTag']])
+    expect(analysis.notLive.map((error) => [error.reason, error.subject])).toEqual([['model-without-events', 'User']])
 
     const alice = actor()
     const client = transport({ credentials: alice.credentials })
     const seen = collector()
-    client.subscribe({ query: 'subscription { postTagEvents { eventID } }' }, seen.handlers)
+    client.subscribe({ query: 'subscription { userEvents { eventID } }' }, seen.handlers)
     await seen.until(() => seen.ends.length === 1)
     expect(seen.acks()).toBe(0)
     expect(seen.ends[0]?.kind).toBe('error')

@@ -1,0 +1,1 @@
+ALTER TABLE "post_tags" ADD COLUMN "golem_version" INTEGER NOT NULL DEFAULT 0;

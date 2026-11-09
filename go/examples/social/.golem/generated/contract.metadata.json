@@ -1,9 +1,9 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "contract_metadata",
   "formatVersion": 1,
-  "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
-  "contractFingerprint": "06c6c13d021eb3123793ebaa8e161b00be0775751826166f324c46ae3be2a776",
-  "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
+  "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
+  "contractFingerprint": "e7e5839610ae16bb2c9950183005c2bf8f5c5c28862ef84e38047f0e016a9fc4",
+  "generationDigest": "50dfa549e77e42ebe5900cc9e1a588037cb8c936716bdd27994a09914693da7d",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -963,6 +963,14 @@
             ]
           },
           {
+            "fieldId": "dcb5853ddbc2df1da3531a87a4a6eab1",
+            "graphqlName": "_version",
+            "modes": [
+              "readOnly",
+              "visible"
+            ]
+          },
+          {
             "fieldId": "fe3669fe5cc1796a498ac1da4e077e4b",
             "graphqlName": "tag",
             "modes": [
@@ -992,7 +1000,63 @@
           "updateMany",
           "upsert"
         ],
-        "subscriptions": false,
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "PostTagEvent",
+          "identityTypeName": "PostTagEventIdentity",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt",
+            "version"
+          ],
+          "deleteSnapshotFull": true,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "b2a6fb289365ab32869f1b2862cc6b5b",
+            "primaryKeyId": "c86ed7ebd8270aeab98eb584f906c439",
+            "identityFields": [
+              {
+                "fieldId": "44075e35d88b9d06bdc3c011f32f8c73",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                "type": {
+                  "kind": "string",
+                  "maxLength": 64
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "44075e35d88b9d06bdc3c011f32f8c73",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                "type": {
+                  "kind": "string",
+                  "maxLength": 64
+                },
+                "nullable": false
+              }
+            ],
+            "enums": []
+          },
+          "schemaFingerprint": "35e78f9b83b9130a009ee12e22b5d8c3c9ed663a6dceea9a876ea6921dd4b54a"
+        },
         "scopedReads": false,
         "limits": {
           "defaultPageSize": 50,
