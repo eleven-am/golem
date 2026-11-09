@@ -208,3 +208,28 @@ describe('bounded lists refill after a removal', () => {
     await until(() => names(view.data(), 'posts')[0] === `${mine}-b`)
   })
 })
+
+describe('a composite-key model', () => {
+  it('removes a PostTag from the delete event while every response is held', async () => {
+    const w = await fresh()
+    const mine = token()
+    const post = await w.createPost(`${mine}-host`)
+    const gone = `${mine}-gone`
+    const stays = `${mine}-stays`
+    for (const name of [gone, stays]) {
+      await w.run('mutation($data: TagCreateInput!) { createTag(data: $data) { id } }', { data: { name } })
+      await w.run('mutation($data: PostTagCreateInput!) { createPostTag(data: $data) { postID } }', { data: { post: { connect: { ID: post } }, tag: { connect: { Name: name } } } })
+    }
+    const view = watch(w, 'query($p: String!) { postTags(where: { tagName: { startsWith: $p } }) { tagName } }', { p: mine })
+    const tagNames = () => ((view.data() as { postTags?: Array<{ tagName: string }> } | undefined)?.postTags ?? []).map((row) => row.tagName).sort()
+    await until(() => tagNames().length === 2)
+    await settled(view)
+    const before = view.fetches()
+    w.gate.hold()
+    await w.run('mutation($post: UUID!, $name: String!) { deletePostTag(where: { PostID_TagName: { postID: $post, tagName: $name } }) { postID } }', { post, name: gone })
+    await until(() => tagNames().length === 1)
+    expect(tagNames()).toEqual([stays])
+    await until(() => view.fetches() === before + 1)
+    w.gate.release()
+  })
+})
