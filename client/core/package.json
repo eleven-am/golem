@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live GraphQL client for golem backends",
   "type": "module",
   "main": "dist/index.js",

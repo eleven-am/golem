@@ -1,13 +1,13 @@
 # Golem (Go): a working guide for an AI agent
 
-**Describes go/v0.8.6 and the TypeScript client 0.2.0.** Module path:
+**Describes go/v0.8.7 and the TypeScript client 0.2.1.** Module path:
 `github.com/eleven-am/golem/go`. The `go/` suffix is part of the path. Tags
 are `go/vX.Y.Z`; a plain `vX.Y.Z` tag belongs to the TypeScript packages in the
 same repository and does not describe this module. The module needs Go 1.26.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.6
-go install github.com/eleven-am/golem/go/cmd/golem@v0.8.6
+go get github.com/eleven-am/golem/go@v0.8.7
+go install github.com/eleven-am/golem/go/cmd/golem@v0.8.7
 ```
 
 Keep the CLI and the library on one version. Generated code carries a contract
@@ -17,11 +17,11 @@ contract format N predates this golem".
 Front end (needs a server at go/v0.8.3 or later):
 
 ```
-npm install @eleven-am/golem-client@0.2.0 @eleven-am/golem-react@0.2.0 @tanstack/react-query react gql.tada graphql graphql-ws
+npm install @eleven-am/golem-client@0.2.1 @eleven-am/golem-react@0.2.1 @tanstack/react-query react gql.tada graphql graphql-ws
 ```
 
 This file is meant to be enough to build with golem without reading its
-source. Every Go code block passes `go vet` against go/v0.8.6 (fragments inside
+source. Every Go code block passes `go vet` against go/v0.8.6, and go/v0.8.7 changed no public Go API (fragments inside
 a complete program; schema-package blocks are files of the verified example).
 The end-to-end program in section 27 was generated, migrated and run as shown
 against SQLite, and with the provider swapped, against PostgreSQL. Where the shipped docs and the code disagree, this file
@@ -1421,14 +1421,13 @@ export const golemClientManifest = {
 
 ---
 
-## 17. The TypeScript and React client (0.2.0)
+## 17. The TypeScript and React client (0.2.1)
 
 Two packages: `@eleven-am/golem-client` (framework-free core on TanStack Query
 core) and `@eleven-am/golem-react` (provider and hooks). Server: go/v0.8.3 or
 later. Peers: `@tanstack/query-core` ^5, `graphql` ^16, `graphql-ws` ^6 (core);
-`@eleven-am/golem-client` ^0.2.0, `@tanstack/react-query` ^5, `react` >=18,
-`gql.tada` ^1.8 (React). The react README still says `^0.1.0` for the core
-peer; `package.json` says `^0.2.0`.
+`@eleven-am/golem-client` ^0.2.1, `@tanstack/react-query` ^5, `react` >=18,
+`gql.tada` ^1.8 (React).
 
 ### Setup
 
@@ -1485,6 +1484,7 @@ gql.tada typed document. A document holds exactly one operation
 | `useGolemInfiniteQuery(doc, vars?, opts?)` | a live paged list. Give `take` a defaulted variable (`$take: Int = 20`) or a literal; never write `cursor` or `skip` (`GolemDocumentError`). `hasNextPage` is true while the last page was full |
 | `useGolemMutation(doc, opts?)` | `useMutation` over HTTP. The result is never written into the cache; queries over the models it touches are invalidated. `{ keepalive: true }` sends it with `fetch(..., { keepalive: true })` |
 | `useGolemStatus(doc, vars?, { infinite? })` | the live status of one query, or `undefined` before it exists |
+| `useGolemConnection()` | the client-wide connection status: `idle`, `connecting`, `open`, `reconnecting`, or a fatal close (`unauthenticated`, `forbidden`, `invalid`, `protocol-mismatch`, `contract-mismatch`, `deadline-required`). Since 0.2.1 |
 | `useGolemStaticQuery(doc, vars?, opts?)` | fetched once, never refreshed; for documents that cannot be live |
 
 **Live counts.** Aggregates, `groupBy`, `relationGroupBy` and custom roots
@@ -2510,7 +2510,7 @@ migration.
 
 ---
 
-## 29. Recent changes (go/v0.6.5 to go/v0.8.6)
+## 29. Recent changes (go/v0.6.5 to go/v0.8.7)
 
 Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
@@ -2531,6 +2531,7 @@ Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
 | Release | What changed |
 |---|---|
+| go/v0.8.7 | no public Go API change; the QUEUE.md recipe is tested on PostgreSQL over GraphQL HTTP with a deterministic lock-order probe; the social example streams `PostTag` (migration 0010); client 0.2.1 adds `useGolemConnection()` |
 | go/v0.8.6 | custom queries receive the caller's actor over GraphQL and from Go through the new generated `Query` (the read-side twin of `Mutate`); generated GraphQL Go code is gofmt-clean and generation fails if gofmt does not converge; doc fixes: `FindUnique(ctx, Keys.ByKeyHash.Value(hash))`, QUEUE.md `requestExport` selects `Exports.ID`, `By<Field>` only for non-null unique fields |
 | go/v0.8.5 | publisher wakes on commit (~20 ms); recipe race guards (cancel order, job-ID match, conditional success write) |
 | go/v0.8.4 | `tx.CancelJob`; serialization failures in `CancelJob`/`Enqueue` are `CONFLICT`; partial queue plans; failure intent only for types with `OnJobFailed`; `internal` primary key refused at compile time; one `HookEnqueue` path |

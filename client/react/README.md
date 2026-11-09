@@ -10,7 +10,7 @@ Built on `@eleven-am/golem-client` and `@tanstack/react-query`.
 npm install @eleven-am/golem-react @eleven-am/golem-client @tanstack/react-query react gql.tada graphql graphql-ws
 ```
 
-Peer dependencies: `@eleven-am/golem-client` ^0.2.0, `@tanstack/react-query` ^5, `react` >=18, `gql.tada` ^1.8. The client in turn needs `graphql` ^16 and `graphql-ws` ^6 (and `@tanstack/query-core` ^5, which `@tanstack/react-query` brings).
+Peer dependencies: `@eleven-am/golem-client` ^0.2.1, `@tanstack/react-query` ^5, `react` >=18, `gql.tada` ^1.8. The client in turn needs `graphql` ^16 and `graphql-ws` ^6 (and `@tanstack/query-core` ^5, which `@tanstack/react-query` brings).
 
 ## Setup
 

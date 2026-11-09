@@ -5,12 +5,34 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.6
+go get github.com/eleven-am/golem/go@v0.8.7
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.7
+
+No public Go API change. Apps need no regeneration.
+
+**The durable-actions recipe is tested end to end on PostgreSQL.** The QUEUE.md recipe now runs unchanged against a disposable PostgreSQL database:
+- `requestExport` and `cancelExport` go through the generated GraphQL handler over HTTP, and a second owner's cancel is refused.
+- A cancel racing a terminal failure takes the job row before the status row, proven with a `FOR UPDATE NOWAIT` probe rather than timing.
+- The observed-job guard leaves a replaced job's status row alone.
+
+The recipe schema declares both SQLite and PostgreSQL. QUEUE.md says why the example passes an in-memory event transport and a no-op operator audit: one process and no audit sink. A real deployment chooses both.
+
+**The social example streams `PostTag` events.** Migration `0010_post_tag_subscriptions` adds `golem_version` to `post_tags`. The composite-key event identity (`{ postID, tagName }`) is now checked against a real server by the client tests.
+
+**Internal.** Row version binding and the SQLite version-advance SQL live in one package. Generated SQL is unchanged.
+
+**Client 0.2.1** (`@eleven-am/golem-client`, `@eleven-am/golem-react`):
+- `useGolemConnection()` returns the client-wide connection status (`idle`, `connecting`, `open`, `reconnecting` or a fatal state). It replaces the hook the core README told apps to write by hand.
+- `LiveSync.hasQueuedRefetch`, public in source but never released, is now private.
+- The live tests wait on observed events instead of fixed delays.
 
 ---
 

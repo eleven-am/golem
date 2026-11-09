@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem-react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React bindings for the golem live GraphQL client",
   "type": "module",
   "main": "dist/index.js",
@@ -20,7 +20,7 @@
     "test": "tsc --noEmit -p tsconfig.spec.json && vitest run"
   },
   "peerDependencies": {
-    "@eleven-am/golem-client": "^0.2.0",
+    "@eleven-am/golem-client": "^0.2.1",
     "@tanstack/react-query": "^5.0.0",
     "gql.tada": "^1.8.0",
     "react": ">=18"
