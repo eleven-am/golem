@@ -327,7 +327,7 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint(), shutdown: server.Shutdown}, nil\n")
 	body.WriteString("}\n")
-	source, err := format.Source(body.Bytes())
+	source, err := formatGeneratedSource(body.Bytes())
 	if err != nil {
 		return Result{}, fmt.Errorf("format generated GraphQL adapter: %w", err)
 	}
@@ -649,4 +649,18 @@ func hasCustomOperation(compilation *ir.CompilationIR, kind ir.CustomOperationKi
 		}
 	}
 	return false
+}
+
+func formatGeneratedSource(source []byte) ([]byte, error) {
+	for pass := 0; pass < 4; pass++ {
+		formatted, err := format.Source(source)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(formatted, source) {
+			return formatted, nil
+		}
+		source = formatted
+	}
+	return source, nil
 }
