@@ -406,6 +406,9 @@ func UpsertInvite(ctx context.Context, caller *Caller[Principal], arguments Invi
 
 func SearchInvites(ctx context.Context, caller *Caller[Principal], arguments SearchArgs) ([]golem.Row[Invite], error) {
 	recordResolver("searchInvites")
+	if err := runProbe(ctx, "searchInvites", caller); err != nil {
+		return nil, err
+	}
 	return inviteRows(ctx, caller, arguments.Owner)
 }
 

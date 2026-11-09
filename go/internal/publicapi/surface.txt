@@ -4401,6 +4401,7 @@ runtime.CallerGroupBy func[P any, A any, M any](context.Context, *Caller[P, A], 
 runtime.CallerMutationExecution[P any, A any] type struct
 runtime.CallerMutationModel func[P any, A any, M any](golem.ModelDescriptor[M]) CallerMutationModelAdapter[P, A]
 runtime.CallerMutationModelAdapter[P any, A any] type struct
+runtime.CallerOperationContext func[P any, A any](context.Context, *Caller[P, A]) context.Context
 runtime.CallerRelationGroupBy func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.CallerScoped func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
 runtime.CallerSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
