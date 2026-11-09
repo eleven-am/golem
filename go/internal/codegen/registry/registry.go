@@ -229,7 +229,7 @@ func emitRegistry(request Request, bundle *preparedBundle) (File, error) {
 	subscribedPackages := subscriptionPackages(request.Schema.Model, request.Schema.Contract)
 	if bundle == nil {
 		emitSurfaceStubs(&source, golem, golemRuntime, actorType, len(subscribedPackages) != 0)
-		emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic, fulltext, len(mutations) != 0, len(transactionOperations) != 0)
+		emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic, fulltext, len(mutations) != 0, len(customQueries(request.Schema.Contract)) != 0, len(transactionOperations) != 0)
 		return formatRegistry(request, source)
 	}
 	fmt.Fprintf(&source, "func golemGeneratedGenerationDigest() %s.SchemaDigest {\n", golem)
@@ -312,7 +312,7 @@ func emitRegistry(request Request, bundle *preparedBundle) (File, error) {
 		}
 		source.WriteString("\t)\n}\n")
 	}
-	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic, fulltext, len(mutations) != 0, len(transactionOperations) != 0)
+	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic, fulltext, len(mutations) != 0, len(customQueries(request.Schema.Contract)) != 0, len(transactionOperations) != 0)
 	return formatRegistry(request, source)
 }
 
@@ -324,6 +324,16 @@ func customMutations(contract ir.ContractIR) []ir.CustomOperationContractIR {
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ExtensionID < result[j].ExtensionID })
+	return result
+}
+
+func customQueries(contract ir.ContractIR) []ir.CustomOperationContractIR {
+	var result []ir.CustomOperationContractIR
+	for _, operation := range contract.CustomOperations {
+		if operation.Operation == ir.CustomOperationQuery {
+			result = append(result, operation)
+		}
+	}
 	return result
 }
 
@@ -356,7 +366,7 @@ func emitSurfaceStubs(source *bytes.Buffer, golemAlias, runtimeAlias, actorType 
 	}
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index, fulltext map[ir.ModelID][]fulltextcontract.Index, mutations, transactionOperations bool) {
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index, fulltext map[ir.ModelID][]fulltextcontract.Index, mutations, queries, transactionOperations bool) {
 	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
 	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tEmbeddings %s.Registry\n", embeddingAlias)
@@ -543,6 +553,11 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func Mutate[P, Args, R any](ctx %s.Context, caller *Caller[P], resolver func(%s.Context, *Caller[P], Args) (R, error), arguments Args) (R, error) {\n", contextAlias, contextAlias)
 		fmt.Fprintf(source, "\tvar inner *%s.Caller[P, %s]\n\tif caller != nil { inner = caller.runtime }\n", runtimeAlias, actorType)
 		fmt.Fprintf(source, "\treturn %s.RunCallerOperation(ctx, inner, resolver, golemGeneratedOperationCaller[P], arguments)\n}\n", runtimeAlias)
+	}
+	if queries {
+		fmt.Fprintf(source, "\nfunc Query[P, Args, R any](ctx %s.Context, caller *Caller[P], resolver func(%s.Context, *Caller[P], Args) (R, error), arguments Args) (R, error) {\n", contextAlias, contextAlias)
+		fmt.Fprintf(source, "\tvar zero R\n\tif caller == nil || resolver == nil { return zero, %s.Errorf(\"P5_CUSTOM_OPERATION: caller and resolver are required\") }\n", fmtAlias)
+		fmt.Fprintf(source, "\treturn resolver(%s.CallerOperationContext(ctx, caller.runtime), caller, arguments)\n}\n", runtimeAlias)
 	}
 	if transactionOperations {
 		fmt.Fprintf(source, "\nfunc golemGeneratedOperationTx[P any](inner *%s.CallerTx[P, %s]) *CallerTx[P] {\n\tresult := &CallerTx[P]{runtime: inner}\n", runtimeAlias, actorType)

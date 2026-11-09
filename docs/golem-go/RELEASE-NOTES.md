@@ -16,12 +16,12 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.8.6
 
-**Custom query resolvers receive the caller's actor.** `golem.ActorFrom` now returns the caller's actor inside a custom query served over GraphQL, as it already did for custom mutations. go/v0.8.3 installed the actor only for mutations. Queries and mutations now share one dispatch function, `runtime.CallerOperationContext`, which generated code calls. Regenerate with `golem generate`.
+**Custom query resolvers receive the caller's actor.** `golem.ActorFrom` now returns the caller's actor inside a custom query served over GraphQL, as it already did for custom mutations. go/v0.8.3 installed the actor only for mutations. Queries and mutations now share one actor-scoping function, `runtime.CallerOperationContext`, which generated code calls. The generated `Query` gives a custom query called from Go the same actor, as `Mutate` does for a custom mutation. Regenerate with `golem generate`.
 
 **Generated GraphQL code is gofmt-clean.** Apps with full-text search resolvers previously generated a `zz_golem_graphql.gen.go` that `gofmt -l` listed. Regenerate to pick up the fix.
 
 **Documentation corrections.**
-- There is no generated `Query` dispatcher; custom mutations are called from Go through `Mutate`.
+- Custom queries are called from Go through the generated `Query`, and custom mutations through `Mutate`.
 - The durable-actions recipe's `requestExport` selects the row's ID. Without that select, it failed over GraphQL with `COMMITTED_RESULT_UNAVAILABLE`.
 - `By<Field>` selectors exist only for non-null unique fields, and are used as `Model.ByField.Value(v)`.
 
@@ -75,7 +75,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 - Costs, resource membership and lease settings still require a restart.
 - Raising a shared resource takes full effect once the jobs leased under the old capacity end.
 
-**Custom operations see the caller's actor.** Custom query and mutation resolvers now receive the caller's actor, so `golem.ActorFrom[Actor](ctx)` works in them as it does in hooks. Call a custom mutation through the generated `Mutate`; calling the resolver function directly skips the actor. There is no generated `Query` dispatcher.
+**Custom operations see the caller's actor.** Custom query and mutation resolvers now receive the caller's actor, so `golem.ActorFrom[Actor](ctx)` works in them as it does in hooks. Call a custom query from Go through the generated `Query` and a custom mutation through `Mutate`; calling the resolver function directly skips the actor.
 
 **The `internal` field tag.** A field tagged `golem:"internal"` stays fully available to Go and system code, including unique lookups, filters and order. It is removed from:
 - every GraphQL type, input, enum and aggregate;

@@ -950,7 +950,7 @@ Names such as `BeforeUpsert` and `BeforeAggregate` are refused. A panic in a
 hook becomes an error, `generated hook panicked`, and its value is not kept.
 `golem.ActorFrom[Actor](ctx)` returns the actor of the caller the hook runs
 for; a custom query or mutation resolver receives the same actor in its
-`ctx`: a custom query over GraphQL, and a custom mutation over GraphQL or through the generated `Mutate`. There is no generated `Query` dispatcher. Hooks run for callers' operations, including those inside custom
+`ctx`: a custom query over GraphQL or through the generated `Query`, and a custom mutation over GraphQL or through the generated `Mutate`. Hooks run for callers' operations, including those inside custom
 mutations and transaction operations. Writes through `System()` or
 `SystemEscape` run no hooks.
 
@@ -1303,6 +1303,17 @@ resolver. A function that is not a generated custom mutation, such as a custom
 query resolver or a wrapper around a mutation resolver, is refused with
 `P5_CUSTOM_OPERATION` before anything runs. `Mutate` is generated only for a
 schema that declares a custom mutation.
+
+To run a custom query from Go, call the generated `Query`:
+
+```go
+rows, err := notes.Query(ctx, caller, notes.SearchInvites, notes.SearchArgs{ /* ... */ })
+```
+
+`Query` installs the caller's actor on `ctx`, so `golem.ActorFrom` works in
+the resolver as it does over GraphQL, and calls the resolver with `caller`. It
+adds no grants and no transaction. Calling a query resolver directly skips the
+actor. `Query` is generated only for a schema that declares a custom query.
 
 ### Partial commits are never reported as clean failures
 

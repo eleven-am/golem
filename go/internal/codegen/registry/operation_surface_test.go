@@ -131,3 +131,24 @@ func TestRegistrySurfaceDeclaresMutateWithoutAnOperationsTable(t *testing.T) {
 		t.Fatal("surface stub registered operations")
 	}
 }
+
+func TestRegistryEmitsQueryOnlyWhenACustomQueryExists(t *testing.T) {
+	const signature = "func Query[P, Args, R any](ctx context.Context, caller *Caller[P], resolver func(context.Context, *Caller[P], Args) (R, error), arguments Args) (R, error) {"
+	withQuery, err := Emit(operationRequest(t, operationQuery(operationQueryExtension, "searchInvites", "SearchInvites"), operationMutation(operationMutationExtension, "createInvite", "CreateInvite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(withQuery.Source)
+	for _, fragment := range []string{signature, "golemruntime.CallerOperationContext(ctx, caller.runtime)"} {
+		if !strings.Contains(source, fragment) {
+			t.Errorf("generated registry missing %q:\n%s", fragment, source)
+		}
+	}
+	mutationOnly, err := Emit(operationRequest(t, operationMutation(operationMutationExtension, "createInvite", "CreateInvite")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mutationOnly.Source), "func Query[") {
+		t.Error("Query was emitted without a custom query")
+	}
+}
