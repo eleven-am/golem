@@ -37,6 +37,13 @@ func DispatchCallerOperation[P, A any](ctx context.Context, caller *Caller[P, A]
 	return runCallerOperation(ctx, caller, resolver, run)
 }
 
+func CallerOperationContext[P, A any](ctx context.Context, caller *Caller[P, A]) context.Context {
+	if caller == nil {
+		return ctx
+	}
+	return golem.RuntimeContextWithActor(ctx, caller.actor)
+}
+
 func runCallerOperation[P, A, R any](ctx context.Context, caller *Caller[P, A], resolver any, run func(context.Context, *Caller[P, A]) (R, error)) (R, error) {
 	var zero R
 	if ctx == nil {
@@ -49,7 +56,7 @@ func runCallerOperation[P, A, R any](ctx context.Context, caller *Caller[P, A], 
 	if !ok {
 		return zero, fmt.Errorf("P5_CUSTOM_OPERATION: resolver is not a generated custom mutation")
 	}
-	ctx = golem.RuntimeContextWithActor(ctx, caller.actor)
+	ctx = CallerOperationContext(ctx, caller)
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, golem.ModelID{}, observe.KindMutation, observe.OperationMutationCustom)
 	policies, release := caller.policies.Within(operation)
 	scoped := *caller

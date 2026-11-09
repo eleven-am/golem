@@ -233,7 +233,13 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomCallerValue() any {\n")
 	body.WriteString("\tif caller == nil { return nil }; return caller.public\n")
 	body.WriteString("}\n\n")
-	if hasCustomMutation(request.Compilation) {
+	if hasCustomOperation(request.Compilation, ir.CustomOperationQuery) {
+		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomContext(ctx context.Context) context.Context {\n")
+		body.WriteString("\tif caller == nil || caller.public == nil { return ctx }\n")
+		body.WriteString("\treturn golemruntime.CallerOperationContext(ctx, caller.public.runtime)\n")
+		body.WriteString("}\n\n")
+	}
+	if hasCustomOperation(request.Compilation, ir.CustomOperationMutation) {
 		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLDispatchCustomMutation(ctx context.Context, resolver any, run func(context.Context, any) (any, error)) (any, error) {\n")
 		body.WriteString("\tif caller == nil || caller.public == nil { return nil, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
 		fmt.Fprintf(&body, "\treturn golemruntime.DispatchCallerOperation(ctx, caller.public.runtime, resolver, func(ctx context.Context, inner *golemruntime.Caller[P, %s]) (any, error) {\n", actorType)
@@ -321,7 +327,7 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint(), shutdown: server.Shutdown}, nil\n")
 	body.WriteString("}\n")
-	source, err := format.Source(body.Bytes())
+	source, err := formatGeneratedSource(body.Bytes())
 	if err != nil {
 		return Result{}, fmt.Errorf("format generated GraphQL adapter: %w", err)
 	}
@@ -633,14 +639,34 @@ type root struct {
 	name      string
 }
 
-func hasCustomMutation(compilation *ir.CompilationIR) bool {
+func hasCustomOperation(compilation *ir.CompilationIR, kind ir.CustomOperationKind) bool {
 	if compilation == nil {
 		return false
 	}
 	for _, operation := range compilation.Contract.CustomOperations {
-		if operation.Operation == ir.CustomOperationMutation {
+		if operation.Operation == kind {
 			return true
 		}
 	}
 	return false
+}
+
+const formatPasses = 4
+
+func formatGeneratedSource(source []byte) ([]byte, error) {
+	return formatToFixedPoint(source, format.Source, formatPasses)
+}
+
+func formatToFixedPoint(source []byte, run func([]byte) ([]byte, error), passes int) ([]byte, error) {
+	for pass := 0; pass < passes; pass++ {
+		formatted, err := run(source)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(formatted, source) {
+			return formatted, nil
+		}
+		source = formatted
+	}
+	return nil, fmt.Errorf("generated GraphQL source did not reach a gofmt fixed point after %d passes", passes)
 }

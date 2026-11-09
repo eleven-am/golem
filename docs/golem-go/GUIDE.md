@@ -96,9 +96,9 @@ On a real field:
 
 Use `hidden` for a column no code should touch through golem, and `internal`
 for one your own Go code must still read, filter or look up by but no client
-may see: an API key hash is `golem:"unique;internal;system"`, found with
-`FindUnique` in authentication middleware and absent from every GraphQL type,
-input, enum, subscription payload and the client manifest. `internal` combines
+may see: an API key hash is a non-null `string` field tagged `golem:"unique;internal;system"`,
+found with `FindUnique(ctx, Keys.ByKeyHash.Value(hash))` in authentication middleware and absent from every GraphQL type,
+input, enum, subscription payload and the client manifest. A `By<Field>` selector is generated only for a non-null unique field, never for a `golem.Null[T]` one. `internal` combines
 with everything except `hidden`, and a primary key cannot be `internal`
 (`P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`). On a model with a GraphQL create root, a
 required internal field with no default must also be `system` or listed in
@@ -417,54 +417,6 @@ choosing what to count; the caller supplies only arguments, so write the
 operation so its arguments cannot turn a count into a probe.
 
 ### Unique keys, cascades and concurrent writes
-
-### Counts and aggregates an operation owns
-
-A quota or budget check often has to count rows the caller cannot read: every
-asset uploaded to an artifact the caller owns, or every invite the caller has
-sent. Grant that count to a transaction operation, declared with
-`golem.TxOperation`, instead of reaching for `SystemEscape`:
-
-```go
-func (Asset) DefinePolicy(rules *golem.Rules[Asset], actor Actor) {
-	rules.CanRead(Assets.Owner.Eq(actor.ID))
-	golem.Within(rules, CommitAssetBudget).CanAggregate(Assets.Artifact.Is(Artifacts.Owner.Eq(actor.ID)), Assets.Size, Assets.ArtifactID)
-}
-
-func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
-	rules.CanRead(Invites.Email.Eq(actor.Email))
-	golem.Within(rules, CountPendingInvites).CanCount(Invites.Owner.Eq(actor.ID).And(Invites.Status.Eq("pending")))
-}
-```
-
-Inside `Run(ctx, tx, CommitAssetBudget, args)`, `Count` and `Aggregate` on the
-operation's transaction see the caller's own rows plus the rows the grant
-predicate matches. Relation hops inside the statement use the same operation's
-aggregate grants on the target model, so a grant on `Collections` widens a
-`Documents` count that reaches through it.
-
-- `CanCount(predicate)` widens rows only. A count over those rows may not filter
-  or measure any field the caller could not already use on its own rows.
-- `CanAggregate(predicate, fields...)` also lets the named fields be measured
-  and filtered on. Naming a field discloses its values over the granted rows:
-  `MIN` and `MAX` return them exactly, and filters on named fields can single
-  out rows. Name only the fields the operation must aggregate.
-- A filter or measure on any field the grant does not name is judged by the
-  caller's own field policy. It is refused with `FORBIDDEN` unless the
-  statement provably reaches only rows where the caller may already read that
-  field.
-
-The grant never applies to `FindMany`, `FindFirst`, `FindUnique`, includes,
-`GroupBy` (group keys are values), events, query-plan explanations, writes or
-link checks, inside the operation or out. An `Explain` call made inside `Run`
-describes the caller's own, narrower statement, not the widened count. A base
-`Cannot*` rule does not narrow an aggregate grant; put the exclusion in the
-grant predicate. Outside `Run`, and once the operation
-returns, counts are exactly the caller's own. `CanCount` and `CanAggregate`
-must name a generated transaction operation: naming a custom mutation or any
-other function fails the policy build. The safety rests on the operation's code
-choosing what to count; the caller supplies only arguments, so write the
-operation so its arguments cannot turn a count into a probe.
 
 A unique constraint is the one place a write can reveal a row you cannot read.
 Suppose you create or update a row and the value collides with a unique key or
@@ -998,7 +950,7 @@ Names such as `BeforeUpsert` and `BeforeAggregate` are refused. A panic in a
 hook becomes an error, `generated hook panicked`, and its value is not kept.
 `golem.ActorFrom[Actor](ctx)` returns the actor of the caller the hook runs
 for; a custom query or mutation resolver receives the same actor in its
-`ctx`, over GraphQL and through the generated `Mutate` and `Query`. Hooks run for callers' operations, including those inside custom
+`ctx`: a custom query over GraphQL or through the generated `Query`, and a custom mutation over GraphQL or through the generated `Mutate`. Hooks run for callers' operations, including those inside custom
 mutations and transaction operations. Writes through `System()` or
 `SystemEscape` run no hooks.
 
@@ -1351,6 +1303,17 @@ resolver. A function that is not a generated custom mutation, such as a custom
 query resolver or a wrapper around a mutation resolver, is refused with
 `P5_CUSTOM_OPERATION` before anything runs. `Mutate` is generated only for a
 schema that declares a custom mutation.
+
+To run a custom query from Go, call the generated `Query`:
+
+```go
+rows, err := notes.Query(ctx, caller, notes.SearchInvites, notes.SearchArgs{ /* ... */ })
+```
+
+`Query` installs the caller's actor on `ctx`, so `golem.ActorFrom` works in
+the resolver as it does over GraphQL, and calls the resolver with `caller`. It
+adds no grants and no transaction. Calling a query resolver directly skips the
+actor. `Query` is generated only for a schema that declares a custom query.
 
 ### Partial commits are never reported as clean failures
 

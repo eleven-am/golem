@@ -645,6 +645,14 @@ func Mutate[P, Args, R any](ctx context.Context, caller *Caller[P], resolver fun
 	return golemruntime.RunCallerOperation(ctx, inner, resolver, golemGeneratedOperationCaller[P], arguments)
 }
 
+func Query[P, Args, R any](ctx context.Context, caller *Caller[P], resolver func(context.Context, *Caller[P], Args) (R, error), arguments Args) (R, error) {
+	var zero R
+	if caller == nil || resolver == nil {
+		return zero, fmt.Errorf("P5_CUSTOM_OPERATION: caller and resolver are required")
+	}
+	return resolver(golemruntime.CallerOperationContext(ctx, caller.runtime), caller, arguments)
+}
+
 func golemGeneratedOperationTx[P any](inner *golemruntime.CallerTx[P, Actor]) *CallerTx[P] {
 	result := &CallerTx[P]{runtime: inner}
 	result.Teams = CallerTxTeamClient[P]{runtime: inner}

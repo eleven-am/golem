@@ -132,6 +132,13 @@ func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomCallerValue() an
 	return caller.public
 }
 
+func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomContext(ctx context.Context) context.Context {
+	if caller == nil || caller.public == nil {
+		return ctx
+	}
+	return golemruntime.CallerOperationContext(ctx, caller.public.runtime)
+}
+
 func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLDispatchCustomMutation(ctx context.Context, resolver any, run func(context.Context, any) (any, error)) (any, error) {
 	if caller == nil || caller.public == nil {
 		return nil, fmt.Errorf("GraphQL caller is unavailable")

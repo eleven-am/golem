@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	goast "go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -706,5 +707,52 @@ func TestEmitDerivesPublicGraphQLImportFromConfiguredGolemModule(t *testing.T) {
 	source := string(result.Source)
 	if !strings.Contains(source, `"example.test/golem/golem"`) || !strings.Contains(source, `golemgraphql "example.test/golem/graphql"`) {
 		t.Fatalf("generated imports do not follow the configured public module:\n%s", source)
+	}
+}
+
+func TestFormatGeneratedSourceIsStableUnderGofmt(t *testing.T) {
+	compilation := ir.CompilationIR{Model: ir.ModelIR{Schema: ir.SchemaIdentityIR{PackagePath: "example.test/app"}, Models: []ir.ModelDeclIR{{ID: "record", LogicalName: "Record", Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Record"}}}}, Contract: ir.ContractIR{Models: []ir.ModelContractIR{{ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: ir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 250}}}}}
+	payload, _ := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: "field", Weight: 1}}})
+	compilation.Model.Extensions = []ir.ProviderExtensionIR{{ID: "fulltext", Provider: ir.SQLite, Version: 1, Owner: "record", Kind: fulltextcontract.IndexKind, Payload: payload}}
+	if diagnostics := graphqlextension.AddFullTextSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("full-text diagnostics=%#v", diagnostics)
+	}
+	bindings, err := renderCustomBindings(&compilation, func(path, preferred string) string {
+		if path == "example.test/app" {
+			return ""
+		}
+		return preferred
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("package p\n\nfunc f[P any]() error {\n\t_, err := bind(spec, " + bindings[0] + ")\n\treturn err\n}\n")
+	formatted, err := formatGeneratedSource(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := format.Source(formatted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(formatted, again) {
+		t.Fatalf("formatted source changes under gofmt:\n%s\n---\n%s", formatted, again)
+	}
+}
+
+func TestFormatToFixedPointFailsWhenFormattingNeverConverges(t *testing.T) {
+	alternate := func(source []byte) ([]byte, error) {
+		if bytes.Equal(source, []byte("a")) {
+			return []byte("b"), nil
+		}
+		return []byte("a"), nil
+	}
+	if _, err := formatToFixedPoint([]byte("a"), alternate, 4); err == nil {
+		t.Fatal("non-converging formatting returned no error")
+	}
+	stable := func(source []byte) ([]byte, error) { return source, nil }
+	formatted, err := formatToFixedPoint([]byte("a"), stable, 4)
+	if err != nil || string(formatted) != "a" {
+		t.Fatalf("formatted = %q, %v; want a, nil", formatted, err)
 	}
 }

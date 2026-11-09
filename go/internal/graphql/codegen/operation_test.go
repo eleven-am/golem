@@ -65,3 +65,21 @@ func TestEmitWithoutCustomMutationsHasNoOperationDispatch(t *testing.T) {
 		}
 	}
 }
+
+func TestEmitScopesCustomQueriesToTheCallersActor(t *testing.T) {
+	queries := emitOperationAdapter(t, "../../compiler/compile/testdata/graphql_extensions", "graphqlextensions", func(operation ir.CustomOperationContractIR) bool {
+		return operation.Operation == ir.CustomOperationQuery
+	})
+	for _, fragment := range []string{
+		"func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomContext(ctx context.Context) context.Context {",
+		"return golemruntime.CallerOperationContext(ctx, caller.public.runtime)",
+	} {
+		if !strings.Contains(queries, fragment) {
+			t.Errorf("generated adapter missing %q", fragment)
+		}
+	}
+	none := emitOperationAdapter(t, "../../compiler/compile/testdata/graphql_extensions", "graphqlextensions", func(ir.CustomOperationContractIR) bool { return false })
+	if strings.Contains(none, "GolemGraphQLCustomContext") {
+		t.Error("adapter without custom queries emitted a custom context scope")
+	}
+}
