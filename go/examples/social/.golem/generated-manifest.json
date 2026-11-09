@@ -113,7 +113,7 @@
     {
       "path": "social/zz_golem_graphql.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "020ad0b60ed07935094d311a3c37fb40271aaadc4adc110fa7e9a2f653b9283d",
+      "contentSha256": "b42f42edc01e00e31744028a20975e97ad52d85e6fbde68b64477dc8238b1e10",
       "modelFingerprint": "065d0c809a6333e14e74bce43a6cde15d27b0966d55eb355b1af77f491751630",
       "generationDigest": "f5004d7f43dcdff811a632f18dd4c116d04030000567ca867a18fa6537b9ca22",
       "generatorVersion": "p1-v1",

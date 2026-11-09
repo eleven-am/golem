@@ -104,6 +104,9 @@ func bindCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, 
 				}
 				return encodeCustomResult(encode, value)
 			}
+			if scoper, ok := rawCaller.(customContextScoper); ok {
+				ctx = scoper.GolemGraphQLCustomContext(ctx)
+			}
 			if provider, ok := rawCaller.(interface{ GolemGraphQLCustomCallerValue() any }); ok {
 				rawCaller = provider.GolemGraphQLCustomCallerValue()
 			}
@@ -137,6 +140,10 @@ type CustomResultError struct{ cause error }
 func (failure *CustomResultError) Error() string { return failure.cause.Error() }
 
 func (failure *CustomResultError) Unwrap() error { return failure.cause }
+
+type customContextScoper interface {
+	GolemGraphQLCustomContext(context.Context) context.Context
+}
 
 type customMutationDispatcher interface {
 	GolemGraphQLDispatchCustomMutation(context.Context, any, func(context.Context, any) (any, error)) (any, error)
