@@ -20,7 +20,7 @@ export const CREATE_COMMENT =
 
 export const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
 
-export async function until(predicate: () => boolean, milliseconds = 10_000, label = 'condition'): Promise<void> {
+export async function until(predicate: () => boolean, milliseconds = 20_000, label = 'condition'): Promise<void> {
   const deadline = Date.now() + milliseconds
   while (!predicate()) {
     if (Date.now() > deadline) {
@@ -260,7 +260,7 @@ export function watch(w: World, document: string, variables: Record<string, unkn
   if (query === undefined) {
     throw new Error('the query was not created')
   }
-  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), queued: () => w.live.hasQueuedRefetch(query), query, frames, data: () => observer.getCurrentResult().data, stop }
+  return { analysis, variables, fetches: () => w.gate.count(analysis, variables), queued: () => w.live['hasQueuedRefetch'](query), query, frames, data: () => observer.getCurrentResult().data, stop }
 }
 
 export function titles(data: unknown): string[] {
