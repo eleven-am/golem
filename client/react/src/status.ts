@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { hashKey, type QueryKey } from '@tanstack/react-query'
-import type { GolemClient, LiveStatus } from '@eleven-am/golem-client'
+import type { GolemClient, LiveStatus, SessionStatus } from '@eleven-am/golem-client'
 import { useGolemClient } from './context.js'
 import type { GolemDocument } from './types.js'
 
@@ -26,4 +26,11 @@ export function useGolemStatus(document: GolemDocument, variables: Readonly<Reco
     [client, document, variablesHash, options.infinite],
   )
   return useLiveStatus(client, queryKey)
+}
+
+export function useGolemConnection(): SessionStatus {
+  const client = useGolemClient()
+  const subscribe = useCallback((listener: () => void) => client.transport.onStatus(listener), [client])
+  const snapshot = useCallback(() => client.transport.status, [client])
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
 }

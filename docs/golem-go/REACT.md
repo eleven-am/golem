@@ -137,6 +137,10 @@ component never writes to the cache.
   `RECOVERING`, `LIMIT`, `FORBIDDEN`, `NOT_FOUND` or `FAILED`. It is
   `undefined` before the query exists. It takes the same document and
   variables as the query.
+- `useGolemConnection()` returns the state of the whole connection: `idle`
+  before any live query has opened it, then `connecting`, `open`,
+  `reconnecting` or a fatal status such as `unauthenticated`. It is global,
+  where `useGolemStatus` is per query.
 - With a plain string the hook's `data` is `unknown`, so the example gives it a
   type. A gql.tada typed document gives the result and variable types for you.
 

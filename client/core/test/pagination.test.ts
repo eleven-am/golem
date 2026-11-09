@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cursorOf, DocumentAnalyzer, GolemConfigurationError, GolemDocumentError, GolemError, golemInfiniteQuery, pageSpec } from '../src/index.js'
-import { DELETE_POST, sleep, until, world, type World } from './harness/live.js'
+import { DELETE_POST, until, world, type World } from './harness/live.js'
 import { collector, manifest } from './harness/social.js'
 import { socialWithoutPostUniqueInput, socialWithPostTagEvents, socialWithRenamedPostUniqueInput } from './fixtures/manifests.js'
 
@@ -185,10 +185,11 @@ describe('infinite query on the real social server', () => {
     await until(() => view.titles().length === 3)
     const before = view.calls().length
     w.gate.hold()
+    const delivered = w.deliveries()
     const loading = view.observer.fetchNextPage()
     await until(() => view.calls().length > before)
     await w.run(DELETE_POST, { id: ids.get('5') })
-    await sleep(600)
+    await until(() => w.deliveries() > delivered)
     w.gate.release()
     await loading
     await until(() => view.observer.getCurrentResult().isFetching === false)

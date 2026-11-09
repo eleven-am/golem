@@ -84,6 +84,10 @@ const status = useGolemStatus(POSTS)
 return <small>{status?.state}</small>
 ```
 
+### useGolemConnection
+
+The connection state of the whole client, as one of the `transport.status` values: `idle` before any live query has opened a connection, then `connecting`, `open`, `reconnecting` or one of the fatal states. It is global, unlike `useGolemStatus`.
+
 ### useGolemMutation
 
 `useMutation` over `client.mutate`. A committed mutation invalidates every cached query over the models it touches, so the live event or the refetch brings it up to date. The mutation result is never written into the cache. A document holds exactly one operation.
@@ -195,17 +199,11 @@ The client adds `_version` and `__typename` to every selection of a model with e
 - `golem.transport.status`: `idle`, `connecting`, `open`, `reconnecting`, `unauthenticated`, `forbidden`, `invalid`, `protocol-mismatch`, `contract-mismatch` or `deadline-required`.
 - `golem.transport.onStatus(listener)`: calls you on every change and returns an unsubscribe function.
 
-Wrap them in `useSyncExternalStore`:
+`useGolemConnection()` wraps both and returns the transport status. It re-renders on every change.
 
 ```tsx
-import { useSyncExternalStore } from 'react'
-
-function useConnection() {
-  return useSyncExternalStore(
-    (notify) => golem.transport.onStatus(notify),
-    () => golem.transport.status,
-  )
-}
+const connection = useGolemConnection()
+return connection === 'open' ? null : <small>{connection}</small>
 ```
 
 #### Why there is a manifest

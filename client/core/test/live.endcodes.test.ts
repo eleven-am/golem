@@ -58,7 +58,7 @@ describe('RESYNC', () => {
   })
 
   it('DEPENDENCY_CHANGED refetches without waiting for the coalescing window', async () => {
-    const { w, probe } = await live({ windowMs: 2000, maxWaitMs: 2000 })
+    const { w, probe } = await live({ windowMs: 60_000, maxWaitMs: 60_000 })
     const carol = actor()
     const author = new Transport({ url: `${socialUrl()}/graphql`, manifest, credentials: carol.credentials, createSocket: headerSocket })
     await signUp(author, carol)
@@ -76,10 +76,8 @@ describe('RESYNC', () => {
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && (view.data() as { post?: unknown } | undefined)?.post !== undefined)
     await idle(view)
     const before = view.fetches()
-    const started = Date.now()
     await author.execute({ query: 'mutation($id: UUID!) { updatePost(where: { ID: $id }, data: { published: { set: false } }) { id } }', variables: { id: post } })
-    await until(() => view.fetches() === before + 1, 1800)
-    expect(Date.now() - started).toBeLessThan(1500)
+    await until(() => view.fetches() === before + 1)
     expect(probe.ends).toContain('GOLEM_SUBSCRIPTION_RESYNC')
     await until(() => (view.data() as { post: unknown }).post === null)
     author.dispose()
@@ -94,7 +92,7 @@ describe('OVERFLOW', () => {
     const document = 'query($t: String!) { posts(where: { title: { contains: $t } }, take: 100) { title body } }'
     const view = watch(w, document, { t: mine })
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && view.data() !== undefined)
-    await sleep(500)
+    await idle(view)
     const bulk = 'x'.repeat(200_000)
     w.proxy.stall('downstream')
     let created = 0
@@ -226,10 +224,10 @@ describe('4401 at the credential deadline', () => {
     current = bob.id
     await until(() => probe.ends.includes('reauthenticate'), 15_000)
     await until(() => w.live.statusOf(view.query)?.state === 'LIVE', 15_000)
-    await until(() => view.fetches() === before + 2, 5000)
+    await until(() => view.fetches() === before + 2)
     w.gate.release()
-    await until(() => titles(view.data()).length === 1, 5000)
-    await sleep(600)
+    await until(() => titles(view.data()).length === 1)
+    await idle(view)
     expect(titles(view.data())).toEqual([`${mine}-public`])
     expect(view.fetches()).toBe(before + 2)
   }, 60_000)
