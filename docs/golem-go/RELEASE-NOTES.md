@@ -18,7 +18,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 **Custom query resolvers receive the caller's actor.** `golem.ActorFrom` now returns the caller's actor inside a custom query served over GraphQL, as it already did for custom mutations. go/v0.8.3 installed the actor only for mutations. Queries and mutations now share one actor-scoping function, `runtime.CallerOperationContext`, which generated code calls. The generated `Query` gives a custom query called from Go the same actor, as `Mutate` does for a custom mutation. Regenerate with `golem generate`.
 
-**Generated GraphQL code is gofmt-clean.** Apps with full-text search resolvers previously generated a `zz_golem_graphql.gen.go` that `gofmt -l` listed. Regenerate to pick up the fix.
+**Generated GraphQL code is gofmt-clean.** Apps with full-text search resolvers previously generated a `zz_golem_graphql.gen.go` that `gofmt -l` listed. Regenerate to pick up the fix. Generation now fails with an error if gofmt output does not settle, instead of writing an unformatted file.
 
 **Documentation corrections.**
 - Custom queries are called from Go through the generated `Query`, and custom mutations through `Mutate`.
