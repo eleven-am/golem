@@ -16,7 +16,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.8.8
 
-Regenerate applications that use `GraphQLWithoutIndexSearch` or internal relations. None of the
+Regenerate applications that use `GraphQLWithoutIndexSearch`, internal relations or `TextSearch<Index>With`. None of the
 changes below touches the physical schema, so none needs a migration.
 
 **A model can keep index search out of GraphQL.**
