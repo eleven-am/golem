@@ -43,6 +43,9 @@ func TestInternalRelationIsAbsentFromEveryGraphQLTypeAndKeepsItsForeignKey(t *te
 			continue
 		}
 		checked[name] = true
+		if strings.HasSuffix(name, "WithoutParentInput") {
+			t.Errorf("GraphQL type %s names the internal relation", name)
+		}
 		if definition.Fields.ForName("parent") != nil {
 			t.Errorf("%s still carries parent", name)
 		}

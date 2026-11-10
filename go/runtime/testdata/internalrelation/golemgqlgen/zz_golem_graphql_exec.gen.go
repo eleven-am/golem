@@ -384,9 +384,9 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := executionContext{opCtx, e, 0, 0, make(chan graphql.DeferredResult)}
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
-		ec.unmarshalInputChildConnectOrCreateWithoutParentInput,
+		ec.unmarshalInputChildConnectOrCreateWithoutParentChildrenInput,
 		ec.unmarshalInputChildCreateInput,
-		ec.unmarshalInputChildCreateWithoutParentInput,
+		ec.unmarshalInputChildCreateWithoutParentChildrenInput,
 		ec.unmarshalInputChildListRelationFilter,
 		ec.unmarshalInputChildOrderByInput,
 		ec.unmarshalInputChildUpdateInput,
@@ -611,18 +611,18 @@ input ParentCreateInput {
 }
 
 input ParentChildrenCreateRelationInput {
-  create: [ChildCreateWithoutParentInput!]
-  createMany: [ChildCreateWithoutParentInput!]
+  create: [ChildCreateWithoutParentChildrenInput!]
+  createMany: [ChildCreateWithoutParentChildrenInput!]
   connect: [ChildWhereUniqueInput!]
-  connectOrCreate: [ChildConnectOrCreateWithoutParentInput!]
+  connectOrCreate: [ChildConnectOrCreateWithoutParentChildrenInput!]
 }
 
-input ChildConnectOrCreateWithoutParentInput {
+input ChildConnectOrCreateWithoutParentChildrenInput {
   where: ChildWhereUniqueInput!
-  create: ChildCreateWithoutParentInput!
+  create: ChildCreateWithoutParentChildrenInput!
 }
 
-input ChildCreateWithoutParentInput {
+input ChildCreateWithoutParentChildrenInput {
   id: UUID!
 }
 
@@ -4802,8 +4802,8 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
-func (ec *executionContext) unmarshalInputChildConnectOrCreateWithoutParentInput(ctx context.Context, obj any) (ChildConnectOrCreateWithoutParentInput, error) {
-	var it ChildConnectOrCreateWithoutParentInput
+func (ec *executionContext) unmarshalInputChildConnectOrCreateWithoutParentChildrenInput(ctx context.Context, obj any) (ChildConnectOrCreateWithoutParentChildrenInput, error) {
+	var it ChildConnectOrCreateWithoutParentChildrenInput
 	asMap := map[string]any{}
 	for k, v := range obj.(map[string]any) {
 		asMap[k] = v
@@ -4825,7 +4825,7 @@ func (ec *executionContext) unmarshalInputChildConnectOrCreateWithoutParentInput
 			it.Where = data
 		case "create":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("create"))
-			data, err := ec.unmarshalNChildCreateWithoutParentInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInput(ctx, v)
+			data, err := ec.unmarshalNChildCreateWithoutParentChildrenInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -4870,8 +4870,8 @@ func (ec *executionContext) unmarshalInputChildCreateInput(ctx context.Context, 
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputChildCreateWithoutParentInput(ctx context.Context, obj any) (ChildCreateWithoutParentInput, error) {
-	var it ChildCreateWithoutParentInput
+func (ec *executionContext) unmarshalInputChildCreateWithoutParentChildrenInput(ctx context.Context, obj any) (ChildCreateWithoutParentChildrenInput, error) {
+	var it ChildCreateWithoutParentChildrenInput
 	asMap := map[string]any{}
 	for k, v := range obj.(map[string]any) {
 		asMap[k] = v
@@ -5111,14 +5111,14 @@ func (ec *executionContext) unmarshalInputParentChildrenCreateRelationInput(ctx 
 		switch k {
 		case "create":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("create"))
-			data, err := ec.unmarshalOChildCreateWithoutParentInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInputᚄ(ctx, v)
+			data, err := ec.unmarshalOChildCreateWithoutParentChildrenInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Create = data
 		case "createMany":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("createMany"))
-			data, err := ec.unmarshalOChildCreateWithoutParentInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInputᚄ(ctx, v)
+			data, err := ec.unmarshalOChildCreateWithoutParentChildrenInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -5132,7 +5132,7 @@ func (ec *executionContext) unmarshalInputParentChildrenCreateRelationInput(ctx 
 			it.Connect = data
 		case "connectOrCreate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("connectOrCreate"))
-			data, err := ec.unmarshalOChildConnectOrCreateWithoutParentInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentInputᚄ(ctx, v)
+			data, err := ec.unmarshalOChildConnectOrCreateWithoutParentChildrenInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentChildrenInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -6816,8 +6816,8 @@ func (ec *executionContext) marshalNChild2ᚕgithubᚗcomᚋelevenᚑamᚋgolem�
 	return ret
 }
 
-func (ec *executionContext) unmarshalNChildConnectOrCreateWithoutParentInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentInput(ctx context.Context, v any) (*ChildConnectOrCreateWithoutParentInput, error) {
-	res, err := ec.unmarshalInputChildConnectOrCreateWithoutParentInput(ctx, v)
+func (ec *executionContext) unmarshalNChildConnectOrCreateWithoutParentChildrenInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentChildrenInput(ctx context.Context, v any) (*ChildConnectOrCreateWithoutParentChildrenInput, error) {
+	res, err := ec.unmarshalInputChildConnectOrCreateWithoutParentChildrenInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
@@ -6826,8 +6826,8 @@ func (ec *executionContext) unmarshalNChildCreateInput2golemᚗinvalidᚋgqlgent
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalNChildCreateWithoutParentInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInput(ctx context.Context, v any) (*ChildCreateWithoutParentInput, error) {
-	res, err := ec.unmarshalInputChildCreateWithoutParentInput(ctx, v)
+func (ec *executionContext) unmarshalNChildCreateWithoutParentChildrenInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInput(ctx context.Context, v any) (*ChildCreateWithoutParentChildrenInput, error) {
+	res, err := ec.unmarshalInputChildCreateWithoutParentChildrenInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
@@ -7421,17 +7421,17 @@ func (ec *executionContext) marshalOChild2ᚕgithubᚗcomᚋelevenᚑamᚋgolem�
 	return ret
 }
 
-func (ec *executionContext) unmarshalOChildConnectOrCreateWithoutParentInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentInputᚄ(ctx context.Context, v any) ([]*ChildConnectOrCreateWithoutParentInput, error) {
+func (ec *executionContext) unmarshalOChildConnectOrCreateWithoutParentChildrenInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentChildrenInputᚄ(ctx context.Context, v any) ([]*ChildConnectOrCreateWithoutParentChildrenInput, error) {
 	if v == nil {
 		return nil, nil
 	}
 	var vSlice []any
 	vSlice = graphql.CoerceList(v)
 	var err error
-	res := make([]*ChildConnectOrCreateWithoutParentInput, len(vSlice))
+	res := make([]*ChildConnectOrCreateWithoutParentChildrenInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNChildConnectOrCreateWithoutParentInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNChildConnectOrCreateWithoutParentChildrenInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildConnectOrCreateWithoutParentChildrenInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -7439,17 +7439,17 @@ func (ec *executionContext) unmarshalOChildConnectOrCreateWithoutParentInput2ᚕ
 	return res, nil
 }
 
-func (ec *executionContext) unmarshalOChildCreateWithoutParentInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInputᚄ(ctx context.Context, v any) ([]*ChildCreateWithoutParentInput, error) {
+func (ec *executionContext) unmarshalOChildCreateWithoutParentChildrenInput2ᚕᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInputᚄ(ctx context.Context, v any) ([]*ChildCreateWithoutParentChildrenInput, error) {
 	if v == nil {
 		return nil, nil
 	}
 	var vSlice []any
 	vSlice = graphql.CoerceList(v)
 	var err error
-	res := make([]*ChildCreateWithoutParentInput, len(vSlice))
+	res := make([]*ChildCreateWithoutParentChildrenInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNChildCreateWithoutParentInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNChildCreateWithoutParentChildrenInput2ᚖgolemᚗinvalidᚋgqlgentmpᚐChildCreateWithoutParentChildrenInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}

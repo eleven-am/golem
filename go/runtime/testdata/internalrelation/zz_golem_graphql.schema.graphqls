@@ -96,18 +96,18 @@ input ParentCreateInput {
 }
 
 input ParentChildrenCreateRelationInput {
-  create: [ChildCreateWithoutParentInput!]
-  createMany: [ChildCreateWithoutParentInput!]
+  create: [ChildCreateWithoutParentChildrenInput!]
+  createMany: [ChildCreateWithoutParentChildrenInput!]
   connect: [ChildWhereUniqueInput!]
-  connectOrCreate: [ChildConnectOrCreateWithoutParentInput!]
+  connectOrCreate: [ChildConnectOrCreateWithoutParentChildrenInput!]
 }
 
-input ChildConnectOrCreateWithoutParentInput {
+input ChildConnectOrCreateWithoutParentChildrenInput {
   where: ChildWhereUniqueInput!
-  create: ChildCreateWithoutParentInput!
+  create: ChildCreateWithoutParentChildrenInput!
 }
 
-input ChildCreateWithoutParentInput {
+input ChildCreateWithoutParentChildrenInput {
   id: UUID!
 }
 

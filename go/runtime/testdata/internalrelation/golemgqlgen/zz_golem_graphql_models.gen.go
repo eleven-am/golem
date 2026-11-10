@@ -9,9 +9,9 @@ import (
 	"strconv"
 )
 
-type ChildConnectOrCreateWithoutParentInput struct {
-	Where  *ChildWhereUniqueInput         `json:"where"`
-	Create *ChildCreateWithoutParentInput `json:"create"`
+type ChildConnectOrCreateWithoutParentChildrenInput struct {
+	Where  *ChildWhereUniqueInput                 `json:"where"`
+	Create *ChildCreateWithoutParentChildrenInput `json:"create"`
 }
 
 type ChildCreateInput struct {
@@ -19,7 +19,7 @@ type ChildCreateInput struct {
 	ParentID any `json:"parentID"`
 }
 
-type ChildCreateWithoutParentInput struct {
+type ChildCreateWithoutParentChildrenInput struct {
 	ID any `json:"id"`
 }
 
@@ -53,10 +53,10 @@ type ChildWhereUniqueInput struct {
 }
 
 type ParentChildrenCreateRelationInput struct {
-	Create          []*ChildCreateWithoutParentInput          `json:"create,omitempty"`
-	CreateMany      []*ChildCreateWithoutParentInput          `json:"createMany,omitempty"`
-	Connect         []*ChildWhereUniqueInput                  `json:"connect,omitempty"`
-	ConnectOrCreate []*ChildConnectOrCreateWithoutParentInput `json:"connectOrCreate,omitempty"`
+	Create          []*ChildCreateWithoutParentChildrenInput          `json:"create,omitempty"`
+	CreateMany      []*ChildCreateWithoutParentChildrenInput          `json:"createMany,omitempty"`
+	Connect         []*ChildWhereUniqueInput                          `json:"connect,omitempty"`
+	ConnectOrCreate []*ChildConnectOrCreateWithoutParentChildrenInput `json:"connectOrCreate,omitempty"`
 }
 
 type ParentCreateInput struct {

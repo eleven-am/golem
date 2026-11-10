@@ -143,7 +143,7 @@ func relationAnalyticsFields(view modelView, models map[ir.ModelID]ir.ModelDeclI
 			}
 			hop, hopOK := fieldContractByID(contracts[current], relation.SourceField)
 			if !hopOK || !ir.ModesGraphQLReadable(hop.Modes) {
-				return nil, fmt.Errorf("model %s relation dimension %s has an unavailable terminal field", view.contract.GraphQLName, configured.Name)
+				return nil, fmt.Errorf("model %s relation dimension %s passes through an unavailable relation", view.contract.GraphQLName, configured.Name)
 			}
 			current = relation.TargetModel
 		}
