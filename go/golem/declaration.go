@@ -228,6 +228,7 @@ func GraphQLPlural(_ string) GraphQLOption                  { return GraphQLOpti
 func GraphQLRoots(_ GraphQLRootNames) GraphQLOption         { return GraphQLOption{} }
 func GraphQLPageSizes(_, _ int) GraphQLOption               { return GraphQLOption{} }
 func GraphQLHidden() GraphQLOption                          { return GraphQLOption{} }
+func GraphQLWithoutIndexSearch() GraphQLOption              { return GraphQLOption{} }
 
 // GraphQLHookOwned omits the named scalar fields from GraphQL create inputs.
 // They remain ordinary typed programmatic create fields so a recognized

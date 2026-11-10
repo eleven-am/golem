@@ -39,7 +39,7 @@ func AddFullTextSearchOperations(compilation *ir.CompilationIR) []ir.Diagnostic 
 				diagnostics = append(diagnostics, ir.NewError("P9_FULLTEXT_GRAPHQL_MODEL", fmt.Sprintf("full-text index %q belongs to an unknown GraphQL model", index.Name), ir.SourceSpan{}))
 				continue
 			}
-			if !contract.Exposed {
+			if !contract.Exposed || contract.IndexSearchDisabled {
 				continue
 			}
 			exported, ok := fulltextcontract.ExportedIndexName(index.Name)

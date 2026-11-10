@@ -789,6 +789,9 @@ its operation has ended. It is for contention between transactions. For those
 deterministic conflicts, a retry only repeats the failure `n` times; handle
 them in your code instead.
 
+A SQLite BEGIN refused because another connection holds the write lock is a
+`CONFLICT` and is replayed.
+
 ### Mutations return only what you select
 
 This is the API's sharpest edge. A mutation returns a `Row` containing
@@ -1289,6 +1292,12 @@ The maximum also sets the list's query cost. Generated semantic and full-text
 search roots declare their own maximum: the smallest of the search engines'
 ceiling, the model's `MaxPageSize` and its `MaxTake`. Their `take` argument
 defaults to the model's default page size, narrowed to that maximum.
+
+When a custom operation owns the public search semantics, add
+`golem.GraphQLWithoutIndexSearch()` to the model's `golem.GraphQL` options. It
+suppresses every generated full-text and semantic GraphQL search root for that
+model without removing the indexes or their typed caller, system and
+transaction Go methods.
 
 To run a custom mutation from Go, call the generated `Mutate`:
 
@@ -2145,6 +2154,7 @@ returns the internal cause, for your logs only.
 | `Reason` | why, when golem can say; empty otherwise |
 | `Operation`, `Model` | the operation and the model it ran on |
 | `Field` | the field the refusal is about, under the rules below |
+| `InputField` | the name of the caller's input the refusal is about, set only by `golem.InputError`; sent to GraphQL clients as `extensions.field` |
 | `Limit`, `LimitMax` | for `LIMIT_EXCEEDED`, the limit's name and the maximum in force |
 | `Message` | the public message |
 
@@ -2248,14 +2258,18 @@ ended `Recv`.
 
 A `golem.Error` becomes a GraphQL error whose message is the public message,
 with `extensions.code`, plus `extensions.reason` when there is a reason and
-`extensions.limit` and `extensions.max` for a limit:
+`extensions.limit` and `extensions.max` for a limit, plus `extensions.field`
+when the error carries an `InputField`:
 
 ```json
 {"message": "request exceeds the touched_rows limit of 1000",
  "extensions": {"code": "LIMIT_EXCEEDED", "reason": "LIMIT_EXCEEDED", "limit": "touched_rows", "max": 1000}}
 ```
 
-`Field` and `Model` are not sent. Any error that is not a golem or events
+`Field` and `Model` are not sent. To refuse an input your own code validated,
+return `golem.InputError(reason, operation, field, message, cause)`: it is a
+`BAD_USER_INPUT` error whose `field` reaches the client as `extensions.field`,
+and `cause` stays in your logs. Any error that is not a golem or events
 error is reported to `ReportInternalError` and sent as
 `INTERNAL_SERVER_ERROR`. The GraphQL layer's own codes, such as
 `GRAPHQL_VALIDATION_FAILED`, `QUERY_LIMIT_EXCEEDED` and `INPUT_LIMIT_EXCEEDED`,

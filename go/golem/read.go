@@ -1128,6 +1128,7 @@ type Error struct {
 	Operation  string
 	Model      ModelID
 	Field      FieldID
+	InputField string
 	Limit      Limit
 	LimitMax   int
 	Message    string
@@ -1155,6 +1156,12 @@ func RuntimeOperationError(code ErrorCode, operation string, model ModelID, fiel
 func RuntimeOperationErrorWithReason(code ErrorCode, reason Reason, operation string, model ModelID, field FieldID, message string, cause error) error {
 	failure := RuntimeOperationError(code, operation, model, field, message, cause).(*Error)
 	failure.Reason = reason
+	return failure
+}
+
+func InputError(reason Reason, operation, field, message string, cause error) error {
+	failure := RuntimeOperationErrorWithReason(CodeBadUserInput, reason, operation, ModelID{}, FieldID{}, message, cause).(*Error)
+	failure.InputField = field
 	return failure
 }
 

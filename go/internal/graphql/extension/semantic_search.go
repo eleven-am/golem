@@ -40,7 +40,7 @@ func AddSemanticSearchOperations(compilation *ir.CompilationIR) []ir.Diagnostic 
 				diagnostics = append(diagnostics, ir.NewError("P9_SEMANTIC_GRAPHQL_MODEL", fmt.Sprintf("semantic index %q belongs to an unknown GraphQL model", index.Name), ir.SourceSpan{}))
 				continue
 			}
-			if !contract.Exposed {
+			if !contract.Exposed || contract.IndexSearchDisabled {
 				continue
 			}
 			exported, ok := semanticcontract.ExportedIndexName(index.Name)

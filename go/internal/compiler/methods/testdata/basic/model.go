@@ -29,6 +29,7 @@ func (User) GolemModel() g.ModelSpec[User] {
 		g.ScopedReads[User](),
 		g.GraphQL[User](
 			g.GraphQLOperations(g.GraphQLFindOne, g.GraphQLFindMany, g.GraphQLCreate, g.GraphQLAggregate, g.GraphQLGroupBy),
+			g.GraphQLWithoutIndexSearch(),
 			g.GraphQLHookOwned(Users.Age),
 			g.GraphQLPlural("accounts"),
 			g.GraphQLRoots(g.GraphQLRootNames{FindOne: "account", FindMany: "accounts", Events: "accountEvents"}),

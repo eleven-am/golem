@@ -434,7 +434,8 @@ own. Use the system field set: `Authors.System().KeyHash.Create(v)` (and
 - `golem.GraphQL[M](...)` with `GraphQLOperations(GraphQLFindOne,
   GraphQLFindMany, GraphQLCreate, GraphQLUpdate, GraphQLUpsert, GraphQLDelete,
   GraphQLUpdateMany, GraphQLDeleteMany, ...)`, `GraphQLHookOwned(fields...)`,
-  `GraphQLHidden()`.
+  `GraphQLHidden()`, and `GraphQLWithoutIndexSearch()` to retain typed Go
+  index search while omitting generated full-text and semantic GraphQL roots.
 
 Declaring an optimistic-concurrency version token removes the nested relation
 methods and the batch writes for that model.

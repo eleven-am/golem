@@ -80,6 +80,23 @@ func TestAddSemanticSearchOperationsSkipsHiddenModel(t *testing.T) {
 	}
 }
 
+func TestAddSemanticSearchOperationsHonorsModelOptOut(t *testing.T) {
+	compilation := extensionFixture()
+	compilation.Model.Schema.PackagePath = "example/social"
+	compilation.Contract.Models[0].IndexSearchDisabled = true
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{"user-name"}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilation.Model.Extensions = []ir.ProviderExtensionIR{{ID: "semantic-index", Provider: ir.SQLite, Version: 1, Owner: "user", Kind: semanticcontract.IndexKind, Payload: payload}}
+	if diagnostics := AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("opt-out diagnostics=%#v", diagnostics)
+	}
+	if len(compilation.Contract.CustomOperations) != 0 {
+		t.Fatalf("opted-out model gained operations=%#v", compilation.Contract.CustomOperations)
+	}
+}
+
 func TestAddSemanticSearchOperationsSynthesizesTheSimilarityRoot(t *testing.T) {
 	compilation := extensionFixture()
 	compilation.Model.Schema.PackagePath = "example/social"

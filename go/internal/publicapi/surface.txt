@@ -1992,6 +1992,7 @@ golem.Error comparable
 golem.Error type struct
 golem.Error.Code field ErrorCode
 golem.Error.Field field FieldID
+golem.Error.InputField field string
 golem.Error.Limit field Limit
 golem.Error.LimitMax field int
 golem.Error.Message field string
@@ -2486,6 +2487,7 @@ golem.GraphQLUpdate const GraphQLOperation = "update"
 golem.GraphQLUpdateMany const GraphQLOperation = "updateMany"
 golem.GraphQLUpsert const GraphQLOperation = "upsert"
 golem.GraphQLValue func(string) EnumValueOption
+golem.GraphQLWithoutIndexSearch func() GraphQLOption
 golem.GroupCell[M any, V any] type interface {} sealed
 golem.GroupOption[M any] type interface {} sealed
 golem.GroupOrder[M any] type struct
@@ -2530,6 +2532,7 @@ golem.IndexExpr func[M any, V any](SchemaValue[M, V]) IndexKey[M]
 golem.IndexKey[M any] type struct
 golem.IndexSpec[M any] type struct
 golem.InnerJoin func[M any, R any](Scope[M], Relation[M, R]) Scope[R]
+golem.InputError func(Reason, string, string, string, error) error
 golem.Int16ToInt32 var SchemaCast[int16, int32]
 golem.Int16ToInt64 var SchemaCast[int16, int64]
 golem.Int32ToInt64 var SchemaCast[int32, int64]
