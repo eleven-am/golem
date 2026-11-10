@@ -34,7 +34,7 @@ follows the code and says so.
 | I want to… | Use | See |
 |---|---|---|
 | declare a table | a struct with `golem:"model;id=…;table=…"` | 4 |
-| keep a column out of every client but use it from Go | `golem:"internal"` (plus `system` if a caller must not write it) | 4 |
+| keep a column or relation out of every client but use it from Go | `golem:"internal"` (plus `system` on a column if a caller must not write it) | 4 |
 | write a `system` field from Go | `Model.System().Field.Create(v)` on a system client or in a hook | 4, 7 |
 | authorize rows and fields | `DefinePolicy` with `CanRead/Create/Update/Delete`, `…Fields` | 5 |
 | let one operation make a write callers cannot | `golem.Within(rules, Resolver).Can…` | 13 |
@@ -91,10 +91,12 @@ follows the code and says so.
    `migrations/` and `.golem/` are written relative to the working directory.
    Run `go mod tidy` after the first `generate` (the generated `golemgqlgen/`
    imports gqlgen).
-7. **Use `internal`, not `hidden`, for server-only fields** such as API-key
-   hashes. `hidden` removes the field from the generated Go API as well;
-   `internal` keeps it for Go and system code and removes it from GraphQL,
-   introspection, event payloads and the manifest.
+7. **Use `internal`, not `hidden`, for server-only fields and relations** such
+   as API-key hashes. `hidden` removes the field from the generated Go API as
+   well; `internal` keeps it for Go and system code and removes it from GraphQL,
+   introspection, event payloads and the manifest. On a relation it is
+   field-local: mark both relation fields (and the foreign-key columns) to keep
+   a link out of every client.
 8. **A required field that only a `BeforeCreate` hook sets must be declared
    `golem.GraphQLHookOwned(...)`**, or the create is refused as
    `BAD_USER_INPUT` before the hook runs.
@@ -398,7 +400,7 @@ every generated symbol.
 | `updated` | set to the mutation time on every update |
 | `immutable` | writable on create, never on update |
 | `system` | only system clients and hooks may write it; a caller naming it is refused |
-| `internal` | kept in the Go and system API (lookups, filters, order); absent from GraphQL, introspection, event payloads and the manifest |
+| `internal` | kept in the Go and system API (lookups, filters, order, relations); absent from GraphQL, introspection, event payloads and the manifest |
 | `hidden` | excluded from the generated API altogether |
 | `writeonly` | writable, never readable |
 | `graphql=` | GraphQL field name |
@@ -406,8 +408,10 @@ every generated symbol.
 | `fields=` / `references=` | local and foreign columns of the relation |
 | `name=` | pairs the two sides when a model has two relations to one target |
 
-**`internal` rules.** It combines with everything except `hidden`. A primary
-key cannot be `internal` (`P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`). On a model with
+**`internal` rules.** It combines with everything except `hidden`, and it can
+mark a relation field. An internal relation hides only that field and its
+inputs; the other side and the foreign-key columns keep their own modes. A
+primary key cannot be `internal` (`P1_GOLEM_TAG_INTERNAL_PRIMARY_KEY`). On a model with
 a GraphQL create root, a required `internal` field with no default must also be
 `system` or hook-owned (`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`), and a unique
 one must be `system`. Kernel-mode schemas have no such requirement. Verified:

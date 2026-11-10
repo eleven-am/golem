@@ -87,7 +87,7 @@ On a real field:
 | `system` | written only by hooks and the system client; a caller's input that names it is refused |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |
-| `internal` | kept in the Go and system API, absent from GraphQL |
+| `internal` | kept in the Go and system API, absent from GraphQL; valid on columns and relations |
 | `writeonly` | writable, never readable |
 | `graphql=` | GraphQL field name |
 | `relation=has_many` / `has_one` / `belongs_to` | relation kind |
@@ -95,8 +95,8 @@ On a real field:
 | `name=` | pairs the two sides of a relation when a model has more than one relation to the same target, such as a self-relation |
 
 Use `hidden` for a column no code should touch through golem, and `internal`
-for one your own Go code must still read, filter or look up by but no client
-may see: an API key hash is a non-null `string` field tagged `golem:"unique;internal;system"`,
+for a column or relation your own Go code must still read, filter or look up by
+but no client may see: an API key hash is a non-null `string` field tagged `golem:"unique;internal;system"`,
 found with `FindUnique(ctx, Keys.ByKeyHash.Value(hash))` in authentication middleware and absent from every GraphQL type,
 input, enum, subscription payload and the client manifest. A `By<Field>` selector is generated only for a non-null unique field, never for a `golem.Null[T]` one. `internal` combines
 with everything except `hidden`, and a primary key cannot be `internal`
@@ -104,6 +104,41 @@ with everything except `hidden`, and a primary key cannot be `internal`
 required internal field with no default must also be `system` or listed in
 `GraphQLHookOwned`, or `golem generate` refuses it
 (`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`).
+
+`internal` on a relation is field-local, like `hidden`. It removes that one
+relation field from the GraphQL object, its `where` and `orderBy` inputs, the
+relation inputs of create and update, the event payload and the client
+manifest. The generated Go handle, selection, filter and write surface stay.
+It does not hide the other side of the relation or the foreign-key columns, and
+a relation dimension of an analytics root cannot pass through it. A relation
+with no `internal` on its other side is still visible from that side, and its
+manifest entry then has no inverse.
+
+To keep a link out of every client, mark both relation fields and the
+foreign-key column:
+
+```go
+type Child struct {
+	_ struct{} `golem:"model;table=children"`
+
+	ID       golem.UUID `db:"id" golem:"pk"`
+	ParentID golem.UUID `db:"parent_id" golem:"internal;system"`
+	Parent   *Parent    `db:"-" golem:"relation=belongs_to;fields=parent_id;references=id;internal"`
+}
+
+type Parent struct {
+	_ struct{} `golem:"model;table=parents"`
+
+	ID       golem.UUID `db:"id" golem:"pk"`
+	Children []Child    `db:"-" golem:"relation=has_many;fields=id;references=parent_id;internal"`
+}
+```
+
+`internal` on a relation does not change its foreign key. A visible
+`ParentID` stays in `ChildCreateInput`, and an internal, required `ParentID`
+with no default follows the rule above (`P8_GRAPHQL_INTERNAL_CLIENT_REQUIRED`
+unless it is `system` or hook-owned). `internal` and `hidden` cannot be combined
+on a relation (`P1_EXPOSURE_MODE_CONFLICT`).
 
 `db:"-"` marks a field as having no column of its own, which every relation
 needs. `relation=many_to_many` is refused
