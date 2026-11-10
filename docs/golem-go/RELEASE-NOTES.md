@@ -45,7 +45,7 @@ is refused because another connection holds the SQLite write lock now fails as
 
 ---
 
-## go/v0.8.7
+## go/v0.8.8
 
 No public Go API change. Apps need no regeneration.
 
