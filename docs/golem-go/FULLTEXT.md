@@ -122,6 +122,26 @@ GraphQL root is
 `textSearchMessagesByContent(query:, take:, where:)`; it returns rows without
 scores.
 
+If a custom operation owns the public search contract, suppress generated
+index-search roots for the model while keeping this index and every typed Go
+method:
+
+```go
+func (Message) GolemModel() golem.ModelSpec[Message] {
+	return golem.DefineModel(
+		golem.GraphQL[Message](golem.GraphQLWithoutIndexSearch()),
+		golem.FullTextIndex("content",
+			golem.FullTextField(Messages.Subject, 3),
+			golem.FullTextField(Messages.Body, 1),
+		),
+	)
+}
+```
+
+`GraphQLWithoutIndexSearch()` also suppresses semantic search roots declared on
+the same model. It changes only the generated GraphQL contract and needs
+regeneration, not a migration.
+
 Terms are OR-joined. Double quotes form a phrase. A trailing `*` on a term or
 directly after a closing quote makes the final word a prefix of at least two
 letters or digits: `ref*` or `"service fe"*`. Whitespace or the end of the

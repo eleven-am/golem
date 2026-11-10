@@ -5,12 +5,35 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.7
+go get github.com/eleven-am/golem/go@v0.8.8
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.8.8
+
+Regenerate applications that use `GraphQLWithoutIndexSearch`. None of the
+changes below touches the physical schema, so none needs a migration.
+
+**A model can keep index search out of GraphQL.**
+`golem.GraphQLWithoutIndexSearch()` suppresses the generated full-text and
+semantic search roots for that model while preserving its typed Go search
+methods and indexes. Use it when a custom operation owns stricter search
+semantics or trust checks and the generated roots would bypass that contract.
+
+**Input errors can name the input.** `golem.InputError(reason, operation,
+field, message, cause)` returns a `BAD_USER_INPUT` `*golem.Error` whose
+`InputField` is sent to GraphQL clients as `extensions.field`, next to
+`extensions.code` and `extensions.reason`. Clients can read `extensions.field`
+to attach the message to the input it concerns. The cause stays in server logs.
+
+**`RetryConflicts` replays SQLite BEGIN contention.** A transaction whose BEGIN
+is refused because another connection holds the SQLite write lock now fails as
+`CONFLICT` instead of an internal error, so `RetryConflicts` runs it again.
 
 ---
 

@@ -32,6 +32,24 @@ caller.Notes.SimilarRelated(ctx, notes.Notes.ByID.Value(id), 2)
 Both accept optional predicates, take a `take` between 1 and 1000, and return
 `SemanticResult` values carrying `Row()`, `Distance()` and `Similarity()`.
 
+GraphQL normally receives the corresponding search and similarity roots. When
+a custom operation owns the public search semantics, keep the semantic index
+and typed Go methods but suppress all generated index-search roots for the
+model:
+
+```go
+func (Note) GolemModel() golem.ModelSpec[Note] {
+	return golem.DefineModel(
+		golem.GraphQL[Note](golem.GraphQLWithoutIndexSearch()),
+		golem.SemanticIndex("related", "content", Notes.Title, Notes.Body),
+	)
+}
+```
+
+`GraphQLWithoutIndexSearch()` also suppresses full-text search roots declared on
+the same model. It changes only the generated GraphQL contract and needs
+regeneration, not a migration.
+
 ## Supplying an embedding provider
 
 Golem never calls a model vendor for you. You implement two methods:

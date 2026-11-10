@@ -29,6 +29,11 @@ func TestPresentErrorCarriesReasonAndLimitExtensions(t *testing.T) {
 			want:    `{"message":"value for Asset.Name exceeds maximum length 255","path":["alias"],"extensions":{"code":"BAD_USER_INPUT","reason":"VALUE_TOO_LONG"}}`,
 		},
 		{
+			name:    "validation field",
+			failure: golem.InputError(golem.ReasonInvalidValue, "saveDraft", "accountId", "accountId is required", trusted),
+			want:    `{"message":"accountId is required","path":["alias"],"extensions":{"code":"BAD_USER_INPUT","field":"accountId","reason":"INVALID_VALUE"}}`,
+		},
+		{
 			name:    "not granted",
 			failure: golem.RuntimeOperationErrorWithReason(golem.CodeForbidden, golem.ReasonNotGranted, "findMany", golem.ModelID{1}, golem.FieldID{}, "operation is not granted", trusted),
 			want:    `{"message":"operation is not granted","path":["alias"],"extensions":{"code":"FORBIDDEN","reason":"NOT_GRANTED"}}`,

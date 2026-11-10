@@ -42,6 +42,7 @@ type ModelPatch struct {
 	DefaultPage           *uint32
 	MaximumPage           *uint32
 	Hidden                bool
+	IndexSearchDisabled   bool
 	HookOwnedCreateFields []ir.FieldID
 	Subscriptions         *bool
 	DeleteSnapshot        *[]ir.FieldID
@@ -173,6 +174,7 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 				model.Exposed = false
 				model.Operations = []ir.Operation{}
 			}
+			model.IndexSearchDisabled = patch.IndexSearchDisabled
 			model.HookOwnedCreateFields = append([]ir.FieldID(nil), patch.HookOwnedCreateFields...)
 			if patch.Subscriptions != nil {
 				model.Subscriptions = *patch.Subscriptions

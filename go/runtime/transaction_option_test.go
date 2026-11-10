@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -93,6 +94,96 @@ func TestRetryConflictsRunsTheCallbackUntilItCommitsAndAfterCommitHooksOnce(t *t
 	}
 	if got := socialCount(t, fixture, fixture.schema.User); got != 1 {
 		t.Fatalf("users=%d; want only the committed attempt's row", got)
+	}
+}
+
+func TestRetryConflictsReplaysAfterSQLiteBeginContention(t *testing.T) {
+	fixture := newSocialMutationFixture(t, golem.ModelID{}, nil)
+	ctx := context.Background()
+	rows, err := fixture.app.database.QueryxContext(ctx, `PRAGMA database_list`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var databasePath string
+	for rows.Next() {
+		var sequence int
+		var name, path string
+		if err := rows.Scan(&sequence, &name, &path); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		if name == "main" {
+			databasePath = path
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if databasePath == "" {
+		t.Fatal("SQLite main database path is empty")
+	}
+
+	fixture.app.database.SetMaxOpenConns(1)
+	fixture.app.database.SetMaxIdleConns(1)
+	connection, err := fixture.app.database.Connx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.ExecContext(ctx, `PRAGMA busy_timeout = 0`); err != nil {
+		connection.Close()
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	gateDatabase, _, err := sqliteprovider.New().Open(ctx, "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gateDatabase.Close() })
+	gate, err := gateDatabase.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateOpen := true
+	t.Cleanup(func() {
+		if gateOpen {
+			_ = gate.Rollback()
+		}
+	})
+
+	attempts := 0
+	callbackCalls := 0
+	err = retryConflicts(ctx, 2, func(retry int) time.Duration {
+		if retry != 1 {
+			t.Fatalf("retry=%d; want 1", retry)
+		}
+		if err := gate.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+		gateOpen = false
+		return 0
+	}, func() error {
+		attempts++
+		return systemTransactionAttempt(ctx, fixture.app.System(), func(transaction *lockKeyTx) error {
+			callbackCalls++
+			_, err := SystemTxCreate(ctx, transaction, fixture.userDescriptor, fixture.userCreate(1, "after-contention"))
+			return err
+		}, golem.ReadCommitted)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || callbackCalls != 1 {
+		t.Fatalf("attempts=%d callbackCalls=%d; want two begin attempts and one callback", attempts, callbackCalls)
+	}
+	if got := socialCount(t, fixture, fixture.schema.User); got != 1 {
+		t.Fatalf("users=%d; want only the replayed transaction's row", got)
 	}
 }
 

@@ -676,15 +676,16 @@ type ModelContractIR struct {
 	Selectors             []SelectorContractIR `json:"selectors"`
 	// FieldModes is a bootstrap source-compatibility field. It is not serialized;
 	// normalized producers and consumers use Fields.
-	FieldModes    []FieldContractIR         `json:"-"`
-	Operations    []Operation               `json:"operations"`
-	Subscriptions bool                      `json:"subscriptions"`
-	Event         *EventContractIR          `json:"event,omitempty"`
-	Aggregation   *AggregationContractIR    `json:"aggregation,omitempty"`
-	ScopedReads   bool                      `json:"scopedReads"`
-	Limits        LimitContractIR           `json:"limits"`
-	Computed      []ComputedFieldContractIR `json:"computed"`
-	Exposed       bool                      `json:"exposed"`
+	FieldModes          []FieldContractIR         `json:"-"`
+	Operations          []Operation               `json:"operations"`
+	Subscriptions       bool                      `json:"subscriptions"`
+	Event               *EventContractIR          `json:"event,omitempty"`
+	Aggregation         *AggregationContractIR    `json:"aggregation,omitempty"`
+	ScopedReads         bool                      `json:"scopedReads"`
+	Limits              LimitContractIR           `json:"limits"`
+	Computed            []ComputedFieldContractIR `json:"computed"`
+	Exposed             bool                      `json:"exposed"`
+	IndexSearchDisabled bool                      `json:"indexSearchDisabled,omitempty"`
 }
 
 const EventSchemaFormatVersion uint16 = 1

@@ -614,6 +614,12 @@ func (in *interpreter) evalGraphQL(call *ast.CallExpr) {
 				continue
 			}
 			patch.Hidden = true
+		case "GraphQLWithoutIndexSearch":
+			if len(option.Args) != 0 {
+				in.errorAt("P5_GRAPHQL_INDEX_SEARCH_ARITY", "GraphQLWithoutIndexSearch takes no arguments", option)
+				continue
+			}
+			patch.IndexSearchDisabled = true
 		case "GraphQLHookOwned":
 			if len(option.Args) == 0 {
 				in.errorAt("P8_GRAPHQL_HOOK_OWNED_ARITY", "GraphQLHookOwned requires at least one generated scalar field handle", option)

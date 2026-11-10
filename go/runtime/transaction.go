@@ -353,7 +353,7 @@ func callerTransactionAttempt[P, A any](ctx context.Context, caller *Caller[P, A
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
 	transaction, err := caller.app.database.BeginTxx(ctx, transactionBeginOptions(caller.app.provider, isolation))
 	if err != nil {
-		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin caller transaction: %w", err)
+		return transactionBeginError("caller", err)
 	}
 	binding := transactionExecution(caller.app.database, transaction)
 	binding.observation = observation
@@ -400,7 +400,7 @@ func systemTransactionAttempt[P, A any](ctx context.Context, system System[P, A]
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
 	transaction, err := system.app.database.BeginTxx(ctx, transactionBeginOptions(system.app.provider, isolation))
 	if err != nil {
-		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin system transaction: %w", err)
+		return transactionBeginError("system", err)
 	}
 	binding := transactionExecution(system.app.database, transaction)
 	binding.observation = observation
@@ -423,6 +423,13 @@ func transactionBeginOptions(provider policyir.Provider, isolation golem.Isolati
 		return &sql.TxOptions{Isolation: sql.LevelSerializable}
 	}
 	return nil
+}
+
+func transactionBeginError(scope string, err error) error {
+	if providerInterference(err) {
+		return transactionConflict("begin "+scope+" transaction conflicted with another transaction", err)
+	}
+	return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin %s transaction: %w", scope, err)
 }
 
 const (

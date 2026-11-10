@@ -35,3 +35,20 @@ func TestAddFullTextSearchOperationsCreatesOneProviderNeutralCallerQuery(t *test
 		t.Fatal("tampered full-text operation matched")
 	}
 }
+
+func TestAddFullTextSearchOperationsHonorsModelOptOut(t *testing.T) {
+	compilation := extensionFixture()
+	compilation.Model.Schema.PackagePath = "example/social"
+	compilation.Contract.Models[0].IndexSearchDisabled = true
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: "user-name", Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilation.Model.Extensions = []ir.ProviderExtensionIR{{ID: "fulltext-index", Provider: ir.SQLite, Version: 1, Owner: "user", Kind: fulltextcontract.IndexKind, Payload: payload}}
+	if diagnostics := AddFullTextSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("opt-out diagnostics=%#v", diagnostics)
+	}
+	if len(compilation.Contract.CustomOperations) != 0 {
+		t.Fatalf("opted-out model gained operations=%#v", compilation.Contract.CustomOperations)
+	}
+}

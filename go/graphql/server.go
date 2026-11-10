@@ -781,6 +781,9 @@ func publicErrorExtensions(failure *golem.Error) map[string]any {
 	if failure.Reason != "" {
 		extensions["reason"] = string(failure.Reason)
 	}
+	if failure.InputField != "" {
+		extensions["field"] = failure.InputField
+	}
 	if failure.Limit != "" {
 		extensions["limit"] = string(failure.Limit)
 		extensions["max"] = failure.LimitMax
