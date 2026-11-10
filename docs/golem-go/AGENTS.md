@@ -1,13 +1,13 @@
 # Golem (Go): a working guide for an AI agent
 
-**Describes go/v0.8.7 and the TypeScript client 0.2.1.** Module path:
+**Describes go/v0.8.8 and the TypeScript client 0.2.1.** Module path:
 `github.com/eleven-am/golem/go`. The `go/` suffix is part of the path. Tags
 are `go/vX.Y.Z`; a plain `vX.Y.Z` tag belongs to the TypeScript packages in the
 same repository and does not describe this module. The module needs Go 1.26.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.7
-go install github.com/eleven-am/golem/go/cmd/golem@v0.8.7
+go get github.com/eleven-am/golem/go@v0.8.8
+go install github.com/eleven-am/golem/go/cmd/golem@v0.8.8
 ```
 
 Keep the CLI and the library on one version. Generated code carries a contract
@@ -21,7 +21,7 @@ npm install @eleven-am/golem-client@0.2.1 @eleven-am/golem-react@0.2.1 @tanstack
 ```
 
 This file is meant to be enough to build with golem without reading its
-source. Every Go code block passes `go vet` against go/v0.8.6, and go/v0.8.7 changed no public Go API (fragments inside
+source. Every Go code block passes `go vet` against go/v0.8.6, and every block added for go/v0.8.8 against go/v0.8.8 (fragments inside
 a complete program; schema-package blocks are files of the verified example).
 The end-to-end program in section 27 was generated, migrated and run as shown
 against SQLite, and with the provider swapped, against PostgreSQL. Where the shipped docs and the code disagree, this file
@@ -2522,7 +2522,7 @@ migration.
 
 ---
 
-## 29. Recent changes (go/v0.6.5 to go/v0.8.7)
+## 29. Recent changes (go/v0.6.5 to go/v0.8.8)
 
 Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
@@ -2543,6 +2543,7 @@ Read RELEASE-NOTES.md before every upgrade. Upgrade paths that need action:
 
 | Release | What changed |
 |---|---|
+| go/v0.8.8 | `GraphQLWithoutIndexSearch()` keeps a model's index search out of GraphQL; `golem.InputError` puts `extensions.field` on BAD_USER_INPUT errors; SQLite BEGIN contention is a `CONFLICT` that `RetryConflicts` replays; `TextSearch<Index>With(ctx, q, take, golem.TextSearchOptions[M]{AllTerms, Where, OrderBy, Select})`; `internal` on relations (field-local) |
 | go/v0.8.7 | no public Go API change; the QUEUE.md recipe is tested on PostgreSQL over GraphQL HTTP with a deterministic lock-order probe; the social example streams `PostTag` (migration 0010); client 0.2.1 adds `useGolemConnection()` |
 | go/v0.8.6 | custom queries receive the caller's actor over GraphQL and from Go through the new generated `Query` (the read-side twin of `Mutate`); generated GraphQL Go code is gofmt-clean and generation fails if gofmt does not converge; doc fixes: `FindUnique(ctx, Keys.ByKeyHash.Value(hash))`, QUEUE.md `requestExport` selects `Exports.ID`, `By<Field>` only for non-null unique fields |
 | go/v0.8.5 | publisher wakes on commit (~20 ms); recipe race guards (cancel order, job-ID match, conditional success write) |
