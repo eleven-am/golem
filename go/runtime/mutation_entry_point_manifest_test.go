@@ -424,14 +424,14 @@ func nonMutationRuntimeEntryPoints() map[string]struct{} {
 		"CallerExplainAggregate", "CallerExplainCount", "CallerExplainFindFirst", "CallerExplainFindMany",
 		"CallerExplainFindUnique", "CallerExplainGroupBy", "CallerExplainRelationGroupBy", "CallerExplainScoped",
 		"CallerFindFirst", "CallerFindMany", "CallerFindUnique", "CallerFrozenEvents", "CallerFrozenReadEvents",
-		"CallerGroupBy", "CallerMutationModel", "CallerOperationContext", "CallerRelationGroupBy", "CallerScoped", "CallerSearch", "CallerTextSearch", "CallerTextSearchSelect",
+		"CallerGroupBy", "CallerMutationModel", "CallerOperationContext", "CallerRelationGroupBy", "CallerScoped", "CallerSearch", "CallerTextSearch", "CallerTextSearchSelect", "CallerTextSearchWith",
 		"CallerSimilar", "CallerTransaction", "CallerTxAggregate", "CallerTxCancelJob", "CallerTxCount", "CallerTxEnqueue", "CallerTxLockKeys", "CallerTxSearch", "CallerTxSimilar",
 		"CallerTxFindFirst", "CallerTxFindMany", "CallerTxFindUnique", "CallerTxGroupBy",
-		"CallerTxRelationGroupBy", "CallerTxScoped", "CallerTxSystem", "CallerTxTextSearch", "CallerTxTextSearchSelect",
+		"CallerTxRelationGroupBy", "CallerTxScoped", "CallerTxSystem", "CallerTxTextSearch", "CallerTxTextSearchSelect", "CallerTxTextSearchWith",
 		"SystemAggregate", "SystemCount", "SystemFindFirst", "SystemFindMany", "SystemFindUnique",
-		"SystemGroupBy", "SystemRelationGroupBy", "SystemScoped", "SystemSearch", "SystemSimilar", "SystemTextSearch", "SystemTextSearchSelect",
+		"SystemGroupBy", "SystemRelationGroupBy", "SystemScoped", "SystemSearch", "SystemSimilar", "SystemTextSearch", "SystemTextSearchSelect", "SystemTextSearchWith",
 		"SystemTransaction", "SystemTxAggregate", "SystemTxCancelJob", "SystemTxCount", "SystemTxEnqueue", "SystemTxLockKeys", "SystemTxFindFirst",
-		"SystemTxFindMany", "SystemTxFindUnique", "SystemTxGroupBy", "SystemTxRelationGroupBy", "SystemTxScoped", "SystemTxSearch", "SystemTxSimilar", "SystemTxTextSearch", "SystemTxTextSearchSelect",
+		"SystemTxFindMany", "SystemTxFindUnique", "SystemTxGroupBy", "SystemTxRelationGroupBy", "SystemTxScoped", "SystemTxSearch", "SystemTxSimilar", "SystemTxTextSearch", "SystemTxTextSearchSelect", "SystemTxTextSearchWith",
 	}
 	result := make(map[string]struct{}, len(names))
 	for _, name := range names {

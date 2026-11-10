@@ -5,6 +5,13 @@ import (
 	"math"
 )
 
+type TextSearchOptions[M any] struct {
+	AllTerms bool
+	Where    []Predicate[M]
+	OrderBy  []OrderTerm[M]
+	Select   Projection[M]
+}
+
 // FullTextResult is one authorized model row and its provider-relative search
 // score. Higher scores rank before lower scores; scores are not portable
 // across providers, indexes, or corpus revisions.

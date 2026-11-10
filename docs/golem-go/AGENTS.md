@@ -1582,10 +1582,17 @@ for _, result := range results {
 selected, err := caller.Notes.TextSearchContentSelect(ctx, `invoice`, 20,
 	golem.Select(notes.Notes.ID, notes.Notes.Title),
 	notes.Notes.Published.Eq(true))
+ordered, err := caller.Notes.TextSearchContentWith(ctx, `invoice "service fee"`, 20,
+	golem.TextSearchOptions[notes.Note]{
+		AllTerms: true,
+		Where:    []golem.Predicate[notes.Note]{notes.Notes.Published.Eq(true)},
+		OrderBy:  []golem.OrderTerm[notes.Note]{notes.Notes.Title.Asc()},
+	})
 ```
 
 Methods exist on caller, system and both transaction clients; extra
-predicates are AND-ed. GraphQL gets the caller-only root
+predicates are AND-ed. `TextSearchOptions` adds `AllTerms` (every term must
+match), `OrderBy` (FindMany ordering applied before `take`) and `Select`. GraphQL gets the caller-only root
 `textSearchNotesByContent(query:, take:, where:)`.
 
 - **Syntax.** Terms are OR-joined; double quotes form a phrase; a trailing `*`

@@ -58,33 +58,33 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
 	}}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	ranks, err := manager.Query(context.Background(), "m", "content", "alpha", candidates, 10)
+	ranks, err := manager.Query(context.Background(), "m", "content", "alpha", candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("authorized ranks=%#v", ranks)
 	}
-	ranks, err = manager.Query(context.Background(), "m", "content", `OR`, candidates, 10)
+	ranks, err = manager.Query(context.Background(), "m", "content", `OR`, candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ranks) != 1 || ranks[0].Identity[0] != "c" {
 		t.Fatalf("literal operator ranks=%#v", ranks)
 	}
-	ranks, err = manager.Query(context.Background(), "m", "content", "renee", candidates, 10)
+	ranks, err = manager.Query(context.Background(), "m", "content", "renee", candidates, 10, false, nil)
 	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("folded ranks=%#v err=%v", ranks, err)
 	}
-	ranks, err = manager.Query(context.Background(), "m", "content", "Καφές", candidates, 10)
+	ranks, err = manager.Query(context.Background(), "m", "content", "Καφές", candidates, 10, false, nil)
 	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("cross-script folded ranks=%#v err=%v", ranks, err)
 	}
-	ranks, err = manager.Query(context.Background(), "m", "content", "Łodz", candidates, 10)
+	ranks, err = manager.Query(context.Background(), "m", "content", "Łodz", candidates, 10, false, nil)
 	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("canonical folded ranks=%#v err=%v", ranks, err)
 	}
-	ranks, err = manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10)
+	ranks, err = manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10, false, nil)
 	if err != nil || len(ranks) != 0 {
 		t.Fatalf("non-diacritic transliteration ranks=%#v err=%v", ranks, err)
 	}
@@ -125,7 +125,7 @@ func TestQueryOnUsesTransactionBoundExecutor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ranks, err := manager.QueryOn(context.Background(), tx, "m", "content", "alpha", candidates, 10)
+	ranks, err := manager.QueryOn(context.Background(), tx, "m", "content", "alpha", candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestSQLiteRankingIgnoresUnauthorizedCorpus(t *testing.T) {
 		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
 	}}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 1000, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	before, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1)
+	before, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1, false, nil)
 	if err != nil || len(before) != 1 || before[0].Identity[0] != "a" {
 		t.Fatalf("initial ranks=%#v err=%v", before, err)
 	}
@@ -175,7 +175,7 @@ func TestSQLiteRankingIgnoresUnauthorizedCorpus(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	after, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1)
+	after, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1, false, nil)
 	if err != nil || len(after) != 1 || after[0].Key != before[0].Key || after[0].Score != before[0].Score {
 		t.Fatalf("hidden corpus changed ranks: before=%#v after=%#v err=%v", before, after, err)
 	}
@@ -211,7 +211,7 @@ func TestSQLiteTermCountRankingIsExactAndSetBased(t *testing.T) {
 	}
 	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{index}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 1000, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	ranks, err := manager.Query(context.Background(), "m", "content", `alpha beta "gamma delta" eps*`, candidates, 10)
+	ranks, err := manager.Query(context.Background(), "m", "content", `alpha beta "gamma delta" eps*`, candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestSQLiteTermCountRankingIsExactAndSetBased(t *testing.T) {
 			t.Fatalf("rank[%d]=%#v, want key=%s score=%g", position, ranks[position], wantKeys[position], wantScores[position])
 		}
 	}
-	duplicates, err := manager.Query(context.Background(), "m", "content", `alpha alpha`, candidates, 10)
+	duplicates, err := manager.Query(context.Background(), "m", "content", `alpha alpha`, candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestSQLiteTermCountRankingIsExactAndSetBased(t *testing.T) {
 	}
 	limited := candidates
 	limited.MaxStatementAliases = 20
-	limitedRanks, err := manager.Query(context.Background(), "m", "content", `alpha beta "gamma delta" eps*`, limited, 10)
+	limitedRanks, err := manager.Query(context.Background(), "m", "content", `alpha beta "gamma delta" eps*`, limited, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestSQLiteTermCountRankingIsExactAndSetBased(t *testing.T) {
 		t.Fatal(err)
 	}
 	branches := sqliteRankBranches(index.Descriptor.Index, parsed)
-	statement := manager.sqliteStatement(index, candidates, branches)
+	statement := manager.sqliteStatement(index, candidates, branches, false, nil)
 	if strings.Contains(statement, "EXISTS(SELECT") || !strings.Contains(statement, "golem_fr AS (") || !strings.Contains(statement, " UNION ALL ") {
 		t.Fatalf("ranking statement is not set-based: %s", statement)
 	}
@@ -273,6 +273,186 @@ func TestSQLiteTermCountRankingIsExactAndSetBased(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLiteTermCountAllTermsFilterBeforeOrderAndLimit(t *testing.T) {
+	database, _, err := sqliteprovider.New().Open(context.Background(), filepath.Join(t.TempDir(), "fulltext-all-terms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE docs(id TEXT PRIMARY KEY) STRICT`,
+		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(_golem_field_0,_golem_field_1,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+		`INSERT INTO docs VALUES('high'),('cross'),('body')`,
+		`INSERT INTO _golem_fulltext_x_keys VALUES(1,'high'),(2,'cross'),(3,'body')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0,_golem_field_1) VALUES(1,'alpha','none'),(2,'alpha','beta'),(3,'none','alpha beta')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{{
+		Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "title", Weight: 5}, {ID: "body", Weight: 1}}}},
+		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
+	}}}
+	baseCandidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+
+	anyRanks, err := manager.Query(context.Background(), "m", "content", "alpha beta", baseCandidates, 2, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anyRanks) != 2 || anyRanks[0].Identity[0] != "cross" || anyRanks[1].Identity[0] != "high" {
+		t.Fatalf("any ranks=%#v", anyRanks)
+	}
+	for _, test := range []struct {
+		name       string
+		candidates semanticruntime.Candidates
+	}{
+		{name: "direct", candidates: baseCandidates},
+		{name: "compact fallback", candidates: func() semanticruntime.Candidates {
+			value := baseCandidates
+			value.MaxStatementAliases = 8
+			return value
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta", test.candidates, 2, true, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ranks) != 2 || ranks[0].Identity[0] != "cross" || ranks[1].Identity[0] != "body" {
+				t.Fatalf("all ranks=%#v", ranks)
+			}
+		})
+	}
+	duplicates, err := manager.Query(context.Background(), "m", "content", "alpha alpha", baseCandidates, 10, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(duplicates) != 3 {
+		t.Fatalf("duplicate all-term ranks=%#v", duplicates)
+	}
+}
+
+func TestSQLiteOrderedFullTextAppliesOwnerDateBeforeLimit(t *testing.T) {
+	database, _, err := sqliteprovider.New().Open(context.Background(), filepath.Join(t.TempDir(), "fulltext-ordered.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE docs(id TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL) STRICT`,
+		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(_golem_field_0,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := database.BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for position := 0; position < 205; position++ {
+		id := fmt.Sprintf("d%03d", position)
+		if _, err := tx.Exec(`INSERT INTO docs VALUES(?,?)`, id, position); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO _golem_fulltext_x_keys VALUES(?,?)`, position+1, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0) VALUES(?,'orbitalsearch')`, position+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	index := Index{
+		Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Ranking: fulltextcontract.RankingBM25, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}}},
+		Owner: physical.PhysicalTable{ID: "m", Name: "docs", Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "date", Name: "occurred_at", Storage: physical.StorageType{Kind: physical.StorageSQLiteInteger}},
+		}},
+		Identity: []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
+	}
+	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{index}}
+	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+	ranks, err := manager.QueryOn(context.Background(), database, "m", "content", "orbitalsearch", candidates, 1, true, []Order{{Column: "occurred_at", Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}, Descending: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 1 || ranks[0].Identity[0] != "d204" {
+		t.Fatalf("ordered ranks=%#v", ranks)
+	}
+}
+
+func TestSQLiteTermCountOrderedAndAllTermsOnDirectAndCompactPaths(t *testing.T) {
+	database, _, err := sqliteprovider.New().Open(context.Background(), filepath.Join(t.TempDir(), "fulltext-ordered-term-count.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE docs(id TEXT PRIMARY KEY, seq INTEGER) STRICT`,
+		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(_golem_field_0,_golem_field_1,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+		`INSERT INTO docs VALUES('high',3),('cross',1),('body',NULL),('lone',2)`,
+		`INSERT INTO _golem_fulltext_x_keys VALUES(1,'high'),(2,'cross'),(3,'body'),(4,'lone')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0,_golem_field_1) VALUES(1,'alpha beta','none'),(2,'alpha','beta'),(3,'none','alpha beta'),(4,'alpha','none')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{{
+		Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "title", Weight: 5}, {ID: "body", Weight: 1}}}},
+		Owner: physical.PhysicalTable{ID: "m", Name: "docs", Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "seq", Name: "seq", Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteInteger}},
+		}},
+		Identity: []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
+	}}}
+	base := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+	compact := base
+	compact.MaxStatementAliases = 8
+	seq := func(descending bool) []Order {
+		return []Order{{Column: "seq", Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}, Descending: descending}}
+	}
+	for _, path := range []struct {
+		name       string
+		candidates semanticruntime.Candidates
+	}{{"direct", base}, {"compact fallback", compact}} {
+		for _, test := range []struct {
+			name       string
+			all        bool
+			descending bool
+			take       int
+			want       string
+		}{
+			{"any ascending", false, false, 10, "body,cross,lone,high"},
+			{"any descending", false, true, 10, "high,lone,cross,body"},
+			{"all ascending", true, false, 10, "body,cross,high"},
+			{"all descending", true, true, 10, "high,cross,body"},
+			{"all descending limited", true, true, 1, "high"},
+		} {
+			t.Run(path.name+" "+test.name, func(t *testing.T) {
+				ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta", path.candidates, test.take, test.all, seq(test.descending))
+				if err != nil {
+					t.Fatal(err)
+				}
+				identities := make([]string, len(ranks))
+				for position, rank := range ranks {
+					identities[position] = rank.Identity[0].(string)
+				}
+				if got := strings.Join(identities, ","); got != test.want {
+					t.Fatalf("ids=%s want %s", got, test.want)
+				}
+			})
+		}
 	}
 }
 
@@ -367,7 +547,7 @@ func TestSQLiteTermCountRankingMatchesRandomizedGoOracle(t *testing.T) {
 			queryTerms[position] = terms[random.Intn(len(terms))]
 		}
 		take := 1 + random.Intn(20)
-		ranks, err := manager.Query(context.Background(), "m", "content", strings.Join(queryTerms, " "), candidates, take)
+		ranks, err := manager.Query(context.Background(), "m", "content", strings.Join(queryTerms, " "), candidates, take, false, nil)
 		if err != nil {
 			t.Fatalf("trial %d: %v", trial, err)
 		}
@@ -457,7 +637,7 @@ func TestSQLiteTermCountTopTwentyKeepsAllThreeTermMatchesAheadOfWeakerRows(t *te
 		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
 	}}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20)
+	ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +693,7 @@ func TestSQLiteTermCountRankingStaysBelowCompoundSelectLimit(t *testing.T) {
 		terms[index] = fmt.Sprintf("t%02d", index)
 	}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 999, MaxStatementBytes: 1 << 20, MaxStatementAliases: 2048, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	ranks, err := manager.Query(context.Background(), "m", "content", strings.Join(terms, " "), candidates, 10)
+	ranks, err := manager.Query(context.Background(), "m", "content", strings.Join(terms, " "), candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +726,7 @@ func TestSQLiteBM25MatchesWholeIndexRankingBeforeAuthorizationFilter(t *testing.
 	}
 	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{index}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 1000, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 10)
+	ranks, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,6 +745,13 @@ func TestSQLiteBM25MatchesWholeIndexRankingBeforeAuthorizationFilter(t *testing.
 		if ranks[position].Identity[0] != expected[position].ID || math.Abs(ranks[position].Score-expected[position].Score) > 1e-12 {
 			t.Fatalf("rank[%d]=%#v expected=%#v", position, ranks[position], expected[position])
 		}
+	}
+	all, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 10, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Identity[0] != "a" {
+		t.Fatalf("BM25 all-term ranks=%#v", all)
 	}
 }
 
@@ -588,7 +775,7 @@ func BenchmarkSQLiteTermCountRankingScaling(b *testing.B) {
 			b.ReportMetric(float64(size), "rows")
 			b.ResetTimer()
 			for b.Loop() {
-				if _, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20); err != nil {
+				if _, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20, false, nil); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -629,7 +816,7 @@ func fastestSQLiteRanking(tb testing.TB, manager *Manager, candidates semanticru
 	fastest := time.Duration(1<<63 - 1)
 	for attempt := 0; attempt < attempts; attempt++ {
 		started := time.Now()
-		if _, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20); err != nil {
+		if _, err := manager.Query(context.Background(), "m", "content", "alpha beta gamma", candidates, 20, false, nil); err != nil {
 			tb.Fatal(err)
 		}
 		if elapsed := time.Since(started); elapsed < fastest {
@@ -651,9 +838,9 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_runtime_live" CASCADE`)
 	for _, statement := range []string{
 		`CREATE SCHEMA "golem_fulltext_runtime_live"`,
-		`CREATE TABLE "golem_fulltext_runtime_live"."docs" ("id" text PRIMARY KEY,"allowed" boolean NOT NULL,"title" text NOT NULL)`,
+		`CREATE TABLE "golem_fulltext_runtime_live"."docs" ("id" text PRIMARY KEY,"allowed" boolean NOT NULL,"title" text NOT NULL,"seq" bigint)`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" ("id" text PRIMARY KEY,"document" tsvector NOT NULL)`,
-		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf Καφές 東京 Łódź'),('b',false,'alpha alpha alpha'),('c',true,'literal OR token'),('d',true,'omega psi chi'),('e',true,'omega'),('f',false,'omega psi chi omega psi chi'),('g',true,'omega psi chi')`,
+		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf Καφές 東京 Łódź',NULL),('b',false,'alpha alpha alpha',NULL),('c',true,'literal OR token',NULL),('d',true,'omega psi chi',2),('e',true,'omega',NULL),('f',false,'omega psi chi omega psi chi',NULL),('g',true,'omega psi chi',1)`,
 		`INSERT INTO "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" SELECT "id",setweight(to_tsvector('simple',` + fulltextpostgresql.NormalizeText(`"title"`, fulltextcontract.FoldingDiacritics) + `),'A') FROM "golem_fulltext_runtime_live"."docs"`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
@@ -666,12 +853,13 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		schema:   physical.PhysicalSchema{Namespace: physical.Namespace{Name: namespace}},
 		indexes: []Index{{
 			Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: "title", Weight: 1}}}},
+			Owner:      physical.PhysicalTable{ID: "m", Name: "docs"},
 			Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}}},
 		}},
 	}
 	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
 	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "Καφές", "東京", "Łodz", "OR"} {
-		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10)
+		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10, false, nil)
 		if err != nil {
 			t.Fatalf("query %q: %v", query, err)
 		}
@@ -683,24 +871,61 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 			t.Fatalf("query %q ranks=%#v", query, ranks)
 		}
 	}
-	ranks, err := manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10)
+	ranks, err := manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10, false, nil)
 	if err != nil || len(ranks) != 0 {
 		t.Fatalf("non-diacritic transliteration ranks=%#v err=%v", ranks, err)
 	}
 	limited := candidates
 	limited.MaxStatementParameters = 3
-	if _, err := manager.Query(context.Background(), "m", "content", "alpha beta", limited, 10); err == nil || !strings.Contains(err.Error(), "parameter limit") {
+	if _, err := manager.Query(context.Background(), "m", "content", "alpha beta", limited, 10, false, nil); err == nil || !strings.Contains(err.Error(), "parameter limit") {
 		t.Fatalf("parameter limit error=%v", err)
 	}
-	defaults, err := manager.Query(context.Background(), "m", "content", "omega psi chi", candidates, 10)
+	defaults, err := manager.Query(context.Background(), "m", "content", "omega psi chi", candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(defaults) != 3 || defaults[0].Identity[0] != "d" || defaults[1].Identity[0] != "g" || defaults[2].Identity[0] != "e" || defaults[0].Score != defaults[1].Score || defaults[1].Score <= defaults[2].Score {
 		t.Fatalf("PostgreSQL default ranks=%#v", defaults)
 	}
+	all, err := manager.Query(context.Background(), "m", "content", "omega psi chi", candidates, 10, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Identity[0] != "d" || all[1].Identity[0] != "g" {
+		t.Fatalf("PostgreSQL all-term ranks=%#v", all)
+	}
+	seq := func(descending bool) []Order {
+		return []Order{{Column: "seq", Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}, Descending: descending}}
+	}
+	for _, test := range []struct {
+		query      string
+		all        bool
+		descending bool
+		want       string
+	}{
+		{"omega ps*", true, false, "g,d"},
+		{"omega ps*", true, true, "d,g"},
+		{"omega", false, false, "e,g,d"},
+		{"omega", false, true, "d,g,e"},
+	} {
+		ordered, err := manager.Query(context.Background(), "m", "content", test.query, candidates, 10, test.all, seq(test.descending))
+		if err != nil {
+			t.Fatal(err)
+		}
+		identities := make([]string, len(ordered))
+		for position, rank := range ordered {
+			identities[position] = rank.Identity[0].(string)
+		}
+		if got := strings.Join(identities, ","); got != test.want {
+			t.Fatalf("PostgreSQL ordered query %q all=%t descending=%t ids=%s want %s", test.query, test.all, test.descending, got, test.want)
+		}
+	}
+	limitedOrdered, err := manager.Query(context.Background(), "m", "content", "omega", candidates, 1, false, seq(true))
+	if err != nil || len(limitedOrdered) != 1 || limitedOrdered[0].Identity[0] != "d" {
+		t.Fatalf("PostgreSQL ordered limit ranks=%#v err=%v", limitedOrdered, err)
+	}
 	manager.indexes[0].Descriptor.Index.Ranking = fulltextcontract.RankingBM25
-	bm25, err := manager.Query(context.Background(), "m", "content", "omega psi chi", candidates, 10)
+	bm25, err := manager.Query(context.Background(), "m", "content", "omega psi chi", candidates, 10, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +982,7 @@ func TestDatabaseQueryFailureIsInternalAndClosed(t *testing.T) {
 		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
 	}}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs`, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	_, err = manager.Query(context.Background(), "m", "content", "alpha", candidates, 10)
+	_, err = manager.Query(context.Background(), "m", "content", "alpha", candidates, 10, false, nil)
 	if err == nil {
 		t.Fatal("closed database query succeeded")
 	}
@@ -833,7 +1058,11 @@ func TestPostgreSQLWeightsNormalizeRelativeValues(t *testing.T) {
 func TestPostgreSQLBM25UsesNormalizedCoverDensityRanking(t *testing.T) {
 	index := Index{
 		Descriptor: fulltextstorage.Descriptor{Storage: "search", Index: fulltextcontract.Index{Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}}},
-		Identity:   []physical.PhysicalColumn{{Name: "id"}},
+		Owner: physical.PhysicalTable{Name: "docs", Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id"},
+			{ID: "date", Name: "occurred_at"},
+		}},
+		Identity: []physical.PhysicalColumn{{Name: "id"}},
 	}
 	manager := &Manager{provider: ir.PostgreSQL, schema: physical.PhysicalSchema{Namespace: physical.Namespace{Name: "app"}}}
 	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "app"."docs"`, Columns: []string{"id"}}
@@ -841,9 +1070,13 @@ func TestPostgreSQLBM25UsesNormalizedCoverDensityRanking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaultStatement := manager.postgresqlStatement(index, terms, candidates, fulltextcontract.RankingTermCount)
-	bm25Statement := manager.postgresqlStatement(index, terms, candidates, fulltextcontract.RankingBM25)
+	defaultStatement := manager.postgresqlStatement(index, terms, candidates, fulltextcontract.RankingTermCount, false, nil)
+	bm25Statement := manager.postgresqlStatement(index, terms, candidates, fulltextcontract.RankingBM25, false, nil)
 	if strings.Contains(defaultStatement, ",32)") || !strings.Contains(bm25Statement, ",32)") {
 		t.Fatalf("default=%s\nbm25=%s", defaultStatement, bm25Statement)
+	}
+	ordered := manager.postgresqlStatement(index, terms, candidates, fulltextcontract.RankingBM25, true, []Order{{Column: "occurred_at", Type: ir.LogicalTypeIR{Kind: ir.TypeDateTime}, Descending: true}})
+	if !strings.Contains(ordered, `JOIN "app"."docs" AS golem_fo`) || !strings.Contains(ordered, `ORDER BY golem_fo."occurred_at" IS NULL ASC, golem_fo."occurred_at" DESC,golem_ff."id"`) {
+		t.Fatalf("ordered=%s", ordered)
 	}
 }

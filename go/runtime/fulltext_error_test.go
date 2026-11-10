@@ -41,7 +41,7 @@ func TestFullTextRequestValidationReasonsAreSpecific(t *testing.T) {
 		{name: "result limit", query: "alpha", take: 0, reason: "full-text result limit is 0, outside 1..1000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := fullTextReadOptions(test.predicates, test.query, test.take)
+			_, err := fullTextReadOptions(test.query, test.take, golem.TextSearchOptions[struct{}]{Where: test.predicates})
 			if err == nil {
 				t.Fatal("request accepted")
 			}

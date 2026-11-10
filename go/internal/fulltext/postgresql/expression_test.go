@@ -13,3 +13,13 @@ func TestPrefixQueryTargetsTheLastServerParsedLexeme(t *testing.T) {
 		t.Fatalf("prefix query=%q want %q", got, want)
 	}
 }
+
+func TestJoinQueriesSelectsAnyOrAllTerms(t *testing.T) {
+	expressions := []string{"alpha", "beta"}
+	if got, want := JoinQueries(expressions, false), "(alpha || beta)"; got != want {
+		t.Fatalf("any query=%q want %q", got, want)
+	}
+	if got, want := JoinQueries(expressions, true), "(alpha && beta)"; got != want {
+		t.Fatalf("all query=%q want %q", got, want)
+	}
+}

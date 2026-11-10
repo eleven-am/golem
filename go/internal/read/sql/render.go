@@ -451,19 +451,20 @@ func renderOrders(orders []readir.Order, fields []readplan.Field, columns map[po
 				direction = readir.Ascending
 			}
 		}
-		word := "ASC"
-		nullRoot, nullOuter := root+" IS NOT NULL", dialect.Quote("golem_d0")+"."+dialect.Quote(physical.PhysicalName(alias))+" IS NOT NULL"
-		if direction == readir.Descending {
-			word = "DESC"
-			nullRoot, nullOuter = root+" IS NULL", dialect.Quote("golem_d0")+"."+dialect.Quote(physical.PhysicalName(alias))+" IS NULL"
-		}
+		descending := direction == readir.Descending
 		outer := dialect.Quote("golem_d0") + "." + dialect.Quote(physical.PhysicalName(alias))
-		orderedRoot := portableOrderOperand(provider, logicalTypes[order.FieldID()], root)
-		orderedOuter := portableOrderOperand(provider, logicalTypes[order.FieldID()], outer)
-		rootParts = append(rootParts, nullRoot+" ASC", orderedRoot+" "+word)
-		outerParts = append(outerParts, nullOuter+" ASC", orderedOuter+" "+word)
+		rootParts = append(rootParts, OrderTerm(provider, logicalTypes[order.FieldID()], root, descending))
+		outerParts = append(outerParts, OrderTerm(provider, logicalTypes[order.FieldID()], outer, descending))
 	}
 	return strings.Join(rootParts, ", "), strings.Join(outerParts, ", "), nil
+}
+
+func OrderTerm(provider policyir.Provider, typ compilerir.LogicalTypeIR, expression string, descending bool) string {
+	word, null := "ASC", expression+" IS NOT NULL"
+	if descending {
+		word, null = "DESC", expression+" IS NULL"
+	}
+	return null + " ASC, " + portableOrderOperand(provider, typ, expression) + " " + word
 }
 
 func logicalTypesByField(fields []readplan.Field) map[policyir.FieldID]compilerir.LogicalTypeIR {
