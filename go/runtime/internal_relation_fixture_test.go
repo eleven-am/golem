@@ -141,16 +141,16 @@ func TestInternalRelationIsRefusedOverGraphQLHTTPAndUsableFromGo(t *testing.T) {
 	}
 	child := harness.graphql(t, fmt.Sprintf(`mutation { createChild(data: {id: %q, parentID: %q}) { id parentID } }`, childID, parentID))
 	if len(child.Errors) != 0 {
-		t.Fatalf("createChild with the foreign key scalar errors=%+v", child.Errors)
+		t.Errorf("createChild with the foreign key scalar errors=%+v", child.Errors)
 	}
 
 	refused := harness.graphql(t, `{ children { id parent { id } } }`)
 	if len(refused.Errors) == 0 || refused.Errors[0].Extensions["code"] != "GRAPHQL_VALIDATION_FAILED" {
-		t.Fatalf("child.parent response=%+v, want GRAPHQL_VALIDATION_FAILED", refused)
+		t.Errorf("child.parent response=%+v, want GRAPHQL_VALIDATION_FAILED", refused)
 	}
 	refusedInput := harness.graphql(t, fmt.Sprintf(`{ children(where: {parent: {is: {id: {equals: %q}}}}) { id } }`, parentID))
 	if len(refusedInput.Errors) == 0 || refusedInput.Errors[0].Extensions["code"] != "GRAPHQL_VALIDATION_FAILED" {
-		t.Fatalf("ChildWhereInput.parent response=%+v, want GRAPHQL_VALIDATION_FAILED", refusedInput)
+		t.Errorf("ChildWhereInput.parent response=%+v, want GRAPHQL_VALIDATION_FAILED", refusedInput)
 	}
 
 	visible := harness.graphql(t, `{ parents { id children { id } } }`)
