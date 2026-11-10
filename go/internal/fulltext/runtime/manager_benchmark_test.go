@@ -57,7 +57,7 @@ func BenchmarkSQLiteFullTextRead200K(b *testing.B) {
 			candidates := semanticruntime.Candidates{SQL: benchmark.candidateSQL, Args: benchmark.args, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: readsql.MaxStatementParameters, MaxStatementBytes: readsql.MaxStatementBytes, MaxStatementAliases: readsql.MaxStatementAliases, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
 			b.ResetTimer()
 			for b.Loop() {
-				if _, err := manager.Query(context.Background(), "m", "content", benchmark.query, candidates, 20); err != nil {
+				if _, err := manager.Query(context.Background(), "m", "content", benchmark.query, candidates, 20, false, nil); err != nil {
 					b.Fatal(err)
 				}
 			}

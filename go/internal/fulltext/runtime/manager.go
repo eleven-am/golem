@@ -33,7 +33,14 @@ const (
 
 type Index struct {
 	Descriptor fulltextstorage.Descriptor
+	Owner      physical.PhysicalTable
 	Identity   []physical.PhysicalColumn
+}
+
+type Order struct {
+	Column     physical.PhysicalName
+	Type       ir.LogicalTypeIR
+	Descending bool
 }
 
 type Rank struct {
@@ -84,7 +91,7 @@ func NewManager(database *sqlx.DB, provider ir.Provider, schema physical.Physica
 			}
 			identity[position] = column
 		}
-		indexes = append(indexes, Index{Descriptor: descriptor, Identity: identity})
+		indexes = append(indexes, Index{Descriptor: descriptor, Owner: owner, Identity: identity})
 	}
 	sort.Slice(indexes, func(i, j int) bool {
 		if indexes[i].Descriptor.ModelID != indexes[j].Descriptor.ModelID {
@@ -130,14 +137,14 @@ func (manager *Manager) QueryParameters(model ir.ModelID, name, query string) (i
 	return len(sqliteRankBranches(index.Descriptor.Index, parsed)) + 1, nil
 }
 
-func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int) ([]Rank, error) {
+func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int, allTerms bool, order []Order) ([]Rank, error) {
 	if manager == nil {
 		return nil, queryExecutionFailure("full-text execution is unavailable", nil)
 	}
-	return manager.QueryOn(ctx, manager.database, model, name, query, candidates, take)
+	return manager.QueryOn(ctx, manager.database, model, name, query, candidates, take, allTerms, order)
 }
 
-func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int) ([]Rank, error) {
+func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int, allTerms bool, order []Order) ([]Rank, error) {
 	if manager == nil || ctx == nil || queryer == nil {
 		return nil, queryExecutionFailure("full-text execution is unavailable", nil)
 	}
@@ -161,16 +168,16 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	arguments := make([]any, 0, len(parsed)*len(index.Descriptor.Index.Fields)+len(candidates.Args)+1)
 	statement := ""
 	if manager.provider == ir.PostgreSQL {
-		statement = manager.postgresqlStatement(index, parsed, candidates, ranking)
+		statement = manager.postgresqlStatement(index, parsed, candidates, ranking, allTerms, order)
 		for _, item := range parsed {
 			arguments = append(arguments, foldQueryValue(item.value, index.Descriptor.Index))
 		}
 	} else if ranking == fulltextcontract.RankingBM25 {
-		statement = manager.sqliteBM25Statement(index, candidates)
-		arguments = append(arguments, compileSQLiteFor(parsed, index.Descriptor.Index))
+		statement = manager.sqliteBM25Statement(index, candidates, order)
+		arguments = append(arguments, compileSQLiteFor(parsed, index.Descriptor.Index, allTerms))
 	} else {
 		branches := sqliteRankBranches(index.Descriptor.Index, parsed)
-		statement = manager.sqliteStatement(index, candidates, branches)
+		statement = manager.sqliteStatement(index, candidates, branches, allTerms, order)
 		for _, branch := range branches {
 			arguments = append(arguments, branch.expression)
 		}
@@ -209,7 +216,7 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	return result, nil
 }
 
-func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticruntime.Candidates) string {
+func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticruntime.Candidates, order []Order) string {
 	base := string(index.Descriptor.Storage)
 	fts, keys := manager.quote(base+"_fts"), manager.quote(base+"_keys")
 	identity, joins := manager.identitySQL(index, "golem_fk", "golem_fc", candidates)
@@ -219,34 +226,43 @@ func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticrunt
 	}
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
 	limit := "?" + strconv.Itoa(len(candidates.Args)+2)
+	ownerJoin, ordering, _ := manager.ownerOrderSQL(index, "golem_fk", order, "score DESC")
 	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM " + fts + " AS golem_ff JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
-		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
-		" WHERE " + fts + " MATCH ?1 ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") + ownerJoin +
+		" WHERE " + fts + " MATCH ?1 ORDER BY " + ordering + "," + strings.Join(identity, ",") + " LIMIT " + limit
 }
 
 type sqliteRankBranch struct {
 	expression string
 	weight     float64
+	term       int
 }
 
 func sqliteRankBranches(index fulltextcontract.Index, terms []term) []sqliteRankBranch {
 	branches := make([]sqliteRankBranch, 0, len(index.Fields)*len(terms))
 	seen := make(map[string]bool, cap(branches))
+	termPositions := make(map[string]int, len(terms))
 	for fieldPosition, field := range index.Fields {
 		for _, item := range terms {
+			termExpression := compileSQLiteFor([]term{item}, index, false)
+			termPosition, present := termPositions[termExpression]
+			if !present {
+				termPosition = len(termPositions)
+				termPositions[termExpression] = termPosition
+			}
 			expression := compileSQLiteField([]term{item}, index, fieldPosition)
 			if seen[expression] {
 				continue
 			}
 			seen[expression] = true
-			branches = append(branches, sqliteRankBranch{expression: expression, weight: field.Weight})
+			branches = append(branches, sqliteRankBranch{expression: expression, weight: field.Weight, term: termPosition})
 		}
 	}
 	return branches
 }
 
-func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.Candidates, branches []sqliteRankBranch) string {
+func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.Candidates, branches []sqliteRankBranch, allTerms bool, order []Order) string {
 	base := string(index.Descriptor.Storage)
 	fts, keys := manager.quote(base+"_fts"), manager.quote(base+"_keys")
 	identity, joins := manager.identitySQL(index, "golem_fk", "golem_fc", candidates)
@@ -255,29 +271,58 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 	if len(branches) <= sqliteDirectBranchMaximum {
 		ranks := make([]string, len(branches))
 		for position, branch := range branches {
-			ranks[position] = "SELECT golem_ff.rowid golem_fd," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + " golem_fw FROM " + fts + " AS golem_ff" +
+			termProjection := ""
+			if allTerms {
+				termProjection = "," + strconv.Itoa(branch.term) + " golem_ft"
+			}
+			ranks[position] = "SELECT golem_ff.rowid golem_fd," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + " golem_fw" + termProjection + " FROM " + fts + " AS golem_ff" +
 				" JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 				" WHERE " + fts + " MATCH ?" + strconv.Itoa(position+1)
 		}
+		required := ""
+		if allTerms {
+			required = " HAVING count(DISTINCT golem_ft)=" + strconv.Itoa(sqliteDistinctTermCount(branches))
+		}
+		ownerJoin, ordering, _ := manager.ownerOrderSQL(index, "golem_fk", order, "golem_fs.score DESC")
 		direct := "WITH golem_fr AS (" + strings.Join(ranks, " UNION ALL ") +
-			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
-			" FROM golem_fs JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_fs.golem_fd" +
-			" ORDER BY golem_fs.score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd" + required + ") SELECT golem_fs.score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
+			" FROM golem_fs JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_fs.golem_fd" + ownerJoin +
+			" ORDER BY " + ordering + "," + strings.Join(identity, ",") + " LIMIT " + limit
 		if readsql.ValidateStatementComplexity(candidates.Model, direct, candidates.MaxStatementBytes, candidates.MaxStatementAliases) == nil {
 			return direct
 		}
 	}
 	values := make([]string, len(branches))
 	for position, branch := range branches {
-		values[position] = "(?" + strconv.Itoa(position+1) + "," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + ")"
+		termValue := ""
+		if allTerms {
+			termValue = "," + strconv.Itoa(branch.term)
+		}
+		values[position] = "(?" + strconv.Itoa(position+1) + "," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + termValue + ")"
 	}
-	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
+	termColumn, required := "", ""
+	if allTerms {
+		termColumn = ",golem_ft"
+		required = " HAVING count(DISTINCT golem_fq.golem_ft)=" + strconv.Itoa(sqliteDistinctTermCount(branches))
+	}
+	ownerJoin, ordering, ownerGroup := manager.ownerOrderSQL(index, "golem_fk", order, "score DESC")
+	return "WITH golem_fq(golem_fe,golem_fw" + termColumn + ") AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM golem_fq JOIN " + fts + " AS golem_ff ON " + fts + " MATCH golem_fq.golem_fe JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
-		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
-		" GROUP BY golem_ff.rowid," + strings.Join(identity, ",") + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") + ownerJoin +
+		" GROUP BY golem_ff.rowid," + strings.Join(identity, ",") + ownerGroup + required + " ORDER BY " + ordering + "," + strings.Join(identity, ",") + " LIMIT " + limit
 }
 
-func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates, ranking string) string {
+func sqliteDistinctTermCount(branches []sqliteRankBranch) int {
+	count := 0
+	for _, branch := range branches {
+		if branch.term >= count {
+			count = branch.term + 1
+		}
+	}
+	return count
+}
+
+func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates, ranking string, allTerms bool, order []Order) string {
 	table := manager.table(string(index.Descriptor.Storage) + "_fts")
 	identity, joins := manager.identitySQL(index, "golem_ff", "golem_fc", candidates)
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(terms), policyir.ProviderPostgreSQL)
@@ -285,15 +330,39 @@ func (manager *Manager) postgresqlStatement(index Index, terms []term, candidate
 	for position, item := range terms {
 		queries[position] = fulltextpostgresql.PhraseQueryFor("$"+strconv.Itoa(position+1), fulltextcontract.FoldingNone, index.Descriptor.Index.Normalization, item.prefix)
 	}
-	query := fulltextpostgresql.JoinQueries(queries)
+	query := fulltextpostgresql.JoinQueries(queries, allTerms)
 	limit := "$" + strconv.Itoa(len(terms)+len(candidates.Args)+1)
 	normalization := ""
 	if ranking == fulltextcontract.RankingBM25 {
 		normalization = ",32"
 	}
+	ownerJoin, ordering, _ := manager.ownerOrderSQL(index, "golem_ff", order, "score DESC")
 	return "SELECT ts_rank_cd(" + postgresqlWeights(index.Descriptor.Index) + ",golem_ff.document," + query + normalization + ")::double precision AS score," + strings.Join(identity, ",") +
-		" FROM " + table + " AS golem_ff JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
-		" WHERE golem_ff.document@@" + query + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+		" FROM " + table + " AS golem_ff JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") + ownerJoin +
+		" WHERE golem_ff.document@@" + query + " ORDER BY " + ordering + "," + strings.Join(identity, ",") + " LIMIT " + limit
+}
+
+func (manager *Manager) ownerOrderSQL(index Index, identityAlias string, order []Order, relevance string) (string, string, string) {
+	if len(order) == 0 {
+		return "", relevance, ""
+	}
+	joins := make([]string, len(index.Identity))
+	for position, identity := range index.Identity {
+		joins[position] = "golem_fo." + manager.quote(string(identity.Name)) + "=" + identityAlias + "." + manager.quote(string(identity.Name))
+	}
+	provider := policyir.ProviderSQLite
+	if manager.provider == ir.PostgreSQL {
+		provider = policyir.ProviderPostgreSQL
+	}
+	terms := make([]string, len(order))
+	groups := make([]string, len(order))
+	for position, item := range order {
+		column := "golem_fo." + manager.quote(string(item.Column))
+		terms[position] = readsql.OrderTerm(provider, item.Type, column, item.Descending)
+		groups[position] = "," + column
+	}
+	join := " JOIN " + manager.table(string(index.Owner.Name)) + " AS golem_fo ON " + strings.Join(joins, " AND ")
+	return join, strings.Join(terms, ", "), strings.Join(groups, "")
 }
 
 func postgresqlWeights(index fulltextcontract.Index) string {
@@ -477,10 +546,10 @@ func foldQueryValue(value string, index fulltextcontract.Index) string {
 }
 
 func compileSQLite(terms []term, folding string) string {
-	return compileSQLiteFor(terms, fulltextcontract.Index{Folding: folding})
+	return compileSQLiteFor(terms, fulltextcontract.Index{Folding: folding}, false)
 }
 
-func compileSQLiteFor(terms []term, index fulltextcontract.Index) string {
+func compileSQLiteFor(terms []term, index fulltextcontract.Index, allTerms bool) string {
 	parts := make([]string, len(terms))
 	for position, item := range terms {
 		value := foldQueryValue(item.value, index)
@@ -489,9 +558,13 @@ func compileSQLiteFor(terms []term, index fulltextcontract.Index) string {
 			parts[position] += "*"
 		}
 	}
-	return strings.Join(parts, " OR ")
+	separator := " OR "
+	if allTerms {
+		separator = " AND "
+	}
+	return strings.Join(parts, separator)
 }
 
 func compileSQLiteField(terms []term, index fulltextcontract.Index, position int) string {
-	return "_golem_field_" + strconv.Itoa(position) + " : (" + compileSQLiteFor(terms, index) + ")"
+	return "_golem_field_" + strconv.Itoa(position) + " : (" + compileSQLiteFor(terms, index, false) + ")"
 }

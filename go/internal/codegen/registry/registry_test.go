@@ -380,7 +380,7 @@ func TestEmitFullTextIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
-	for _, fragment := range []string{"func (client CallerMessageClient[P]) TextSearchMailContent(", "where ...golem.Predicate", "func (client CallerMessageClient[P]) TextSearchMailContentSelect(", "projection golem.Projection", "golemruntime.CallerTextSearch", "golemruntime.CallerTextSearchSelect", "[]golem.FullTextResult", "func (client SystemMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTextSearch", "func (client CallerTxMessageClient[P]) TextSearchMailContent(", "golemruntime.CallerTxTextSearch", "func (client SystemTxMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTxTextSearch"} {
+	for _, fragment := range []string{"func (client CallerMessageClient[P]) TextSearchMailContent(", "where ...golem.Predicate", "func (client CallerMessageClient[P]) TextSearchMailContentSelect(", "projection golem.Projection", "func (client CallerMessageClient[P]) TextSearchMailContentWith(", "options golem.TextSearchOptions", "golemruntime.CallerTextSearch", "golemruntime.CallerTextSearchSelect", "golemruntime.CallerTextSearchWith", "[]golem.FullTextResult", "func (client SystemMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTextSearch", "golemruntime.SystemTextSearchWith", "func (client CallerTxMessageClient[P]) TextSearchMailContent(", "golemruntime.CallerTxTextSearch", "golemruntime.CallerTxTextSearchWith", "func (client SystemTxMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTxTextSearch", "golemruntime.SystemTxTextSearchWith"} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("full-text generated surface missing %q:\n%s", fragment, source)
 		}
@@ -405,7 +405,13 @@ import (
   "context"
   golem "github.com/eleven-am/golem/go/golem"
 )
-func compileTextSearchCompatibility[P any](caller CallerMessageClient[P], system SystemMessageClient[P], callerTx CallerTxMessageClient[P], systemTx SystemTxMessageClient[P], projection golem.Projection[Message], predicates []golem.Predicate[Message]) {
+func compileTextSearchCompatibility[P any](caller CallerMessageClient[P], system SystemMessageClient[P], callerTx CallerTxMessageClient[P], systemTx SystemTxMessageClient[P], order golem.OrderTerm[Message], projection golem.Projection[Message], predicates []golem.Predicate[Message]) {
+  options := golem.TextSearchOptions[Message]{AllTerms: true, Where: predicates, OrderBy: []golem.OrderTerm[Message]{order}, Select: projection}
+  _, _ = caller.TextSearchMailContentWith(context.Background(), "query", 10, options)
+  _, _ = system.TextSearchMailContentWith(context.Background(), "query", 10, options)
+  _, _ = callerTx.TextSearchMailContentWith(context.Background(), "query", 10, options)
+  _, _ = systemTx.TextSearchMailContentWith(context.Background(), "query", 10, options)
+  _, _ = caller.TextSearchMailContentWith(context.Background(), "query", 10, golem.TextSearchOptions[Message]{})
   _, _ = caller.TextSearchMailContent(context.Background(), "query", 10, predicates...)
   _, _ = system.TextSearchMailContent(context.Background(), "query", 10, predicates...)
   _, _ = callerTx.TextSearchMailContent(context.Background(), "query", 10, predicates...)
@@ -418,11 +424,13 @@ func compileTextSearchCompatibility[P any](caller CallerMessageClient[P], system
 }
 
 func TestFullTextSelectMethodNameCollisionIsRejected(t *testing.T) {
-	err := validateFullTextMethodNames(map[ir.ModelID][]fulltextcontract.Index{
-		"model": {{Name: "mail_content"}, {Name: "mail_content_select"}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "collide in Go") {
-		t.Fatalf("select method collision error=%v", err)
+	for _, colliding := range []string{"mail_content_select", "mail_content_with"} {
+		err := validateFullTextMethodNames(map[ir.ModelID][]fulltextcontract.Index{
+			"model": {{Name: "mail_content"}, {Name: colliding}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "collide in Go") {
+			t.Fatalf("method collision %q error=%v", colliding, err)
+		}
 	}
 }
 

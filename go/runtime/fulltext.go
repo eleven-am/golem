@@ -5,10 +5,13 @@ import (
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextruntime "github.com/eleven-am/golem/go/internal/fulltext/runtime"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyresolve "github.com/eleven-am/golem/go/internal/policy/resolve"
+	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
+	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
@@ -17,18 +20,21 @@ import (
 // CallerTextSearch ranks rows only after applying caller row policy, caller
 // predicates, and the read condition of every indexed field.
 func CallerTextSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	return callerTextSearch(ctx, caller, descriptor, indexName, query, take, nil, predicates)
+	return CallerTextSearchWith(ctx, caller, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates})
 }
 
 func CallerTextSearchSelect[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	return callerTextSearch(ctx, caller, descriptor, indexName, query, take, []golem.Projection[M]{projection}, predicates)
+	if projection == nil {
+		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), fulltextruntime.InvalidQuery("full-text search projection is nil"))
+	}
+	return CallerTextSearchWith(ctx, caller, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates, Select: projection})
 }
 
-func callerTextSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projections []golem.Projection[M], predicates []golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
+func CallerTextSearchWith[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, options golem.TextSearchOptions[M]) ([]golem.FullTextResult[M], error) {
 	if caller == nil || caller.app == nil || ctx == nil {
 		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "textSearch", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
-	readOptions, err := fullTextReadOptions(predicates, query, take, projections...)
+	readOptions, err := fullTextReadOptions(query, take, options)
 	if err != nil {
 		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), err)
 	}
@@ -36,23 +42,26 @@ func callerTextSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	if err != nil {
 		return nil, err
 	}
-	return rankFullTextRows(ctx, caller.app, descriptor, prepared, indexName, query, take)
+	return rankFullTextRows(ctx, caller.app, descriptor, prepared, indexName, query, take, options)
 }
 
 // SystemTextSearch executes the same ranked query without caller policy.
 func SystemTextSearch[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	return systemTextSearch(ctx, system, descriptor, indexName, query, take, nil, predicates)
+	return SystemTextSearchWith(ctx, system, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates})
 }
 
 func SystemTextSearchSelect[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	return systemTextSearch(ctx, system, descriptor, indexName, query, take, []golem.Projection[M]{projection}, predicates)
+	if projection == nil {
+		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), fulltextruntime.InvalidQuery("full-text search projection is nil"))
+	}
+	return SystemTextSearchWith(ctx, system, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates, Select: projection})
 }
 
-func systemTextSearch[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projections []golem.Projection[M], predicates []golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
+func SystemTextSearchWith[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, options golem.TextSearchOptions[M]) ([]golem.FullTextResult[M], error) {
 	if system.app == nil || ctx == nil {
 		return nil, fmt.Errorf("P9_FULLTEXT_RUNTIME: system execution is unavailable")
 	}
-	readOptions, err := fullTextReadOptions(predicates, query, take, projections...)
+	readOptions, err := fullTextReadOptions(query, take, options)
 	if err != nil {
 		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), err)
 	}
@@ -60,7 +69,7 @@ func systemTextSearch[P, A, M any](ctx context.Context, system System[P, A], des
 	if err != nil {
 		return nil, err
 	}
-	return rankFullTextRows(ctx, system.app, descriptor, prepared, indexName, query, take)
+	return rankFullTextRows(ctx, system.app, descriptor, prepared, indexName, query, take, options)
 }
 
 func CallerTxTextSearch[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
@@ -78,6 +87,15 @@ func CallerTxTextSearchSelect[P, A, M any](ctx context.Context, transaction *Cal
 			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
 		}
 		return CallerTextSearchSelect(ctx, transaction.caller, descriptor, indexName, query, take, projection, predicates...)
+	})
+}
+
+func CallerTxTextSearchWith[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, options golem.TextSearchOptions[M]) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerTextSearchWith(ctx, transaction.caller, descriptor, indexName, query, take, options)
 	})
 }
 
@@ -99,28 +117,68 @@ func SystemTxTextSearchSelect[P, A, M any](ctx context.Context, transaction *Sys
 	})
 }
 
-func fullTextReadOptions[M any](predicates []golem.Predicate[M], query string, take int, projections ...golem.Projection[M]) ([]golem.ReadOption[M], error) {
+func SystemTxTextSearchWith[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, options golem.TextSearchOptions[M]) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemTextSearchWith(ctx, transaction.system, descriptor, indexName, query, take, options)
+	})
+}
+
+func fullTextReadOptions[M any](query string, take int, options golem.TextSearchOptions[M]) ([]golem.ReadOption[M], error) {
 	if query == "" {
 		return nil, fulltextruntime.InvalidQuery("full-text query is empty")
 	}
 	if take < 1 || take > fulltextruntime.MaximumResults {
 		return nil, fulltextruntime.InvalidQuery("full-text result limit is %d, outside 1..%d", take, fulltextruntime.MaximumResults)
 	}
-	options, err := golem.RuntimeTextSearchReadOptions(predicates, projections...)
+	var projections []golem.Projection[M]
+	if options.Select != nil {
+		projections = []golem.Projection[M]{options.Select}
+	}
+	result, err := golem.RuntimeTextSearchReadOptions(options.Where, projections...)
 	if err != nil {
 		return nil, fulltextruntime.InvalidQuery("%s", err.Error())
 	}
-	options = append(options, golem.Take[M](take))
-	return options, nil
+	if len(options.OrderBy) != 0 {
+		result = append(result, golem.OrderBy(options.OrderBy...))
+	}
+	return append(result, golem.Take[M](take)), nil
 }
 
-func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, indexName, query string, take int) ([]golem.FullTextResult[M], error) {
+func fullTextOrders[P, A any](app *App[P, A], planned readplan.Plan) ([]fulltextruntime.Order, error) {
+	types := make(map[policyir.FieldID]compilerir.LogicalTypeIR, len(planned.Fields()))
+	for _, field := range planned.Fields() {
+		types[field.FieldID()] = field.LogicalType()
+	}
+	resolver := policysql.SchemaResolver(app.registry)
+	planOrders := planned.OrderBy()
+	orders := make([]fulltextruntime.Order, len(planOrders))
+	for position, order := range planOrders {
+		resolved, found := resolver.Field(app.provider, planned.ModelID(), order.FieldID())
+		if !found {
+			return nil, fmt.Errorf("P9_FULLTEXT_SCHEMA: order field column is absent")
+		}
+		orders[position] = fulltextruntime.Order{Column: resolved.Column, Type: types[order.FieldID()], Descending: order.Direction() == readir.Descending}
+	}
+	return orders, nil
+}
+
+func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, indexName, query string, take int, options golem.TextSearchOptions[M]) ([]golem.FullTextResult[M], error) {
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
 	}
 	if err := validateSemanticPlanTake(prepared, planned, "textSearch", take); err != nil {
 		return nil, err
+	}
+	var orders []fulltextruntime.Order
+	if len(options.OrderBy) != 0 {
+		orders, err = fullTextOrders(app, planned)
+		if err != nil {
+			return nil, publicReadRenderError("textSearch", prepared.ModelID(), "full-text order could not be resolved", err)
+		}
 	}
 	rankingParameters, err := app.fulltext.QueryParameters(semanticModelID(descriptor.Metadata()), indexName, query)
 	if err != nil {
@@ -137,7 +195,7 @@ func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err != nil {
 		return nil, err
 	}
-	ranks, err := app.fulltext.QueryOn(ctx, queryer, semanticModelID(descriptor.Metadata()), indexName, query, candidates.candidates, take)
+	ranks, err := app.fulltext.QueryOn(ctx, queryer, semanticModelID(descriptor.Metadata()), indexName, query, candidates.candidates, take, options.AllTerms, orders)
 	if err != nil {
 		return nil, publicFullTextQueryError(prepared.ModelID(), err)
 	}

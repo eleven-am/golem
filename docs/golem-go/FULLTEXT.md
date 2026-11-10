@@ -115,6 +115,36 @@ results, err := caller.Messages.TextSearchContentSelect(
 )
 ```
 
+`TextSearchContentWith` takes one `golem.TextSearchOptions[M]` for everything
+beyond the query and `take`; the zero value behaves like `TextSearchContent`:
+
+```go
+results, err := caller.Messages.TextSearchContentWith(ctx, `invoice "service fee"`, 20,
+	golem.TextSearchOptions[Message]{
+		AllTerms: true,
+		Where:    []golem.Predicate[Message]{Messages.MailboxID.Eq(mailboxID)},
+		OrderBy:  []golem.OrderTerm[Message]{Messages.ReceivedAt.Desc()},
+		Select:   golem.Select(Messages.ID, Messages.Subject),
+	})
+```
+
+`AllTerms` requires every parsed term, phrases and prefixes counting as one
+term each, to occur in at least one indexed field, so the terms may be spread
+across fields. `OrderBy` sorts the matches by ordinary model fields with the
+same ordering as `FindMany`: byte-wise string comparison on every provider,
+nulls first when ascending and last when descending, and a conditionally
+readable order field refused unless `Where` makes it readable. `Select` is
+the same projection as `TextSearchContentSelect`.
+
+The candidate set is the rows that pass row policy, `Where` and the read
+condition of every indexed field. Without `OrderBy`, matches are sorted by
+score, highest first, then by primary key, and the first `take` are returned.
+With `OrderBy`, all matches are sorted by the order terms, then by primary
+key, and the first `take` are returned: the search matches first, orders
+second and limits last, with no relevance cutoff. `Score()` is still the
+relevance score either way. The GraphQL root has no `allTerms` or `orderBy`
+arguments.
+
 Caller and system transaction clients expose the same search methods; their
 candidate query, ranking and hydration all use the transaction-bound executor,
 so uncommitted writes are visible and rollback removes them. The generated
@@ -142,7 +172,7 @@ func (Message) GolemModel() golem.ModelSpec[Message] {
 the same model. It changes only the generated GraphQL contract and needs
 regeneration, not a migration.
 
-Terms are OR-joined. Double quotes form a phrase. A trailing `*` on a term or
+Terms are OR-joined unless `AllTerms` is set. Double quotes form a phrase. A trailing `*` on a term or
 directly after a closing quote makes the final word a prefix of at least two
 letters or digits: `ref*` or `"service fe"*`. Whitespace or the end of the
 query must follow `"…"*`, so `"service fe"*charges` is rejected rather than
@@ -284,7 +314,10 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	results, err := caller.Notes.TextSearchContent(ctx, `renee "service fee"`, 10)
+	results, err := caller.Notes.TextSearchContentWith(ctx, `renee "service fee"`, 10, golem.TextSearchOptions[notes.Note]{
+		AllTerms: true,
+		OrderBy:  []golem.OrderTerm[notes.Note]{notes.Notes.Title.Asc()},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -46,7 +46,7 @@ func TestPunctuatedPhrasePrefixMatchesTheSameRowsOnEveryProvider(t *testing.T) {
 
 func punctuatedPhraseRows(t *testing.T, manager *Manager, candidates semanticruntime.Candidates, query string) string {
 	t.Helper()
-	ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 20)
+	ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 20, false, nil)
 	if err != nil {
 		t.Fatalf("query %s: %v", query, err)
 	}

@@ -25,7 +25,7 @@ func TestFullTextReadOptionsCombinePredicatesAndSelect(t *testing.T) {
 	descriptor := golem.GeneratedModelDescriptor[semanticLimitUser](fixture.User, golem.GeneratedDescriptorShape([]golem.FieldID{fixture.UserID, fixture.UserName}, nil, nil, nil))
 	id := golem.GeneratedEqualField[semanticLimitUser, golem.UUID](fixture.UserID)
 	name := golem.GeneratedTextField[semanticLimitUser, string](fixture.UserName)
-	options, err := fullTextReadOptions([]golem.Predicate[semanticLimitUser]{name.Contains("go"), id.Eq(golem.UUID{})}, "go", 7, golem.Select[semanticLimitUser](name))
+	options, err := fullTextReadOptions("go", 7, golem.TextSearchOptions[semanticLimitUser]{Where: []golem.Predicate[semanticLimitUser]{name.Contains("go"), id.Eq(golem.UUID{})}, Select: golem.Select[semanticLimitUser](name)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +54,12 @@ func TestTransactionTextSearchRefusesMissingCapability(t *testing.T) {
 	}
 	if _, err := SystemTxTextSearch[string, testActor](context.Background(), nil, descriptor, "content", "go", 1); err == nil || !strings.Contains(err.Error(), "system transaction is unavailable") {
 		t.Fatalf("system transaction error=%v", err)
+	}
+	if _, err := CallerTxTextSearchWith[string, testActor](context.Background(), nil, descriptor, "content", "go now", 1, golem.TextSearchOptions[semanticLimitUser]{AllTerms: true}); err == nil || !strings.Contains(err.Error(), "caller transaction is unavailable") {
+		t.Fatalf("caller transaction options error=%v", err)
+	}
+	if _, err := SystemTxTextSearchWith[string, testActor](context.Background(), nil, descriptor, "content", "go now", 1, golem.TextSearchOptions[semanticLimitUser]{AllTerms: true}); err == nil || !strings.Contains(err.Error(), "system transaction is unavailable") {
+		t.Fatalf("system transaction options error=%v", err)
 	}
 }
 
@@ -99,6 +105,19 @@ func TestCallerTextSearchSelectPreservesFieldAuthorization(t *testing.T) {
 		}
 	}
 
+	all, err := CallerTextSearchWith(ctx, caller, fixture.postDescriptor, runtimeFullTextIndexName, "visible alpha", 10, golem.TextSearchOptions[mutationResultPost]{AllTerms: true, Select: golem.Select[mutationResultPost](fixture.postID, fixture.title)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("selected all-term full-text rows=%d want=1", len(all))
+	}
+	allID, allIDPresent := golem.Value(all[0].Row(), fixture.postID).Get()
+	allTitle, allTitlePresent := golem.Value(all[0].Row(), fixture.title).Get()
+	if !allIDPresent || allID != (golem.UUID{15: 70}) || !allTitlePresent || allTitle != "visible alpha" {
+		t.Fatalf("selected all-term row id=%v present=%t title=%q present=%t", allID, allIDPresent, allTitle, allTitlePresent)
+	}
+
 	indexedDenied := fullTextCallerWithDeniedField(t, fixture, fixture.title)
 	denied, err := CallerTextSearchSelect(ctx, indexedDenied, fixture.postDescriptor, runtimeFullTextIndexName, "alpha", 10, golem.Select[mutationResultPost](fixture.postID))
 	if err != nil {
@@ -119,7 +138,7 @@ func TestTransactionTextSearchObservesUncommittedWritesAndRollback(t *testing.T)
 			if _, createErr := SystemTxCreate(ctx, transaction, fixture.postDescriptor, fixture.createPost(72, golem.UUID{15: 1}, "system pending")); createErr != nil {
 				return createErr
 			}
-			rows, searchErr := SystemTxTextSearchSelect(ctx, transaction, fixture.postDescriptor, runtimeFullTextIndexName, "pending", 10, golem.Select[mutationResultPost](fixture.postID, fixture.title))
+			rows, searchErr := SystemTxTextSearchWith(ctx, transaction, fixture.postDescriptor, runtimeFullTextIndexName, "system pending", 10, golem.TextSearchOptions[mutationResultPost]{AllTerms: true, Select: golem.Select[mutationResultPost](fixture.postID, fixture.title)})
 			if searchErr != nil {
 				return searchErr
 			}
@@ -138,7 +157,7 @@ func TestTransactionTextSearchObservesUncommittedWritesAndRollback(t *testing.T)
 			if _, createErr := CallerTxCreate(ctx, transaction, fixture.postDescriptor, fixture.createPost(73, golem.UUID{15: 1}, "caller pending")); createErr != nil {
 				return createErr
 			}
-			rows, searchErr := CallerTxTextSearchSelect(ctx, transaction, fixture.postDescriptor, runtimeFullTextIndexName, "pending", 10, golem.Select[mutationResultPost](fixture.postID, fixture.title))
+			rows, searchErr := CallerTxTextSearchWith(ctx, transaction, fixture.postDescriptor, runtimeFullTextIndexName, "caller pending", 10, golem.TextSearchOptions[mutationResultPost]{AllTerms: true, Select: golem.Select[mutationResultPost](fixture.postID, fixture.title)})
 			if searchErr != nil {
 				return searchErr
 			}
@@ -275,5 +294,31 @@ func assertFullTextRollback(t *testing.T, fixture mutationResultFixture, id byte
 	var count int
 	if err := fixture.app.database.GetContext(ctx, &count, `SELECT COUNT(*) FROM "posts" WHERE "id"=?`, mutationResultUUIDText(id)); err != nil || count != 0 {
 		t.Fatalf("rolled-back owner rows=%d err=%v", count, err)
+	}
+}
+
+func TestTextSearchSelectRefusesNilProjection(t *testing.T) {
+	ctx := context.Background()
+	fixture := newFullTextMutationFixture(t)
+	if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(73, golem.UUID{15: 1}, "nil projection alpha")); err != nil {
+		t.Fatal(err)
+	}
+	caller := fullTextCallerWithDeniedField(t, fixture, fixture.authorID)
+	checks := map[string]func() error{
+		"caller": func() error {
+			_, err := CallerTextSearchSelect(ctx, caller, fixture.postDescriptor, runtimeFullTextIndexName, "alpha", 10, nil)
+			return err
+		},
+		"system": func() error {
+			_, err := SystemTextSearchSelect(ctx, fixture.app.System(), fixture.postDescriptor, runtimeFullTextIndexName, "alpha", 10, nil)
+			return err
+		},
+	}
+	for name, check := range checks {
+		err := check()
+		var failure *golem.Error
+		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+			t.Fatalf("%s nil projection error=%v failure=%#v", name, err, failure)
+		}
 	}
 }

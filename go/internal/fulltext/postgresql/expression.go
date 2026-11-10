@@ -40,6 +40,10 @@ func PhraseQueryFor(expression, folding, normalization string, prefix bool) stri
 	return "(CASE WHEN numnode(" + phrase + ")=0 THEN " + phrase + " ELSE to_tsquery('simple',(" + phrase + ")::text||':*') END)"
 }
 
-func JoinQueries(expressions []string) string {
-	return "(" + strings.Join(expressions, " || ") + ")"
+func JoinQueries(expressions []string, all bool) string {
+	operator := " || "
+	if all {
+		operator = " && "
+	}
+	return "(" + strings.Join(expressions, operator) + ")"
 }

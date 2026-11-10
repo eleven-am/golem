@@ -1,6 +1,10 @@
 package runtime
 
-import "testing"
+import (
+	"testing"
+
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+)
 
 func TestQueryParserAcceptsPhrasePrefix(t *testing.T) {
 	terms, err := parse(`"quick bro"* fox`)
@@ -19,6 +23,12 @@ func TestQueryParserAcceptsPhrasePrefix(t *testing.T) {
 	}
 	if got := compileSQLite(terms[:1], "none"); got != `"quick bro"*` {
 		t.Fatalf("SQLite phrase prefix=%q", got)
+	}
+	if got, want := compileSQLite(terms, "none"), `"quick bro"* OR "fox"`; got != want {
+		t.Fatalf("SQLite any terms=%q want %q", got, want)
+	}
+	if got, want := compileSQLiteFor(terms, fulltextcontract.Index{Folding: "none"}, true), `"quick bro"* AND "fox"`; got != want {
+		t.Fatalf("SQLite all terms=%q want %q", got, want)
 	}
 }
 

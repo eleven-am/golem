@@ -291,6 +291,13 @@ func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnv
 				return err
 			})
 		},
+		"CallerTxTextSearchWith": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.text(t)
+			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
+				_, err := CallerTxTextSearchWith(ctx, tx, fixture.postDescriptor, runtimeFullTextIndexName, "pending", 10, golem.TextSearchOptions[mutationResultPost]{AllTerms: true, Select: golem.Select[mutationResultPost](fixture.postID, fixture.title)})
+				return err
+			})
+		},
 		"CallerTxTextSearchSelect": func(t *testing.T, environment *transactionWrapperEnvironment) {
 			fixture := environment.text(t)
 			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
@@ -302,6 +309,13 @@ func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnv
 			fixture := environment.text(t)
 			inWrapperSystemTransaction(t, fixture, func(ctx context.Context, tx *wrapperSystemTx) error {
 				_, err := SystemTxTextSearch(ctx, tx, fixture.postDescriptor, runtimeFullTextIndexName, "pending", 10)
+				return err
+			})
+		},
+		"SystemTxTextSearchWith": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.text(t)
+			inWrapperSystemTransaction(t, fixture, func(ctx context.Context, tx *wrapperSystemTx) error {
+				_, err := SystemTxTextSearchWith(ctx, tx, fixture.postDescriptor, runtimeFullTextIndexName, "pending", 10, golem.TextSearchOptions[mutationResultPost]{AllTerms: true, OrderBy: []golem.OrderTerm[mutationResultPost]{fixture.title.Asc()}, Select: golem.Select[mutationResultPost](fixture.postID, fixture.title)})
 				return err
 			})
 		},

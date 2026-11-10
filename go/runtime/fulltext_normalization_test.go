@@ -73,8 +73,13 @@ type fullTextProfile struct {
 
 func runFullTextNormalizationProfiles(t *testing.T, indexes []fulltextcontract.Index, operation func(*testing.T, fullTextProfile)) {
 	t.Helper()
+	runFullTextProfiles(t, indexes, schematest.NewSubscribedIndexed, schematest.NewSubscribedIndexedPostgreSQLNamespaces, operation)
+}
+
+func runFullTextProfiles(t *testing.T, indexes []fulltextcontract.Index, sqliteFixture func(testing.TB) schematest.Fixture, postgresqlFixture func(testing.TB, physical.PhysicalName, physical.PhysicalName) schematest.Fixture, operation func(*testing.T, fullTextProfile)) {
+	t.Helper()
 	t.Run("sqlite", func(t *testing.T) {
-		schema := fullTextSchemaWithIndexes(t, schematest.NewSubscribedIndexed(t), indexes)
+		schema := fullTextSchemaWithIndexes(t, sqliteFixture(t), indexes)
 		operation(t, fullTextProfile{name: "sqlite", fixture: openMutationResultFixture(t, schema, MutationLimits{}, nil, nil, nil, true)})
 	})
 	for _, profile := range []struct{ name, env string }{{"postgresql-c", testenv.PostgreSQLDSNVariable}, {"postgresql-linguistic", testenv.LinguisticDSNVariable}} {
@@ -84,7 +89,7 @@ func runFullTextNormalizationProfiles(t *testing.T, indexes []fulltextcontract.I
 			sequence := p4OracleNamespaceSequence.Add(1)
 			applicationNamespace := fmt.Sprintf("golem_fts_norm_%d_%d", os.Getpid(), sequence)
 			systemNamespace := fmt.Sprintf("golem_fts_norm_system_%d_%d", os.Getpid(), sequence)
-			schema := fullTextSchemaWithIndexes(t, schematest.NewSubscribedIndexedPostgreSQLNamespaces(t, physical.PhysicalName(applicationNamespace), physical.PhysicalName(systemNamespace)), indexes)
+			schema := fullTextSchemaWithIndexes(t, postgresqlFixture(t, physical.PhysicalName(applicationNamespace), physical.PhysicalName(systemNamespace)), indexes)
 			base := newMutationResultFixture(t)
 			provider := postgresqlprovider.New()
 			database, _, err := provider.Open(context.Background(), dsn)
