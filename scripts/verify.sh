@@ -31,7 +31,7 @@ RACE_PACKAGES=(
 	./internal/event/outbox ./internal/event/cdc ./internal/queue/worker ./internal/subscription
 )
 RACE_SKIP_TESTS="^(TestBatchChunkMagnitudeAndPerParentPagingSQLite|Test.*FixtureRegeneratesByteIdentically|TestP5GeneratedExtensionFixtureBuildsFromCleanSourceThenRepeatsIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat)$"
-RACE_SKIP_COUNT=9
+RACE_SKIP_COUNT=10
 GATE_PACKAGES=(./internal/migration/workflow ./internal/physical ./observe)
 GATE_GOLDEN_TEST="TestInspectSocialGoldenAndDeterminism"
 GATE_IDENTITY_TESTS="TestP5GeneratedExtensionFixtureRegeneratesByteIdentically|TestP5GeneratedSocialFixtureRegeneratesByteIdentically|TestP6GeneratedMetricsFixtureRegeneratesByteIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat"
