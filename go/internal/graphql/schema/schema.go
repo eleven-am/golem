@@ -846,8 +846,11 @@ func relationNestedInputNames(view modelView, field ir.FieldIR, target ir.ModelC
 		if !ok || back.GraphQLName == "" {
 			return nestedInputNames{}, fmt.Errorf("GraphQL relation %s back field %s has no contract", relation.ID, backField)
 		}
-		suffix = exported(back.GraphQLName)
-	} else {
+		if !ir.HasMode(back.Modes, ir.ModeInternal) {
+			suffix = exported(back.GraphQLName)
+		}
+	}
+	if suffix == "" {
 		// A unidirectional edge has no immediate back field to remove. Retain a
 		// relation-specific name so two independent edges cannot collide.
 		ownerField, _ := fieldContractByID(view.contract, field.ID)
