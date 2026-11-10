@@ -346,8 +346,8 @@ func (c *compiler) validateFieldAttributes(pkg *load.Package, field *ast.Field, 
 			c.requireFlag(pkg, field, attr)
 		case "internal":
 			c.requireFlag(pkg, field, attr)
-			if hasAttribute(attrs, "relation") {
-				c.error(pkg, "P1_GOLEM_TAG_INTERNAL_RELATION", "internal is a scalar field mode and cannot be declared on a relation", field)
+			if hasAttribute(attrs, "relation") && hasAttribute(attrs, "hidden") {
+				c.error(pkg, "P1_EXPOSURE_MODE_CONFLICT", "internal and hidden cannot be combined on a relation", field)
 			}
 		case "system":
 			c.requireFlag(pkg, field, attr)

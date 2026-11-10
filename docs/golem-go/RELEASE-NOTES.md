@@ -16,7 +16,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.8.8
 
-Regenerate applications that use `GraphQLWithoutIndexSearch`. None of the
+Regenerate applications that use `GraphQLWithoutIndexSearch` or internal relations. None of the
 changes below touches the physical schema, so none needs a migration.
 
 **A model can keep index search out of GraphQL.**
@@ -34,6 +34,8 @@ to attach the message to the input it concerns. The cause stays in server logs.
 **`RetryConflicts` replays SQLite BEGIN contention.** A transaction whose BEGIN
 is refused because another connection holds the SQLite write lock now fails as
 `CONFLICT` instead of an internal error, so `RetryConflicts` runs it again.
+
+**Relations can be `internal`.** Add `internal` to a relation tag when Go and system code need the typed relation and GraphQL clients must not see it. The relation keeps its generated Go handle, selection, filter and write surface, and leaves the GraphQL object, `where` and `orderBy` inputs, relation inputs, event payload and client manifest. The rule is field-local, like `hidden`: the other side of the relation and the foreign-key columns keep their own modes, so mark both sides to hide a link entirely. An analytics relation dimension that passes through an internal relation is refused. `internal` with `hidden` on a relation is `P1_EXPOSURE_MODE_CONFLICT`. No migration is needed.
 
 ---
 

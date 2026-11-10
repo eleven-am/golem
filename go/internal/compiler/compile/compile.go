@@ -538,13 +538,19 @@ func relationModes(field ir.RawFieldDecl) []ir.FieldMode {
 	if _, ok := rawAttribute(field.GolemAttrs, "hidden"); ok {
 		return []ir.FieldMode{ir.ModeHidden}
 	}
+	modes := []ir.FieldMode{ir.ModeVisible}
 	if _, ok := rawAttribute(field.GolemAttrs, "readonly"); ok {
-		return []ir.FieldMode{ir.ModeReadOnly}
+		modes = []ir.FieldMode{ir.ModeReadOnly}
+	} else if _, ok := rawAttribute(field.GolemAttrs, "immutable"); ok {
+		modes = []ir.FieldMode{ir.ModeImmutable}
 	}
-	if _, ok := rawAttribute(field.GolemAttrs, "immutable"); ok {
-		return []ir.FieldMode{ir.ModeImmutable}
+	if _, ok := rawAttribute(field.GolemAttrs, "internal"); !ok {
+		return modes
 	}
-	return []ir.FieldMode{ir.ModeVisible}
+	if modes[0] == ir.ModeVisible {
+		return []ir.FieldMode{ir.ModeInternal}
+	}
+	return append(modes, ir.ModeInternal)
 }
 
 func rawAttribute(attributes []ir.RawAttribute, name string) (string, bool) {

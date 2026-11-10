@@ -399,6 +399,35 @@ func TestGraphQLAnalyticsRejectsHiddenAllowlistsTerminalsAndNameCollisions(t *te
 				}
 			}
 		},
+		"internal relation hop": func(compilation *compilerir.CompilationIR) {
+			var postModel, userModel compilerir.ModelID
+			for index := range compilation.Contract.Models {
+				switch compilation.Contract.Models[index].GraphQLName {
+				case "Post":
+					postModel = compilation.Contract.Models[index].ModelID
+				case "User":
+					userModel = compilation.Contract.Models[index].ModelID
+				}
+			}
+			var hop compilerir.FieldID
+			for _, relation := range compilation.Model.Relations {
+				if relation.SourceModel == postModel && relation.TargetModel == userModel {
+					hop = relation.SourceField
+				}
+			}
+			marked := false
+			for modelIndex := range compilation.Contract.Models {
+				for fieldIndex := range compilation.Contract.Models[modelIndex].Fields {
+					if compilation.Contract.Models[modelIndex].Fields[fieldIndex].FieldID == hop {
+						compilation.Contract.Models[modelIndex].Fields[fieldIndex].Modes = []compilerir.FieldMode{compilerir.ModeInternal}
+						marked = true
+					}
+				}
+			}
+			if !marked {
+				t.Fatal("Post.author relation field is absent from the contract")
+			}
+		},
 		"relation name collides with local field": func(compilation *compilerir.CompilationIR) {
 			for index := range compilation.Contract.Models {
 				contract := &compilation.Contract.Models[index]
