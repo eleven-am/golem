@@ -24,6 +24,9 @@ func CallerTextSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 }
 
 func CallerTextSearchSelect[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
+	if projection == nil {
+		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), fulltextruntime.InvalidQuery("full-text search projection is nil"))
+	}
 	return CallerTextSearchWith(ctx, caller, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates, Select: projection})
 }
 
@@ -48,6 +51,9 @@ func SystemTextSearch[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func SystemTextSearchSelect[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
+	if projection == nil {
+		return nil, publicFullTextQueryError(descriptor.Metadata().ModelID(), fulltextruntime.InvalidQuery("full-text search projection is nil"))
+	}
 	return SystemTextSearchWith(ctx, system, descriptor, indexName, query, take, golem.TextSearchOptions[M]{Where: predicates, Select: projection})
 }
 

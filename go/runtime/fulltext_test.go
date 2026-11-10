@@ -296,3 +296,29 @@ func assertFullTextRollback(t *testing.T, fixture mutationResultFixture, id byte
 		t.Fatalf("rolled-back owner rows=%d err=%v", count, err)
 	}
 }
+
+func TestTextSearchSelectRefusesNilProjection(t *testing.T) {
+	ctx := context.Background()
+	fixture := newFullTextMutationFixture(t)
+	if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(73, golem.UUID{15: 1}, "nil projection alpha")); err != nil {
+		t.Fatal(err)
+	}
+	caller := fullTextCallerWithDeniedField(t, fixture, fixture.authorID)
+	checks := map[string]func() error{
+		"caller": func() error {
+			_, err := CallerTextSearchSelect(ctx, caller, fixture.postDescriptor, runtimeFullTextIndexName, "alpha", 10, nil)
+			return err
+		},
+		"system": func() error {
+			_, err := SystemTextSearchSelect(ctx, fixture.app.System(), fixture.postDescriptor, runtimeFullTextIndexName, "alpha", 10, nil)
+			return err
+		},
+	}
+	for name, check := range checks {
+		err := check()
+		var failure *golem.Error
+		if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+			t.Fatalf("%s nil projection error=%v failure=%#v", name, err, failure)
+		}
+	}
+}
