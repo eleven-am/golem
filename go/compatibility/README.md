@@ -57,6 +57,17 @@ release, not an activated V4 deployment. Target-storage performance and durabili
 existing NFS support is not being redesigned. Application adoption and baseline
 collection are not counted as tasks for the Golem implementation.
 
+## Release checks — go/v0.9.0 and client/v0.3.0
+
+The release toolchain is Go 1.26.11. The pinned vulnerability scan reports
+zero reachable vulnerabilities with that toolchain; the earlier Go 1.26.10
+scan reported GO-2026-6859 in the standard library. Library dependency versions
+are unchanged. The GraphQL package and provider-handle checks passed again
+with the patched toolchain, as did the release formatting/version check.
+Client package and lockfile versions are both 0.3.0, and client publication
+serializes branch/tag runs. These release checks do not change the NAS limits
+or enable automatic V4 writing.
+
 ## Frames generator dependency prerequisite
 
 `TestFramesGQLGenConsumerMVS` builds the current CLI from source inside a
