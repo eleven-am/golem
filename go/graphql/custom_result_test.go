@@ -10,7 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	contract "github.com/eleven-am/golem/go/internal/graphql/contract"
+
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
@@ -18,6 +18,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	"github.com/eleven-am/golem/go/internal/typedvalue"
 )
 
 type importCaller struct {
@@ -247,7 +248,7 @@ func TestPresentCommittedResultNamesWhatHappenedWithoutEchoingTheCause(t *testin
 	}{
 		"unreadable rows":       {cause: &unreadableResult{count: 2}, reason: "RESULT_NOT_READABLE", unreadable: 2},
 		"limit exceeded":        {cause: &CustomResultError{cause: limited}, reason: "LIMIT_EXCEEDED", limit: "take", reported: 1},
-		"list maximum exceeded": {cause: &CustomResultError{cause: contract.ListItemsError("customMutation", "custom mutation importUsers", &contract.ListBoundError{Max: 3})}, reason: "LIMIT_EXCEEDED", limit: "list_items", reported: 1},
+		"list maximum exceeded": {cause: &CustomResultError{cause: typedvalue.ListItemsError("customMutation", "custom mutation importUsers", &typedvalue.ListBoundError{Max: 3})}, reason: "LIMIT_EXCEEDED", limit: "list_items", reported: 1},
 		"public read failure":   {cause: forbidden},
 		"internal fault":        {cause: &CustomResultError{cause: errCustomTest("secret internal detail")}, reported: 1},
 	}
@@ -418,7 +419,7 @@ func TestComputedModelValuesAreHydratedOncePerSlotAndFailPerOccurrence(t *testin
 	values := func() []any { return []any{keyed(1), keyed(2), keyed(3), handBuilt, nil} }
 
 	caller := &storedRowsCaller{stored: []golem.RuntimeModelRow{keyed(1), keyed(2)}}
-	execution := &computedExecution{hydrator: &resultHydrator{compiler: compiler, caller: caller}}
+	execution := &computedExecution{hydrator: &resultHydrator{compiler: compiler, caller: caller, maxRows: defaultLimits.MaxHydratedRows}}
 
 	nullable := user
 	nullable.Nullable = true
@@ -461,7 +462,7 @@ func TestPresentErrorReportsAnExceededListMaximumOnceAndOtherLimitsNever(t *test
 		max      int
 		reported int
 	}{
-		"list items": {cause: contract.ListItemsError("customQuery", "custom query searchLibrary", &contract.ListBoundError{Max: 100}), limit: "list_items", max: 100, reported: 1},
+		"list items": {cause: typedvalue.ListItemsError("customQuery", "custom query searchLibrary", &typedvalue.ListBoundError{Max: 100}), limit: "list_items", max: 100, reported: 1},
 		"take":       {cause: golem.RuntimeLimitError("customQuery", golem.ModelID{}, golem.LimitTake, 7, "take is too large", nil), limit: "take", max: 7},
 	}
 	for name, test := range cases {

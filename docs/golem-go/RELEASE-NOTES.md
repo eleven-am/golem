@@ -5,12 +5,73 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.8.8
+go get github.com/eleven-am/golem/go@v0.9.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.9.0
+
+Use matching v0.9.0 CLI and library builds, regenerate application bindings,
+and use client 0.3.0 for the new manifest capabilities. Active contracts use
+Contract8; old generated applications must regenerate rather than bypass
+startup verification. Build and serve with Go 1.26.11 or later: the toolchain
+pin includes the standard-library fix for
+[GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859).
+
+**Typed custom results and inputs.** Named nested DTOs, computed objects,
+caller-hydrated embedded model rows, explicit item gates, input presence and
+exactly-one inputs share generated GraphQL and client metadata. Nested result
+and total hydration budgets apply before descendant work. Denied embedded rows
+follow their declared nullability; resolver-owned scalar disclosures remain
+explicit.
+
+**Custom continuation pages and invalidation.** Runtime-owned encrypted tokens
+bind the contract, operation revision, arguments, actor scope and durable data
+identity with an absolute expiry. Empty visible pages may still have a next
+candidate batch. Declared operation dependencies support whole-result
+invalidation, and client 0.3.0 adds static and live continuation query APIs.
+
+**Authorization, vectors and query inputs.** Compact scalar sets preserve exact
+provider semantics without widening parameter budgets. Caller/system and both
+transaction clients can rank prepared vectors and retrieve authorized ready
+vectors without calling the embedding provider in a transaction. Input errors
+include argument paths and expected shapes; empty relation `some: {}` expresses
+existence. Required, proven-visible local order keys avoid a redundant null sort.
+
+**Reader-first historical policy evidence.** This release reads V3 and V4 facts
+and retains the automatic V3 writer. V4 writing and named-fact activation are
+not enabled by this tag; their complete producer/consumer path is exercised
+only by the explicit staged acceptance. Deploy this dual-reader release before
+activating a later V4 writer. After V4 commits, rollback must retain V4 readers;
+v0.8.8 cannot decode those facts. Ordinary target-readable relation semantics
+remain unchanged.
+
+**Priority queues and bounded maintenance.** Two priority lanes, reserved
+interactive admission, monotonic transactional pending promotion and bounded
+normal-service opportunities preserve dedupe, fencing and attempts. Stop old
+workers and run the explicit reviewed queue-storage upgrade before startup
+against legacy storage; the new worker does not silently upgrade it. The
+bounded-removal reference demonstrates logical hiding followed by resumable
+cleanup, including semantic state, on both providers.
+
+**Offline transformations and restore.** Reviewed SQLite required-column fills
+and data-only corrections preserve transaction and ledger ownership. Local
+snapshot and restore APIs verify schema/history, facts and queue storage.
+Restore explicitly resumes at least once or abandons/resynchronizes archived
+work and establishes a fresh durable identity. Client discovery fences old
+reads, mutations, cached rows and continuations across that boundary. These
+APIs require the documented offline ownership conditions.
+
+The guide sections still labeled `unreleased` document the APIs introduced in
+this release; V4 writer activation remains deferred as described above. Local
+Go/provider/race and actual-client acceptance results are recorded in
+[`go/compatibility/README.md`](../../go/compatibility/README.md). NAS performance
+and durability are explicitly unverified. This tag does not certify a deployment.
 
 ---
 

@@ -265,6 +265,8 @@ func renderSystemObject(object physical.SystemObject) (string, error) {
 		return "", fmt.Errorf("sqlite render: unsupported system object %s version %d", object.Kind, object.Version)
 	}
 	switch object.Kind {
+	case physical.SystemDataIncarnation:
+		return renderDataIncarnation(object.Name), nil
 	case physical.SystemMigrationLedger:
 		return "CREATE TABLE " + quote(object.Name) + " (" +
 			quote("migration_id") + " TEXT NOT NULL, " +

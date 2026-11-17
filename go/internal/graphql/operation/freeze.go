@@ -2,7 +2,7 @@ package operation
 
 import (
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
 

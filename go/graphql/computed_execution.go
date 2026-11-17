@@ -10,21 +10,23 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	"github.com/eleven-am/golem/go/internal/typedvalue"
 	"github.com/eleven-am/golem/go/observe"
 )
 
 type computedExecution struct {
-	scope    *graphqlextension.Execution
-	bindings map[compilerir.ExtensionID]ComputedBinding
-	loaders  map[string]*computedLoader
-	maxBatch uint32
-	hydrator *resultHydrator
-	owners   map[compilerir.ExtensionID]string
+	compilation compilerir.CompilationIR
+	scope       *graphqlextension.Execution
+	bindings    map[compilerir.ExtensionID]ComputedBinding
+	loaders     map[string]*computedLoader
+	maxBatch    uint32
+	hydrator    *resultHydrator
+	owners      map[compilerir.ExtensionID]string
 }
 
 type computedLoader struct {
@@ -86,7 +88,7 @@ func newComputedExecution(compilation compilerir.CompilationIR, supplied []Compu
 	if maximum <= 0 {
 		maximum = int(graphqlextension.DefaultMaxBatchSize)
 	}
-	return &computedExecution{scope: graphqlextension.NewExecution(), bindings: bindings, loaders: map[string]*computedLoader{}, maxBatch: uint32(maximum), owners: owners}, nil
+	return &computedExecution{compilation: compilation, scope: graphqlextension.NewExecution(), bindings: bindings, loaders: map[string]*computedLoader{}, maxBatch: uint32(maximum), owners: owners}, nil
 }
 
 func (execution *computedExecution) close() {
@@ -107,27 +109,35 @@ func (execution *computedExecution) resolve(ctx context.Context, model compileri
 	if err != nil && !errors.As(err, &failures) {
 		return values, err
 	}
-	return execution.hydrateValues(ctx, slot, values, execution.checkListBounds(slot, values, failures))
+	return execution.hydrateValues(ctx, slot, values, execution.prepareValues(slot, values, failures))
 }
 
-func (execution *computedExecution) checkListBounds(slot selectset.Slot, values []any, failures *computedFieldFailures) *computedFieldFailures {
+func (execution *computedExecution) prepareValues(slot selectset.Slot, values []any, failures *computedFieldFailures) *computedFieldFailures {
 	for index, value := range values {
 		if failures != nil && failures.byIndex[index] != nil {
 			continue
 		}
-		err := graphqlcontract.CheckListBounds(slot.Computed.Result, reflect.ValueOf(value))
+		err := typedvalue.CheckListBounds(slot.Computed.Result, reflect.ValueOf(value), execution.compilation.Contract.GraphQLTypes)
+		if err != nil {
+			err = typedvalue.ListItemsError("computed", execution.owners[slot.Computed.ExtensionID], err)
+		} else if graphqloperation.HoldsObject(slot.Computed.Result) {
+			values[index], err = normalizeGeneratedResult[struct{}](execution.compilation, slot.Computed.Result, value, false)
+		}
 		if err == nil {
 			continue
 		}
 		if failures == nil {
 			failures = &computedFieldFailures{byIndex: map[int]error{}}
 		}
-		failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, graphqlcontract.ListItemsError("computed", execution.owners[slot.Computed.ExtensionID], err))
+		failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, err)
 	}
 	return failures
 }
 
 func (execution *computedExecution) hydrateValues(ctx context.Context, slot selectset.Slot, values []any, failures *computedFieldFailures) ([]any, error) {
+	if graphqloperation.HoldsObject(slot.Computed.Result) {
+		return execution.hydrateObjectValues(ctx, slot, values, failures)
+	}
 	if !graphqloperation.HoldsModel(slot.Computed.Result) {
 		if failures != nil {
 			return values, failures
@@ -168,6 +178,50 @@ func (execution *computedExecution) hydrateValues(ctx context.Context, slot sele
 			failures.byIndex[index] = golem.RuntimeOperationError(golem.CodeNotFound, "computed", golem.ModelID{}, golem.FieldID{}, "record not found", nil)
 		default:
 			values[index] = restored
+		}
+	}
+	if len(failures.byIndex) != 0 {
+		return values, failures
+	}
+	return values, nil
+}
+
+func (execution *computedExecution) hydrateObjectValues(ctx context.Context, slot selectset.Slot, values []any, failures *computedFieldFailures) ([]any, error) {
+	if execution.hydrator == nil {
+		return nil, fmt.Errorf("computed DTO hydration is unavailable")
+	}
+	objects, needed := execution.hydrator.compiler.ComputedObjectHydration(slot)
+	if !needed {
+		if failures != nil {
+			return values, failures
+		}
+		return values, nil
+	}
+	if failures == nil {
+		failures = &computedFieldFailures{byIndex: map[int]error{}}
+	}
+	prepared := make([]any, len(values))
+	for index, value := range values {
+		if failures.byIndex[index] != nil {
+			continue
+		}
+		var err error
+		prepared[index], err = objects.Collect(value)
+		if err != nil {
+			failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, err)
+		}
+	}
+	rows, err := execution.hydrator.objectRows(ctx, objects)
+	if err != nil {
+		return nil, err
+	}
+	for index, value := range prepared {
+		if failures.byIndex[index] != nil {
+			continue
+		}
+		values[index], _, err = objects.Restore(value, rows)
+		if err != nil {
+			failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, err)
 		}
 	}
 	if len(failures.byIndex) != 0 {

@@ -416,10 +416,13 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 }
 
 // nonMutationRuntimeEntryPoints are the exported Caller*/System* functions that
-// perform no write. Listing them by hand is the point: a new mutation family
-// added to the runtime lands in neither list and fails the scan.
+// do not mutate model rows. Queue transitions are covered by the queue transaction
+// tests. Listing names by hand makes any new unclassified family fail the scan.
 func nonMutationRuntimeEntryPoints() map[string]struct{} {
 	names := []string{
+		"CallerInvalidations", "CallerSearchByVector", "CallerVectors", "SystemSearchByVector", "SystemVectors",
+		"CallerTxSearchByVector", "CallerTxVectors", "SystemTxSearchByVector", "SystemTxVectors",
+		"CallerTxPromoteJob", "SystemTxPromoteJob",
 		"CallerAggregate", "CallerCount", "CallerEvents", "CallerExecuteFrozenAnalytics", "CallerExecuteFrozenRead",
 		"CallerExplainAggregate", "CallerExplainCount", "CallerExplainFindFirst", "CallerExplainFindMany",
 		"CallerExplainFindUnique", "CallerExplainGroupBy", "CallerExplainRelationGroupBy", "CallerExplainScoped",

@@ -155,6 +155,8 @@ func DefineSchema(schema *golem.Schema) {
 
 import (
   "context"
+  "errors"
+  "fmt"
   "strings"
   "sync"
   "testing"
@@ -457,6 +459,94 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("the drained record did not rank against its new document: %d results", len(rewritten))
   }
 }
+
+func TestGeneratedPGPreparedVectorsPreservePolicyAndTransactionState(t *testing.T) {
+  ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+  defer cancel()
+  database, err := providerpostgresql.Open(ctx, providerpostgresql.Config{DataSourceName: {{DSN}}})
+  if err != nil { t.Fatal(err) }
+  t.Cleanup(func() { _ = database.Close() })
+  specification, err := embedding.NewSpecification("test", "deterministic", "v1", 3, 8)
+  if err != nil { t.Fatal(err) }
+  provider := &embedder{specification: specification}
+  embeddings, err := embedding.NewRegistry(map[string]embedding.Provider{"content": provider})
+  if err != nil { t.Fatal(err) }
+  application, err := app.Open(ctx, app.Config[string]{Database: database, Embeddings: embeddings,
+    Queue: &golemruntime.QueueConfig{Registry: queue.NewRegistry()},
+    ResolvePrincipal: func(_ context.Context, principal string) (actor.Actor, error) { return actor.Actor{Private: principal == "private"}, nil },
+  })
+  if err != nil { t.Fatal(err) }
+  ids := []golem.UUID{uuid(t,"20000000-0000-0000-0000-000000000001"), uuid(t,"20000000-0000-0000-0000-000000000002"), uuid(t,"20000000-0000-0000-0000-000000000003")}
+  titles := []string{"public alpha prepared", "private alpha prepared", "public beta prepared"}
+  system := application.System()
+  for index, id := range ids {
+    if _,err := system.Posts.Create(ctx,models.Posts.Create(models.Posts.ID.Create(id),models.Posts.Title.Create(titles[index]),models.Posts.Body.Create("prepared"),models.Posts.Published.Create(true)));err!=nil { t.Fatal(err) }
+  }
+  if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
+  before := provider.count()
+  vector,err := embedding.NewVector([]float32{0,1,0});if err!=nil { t.Fatal(err) }
+  query,err := embedding.NewQueryVector(specification,vector);if err!=nil { t.Fatal(err) }
+  caller,err := application.ForPrincipal(ctx,"public");if err!=nil { t.Fatal(err) }
+  scope := models.Posts.ID.In(ids...)
+  checkRanks := func(rows []golem.SemanticResult[models.Post], want ...golem.UUID) error {
+    if len(rows)!=len(want) { return fmt.Errorf("prepared ranks=%d want=%d",len(rows),len(want)) }
+    for index,row := range rows {
+      id,present := golem.Value(row.Row(),models.Posts.ID).Get()
+      if !present || id!=want[index] { return fmt.Errorf("prepared rank[%d]=%s/%t want=%s",index,id,present,want[index]) }
+    }
+    return nil
+  }
+  checkCells := func(cells []golem.ReadValue[embedding.QueryVector], want ...bool) error {
+    if len(cells)!=len(want) { return fmt.Errorf("prepared vector cells=%d want=%d",len(cells),len(want)) }
+    for index,cell := range cells {
+      value,present := cell.Get()
+      if present!=want[index] || !present && !cell.IsNull() { return fmt.Errorf("prepared vector[%d] state=%v want present=%t",index,cell.State(),want[index]) }
+      if present && (value.Specification().FingerprintInput()!=specification.FingerprintInput() || value.Vector().Dimensions()!=3) { return fmt.Errorf("prepared vector[%d] lost its space identity",index) }
+    }
+    return nil
+  }
+  ranked,err := caller.Posts.SearchByVectorRelated(ctx,query,10,scope);if err!=nil { t.Fatal(err) }
+  if err := checkRanks(ranked,ids[2],ids[0]);err!=nil { t.Fatal(err) }
+  if ranked[0].Distance()!=0 || ranked[1].Distance()!=1 { t.Fatalf("prepared cosine distances=%v,%v",ranked[0].Distance(),ranked[1].Distance()) }
+  trusted,err := system.Posts.SearchByVectorRelated(ctx,query,10,scope);if err!=nil { t.Fatal(err) }
+  if err := checkRanks(trusted,ids[2],ids[0],ids[1]);err!=nil { t.Fatal(err) }
+  cells,err := caller.Posts.VectorsRelated(ctx,models.Posts.ByID.Value(ids[2]),models.Posts.ByID.Value(ids[1]),models.Posts.ByID.Value(uuid(t,"20000000-0000-0000-0000-000000000004")));if err!=nil { t.Fatal(err) }
+  if err := checkCells(cells,true,false,false);err!=nil { t.Fatal(err) }
+  ready,_ := cells[0].Get();values:=ready.Vector().Values()
+  if values[0]!=0 || values[1]!=1 || values[2]!=0 { t.Fatalf("prepared source vector=%v",values) }
+  cells,err = system.Posts.VectorsRelated(ctx,models.Posts.ByID.Value(ids[1]),models.Posts.ByID.Value(ids[2]));if err!=nil { t.Fatal(err) }
+  if err := checkCells(cells,true,true);err!=nil { t.Fatal(err) }
+  rollback := errors.New("rollback prepared-vector snapshot probe")
+  err = caller.Transaction(ctx,func(tx *app.CallerTx[string])error{
+    // This application-owned write shares the caller transaction. The caller
+    // reads below retain their ordinary row policy and transaction-local marks.
+    if _,err:=app.SystemEscape(tx).Posts.Update(ctx,models.Posts.ByID.Value(ids[2]),models.Posts.Update(models.Posts.Body.Set("alpha pending")));err!=nil{return err}
+    cells,err:=tx.Posts.VectorsRelated(ctx,models.Posts.ByID.Value(ids[2]),models.Posts.ByID.Value(ids[0]));if err!=nil{return err}
+    if err:=checkCells(cells,false,true);err!=nil{return err}
+    rows,err:=tx.Posts.SearchByVectorRelated(ctx,query,10,scope);if err!=nil{return err}
+    if err:=checkRanks(rows,ids[0]);err!=nil{return err}
+    return rollback
+  })
+  if !errors.Is(err,rollback){t.Fatalf("prepared caller transaction: %v",err)}
+  err = system.Transaction(ctx,func(tx *app.SystemTx[string])error{
+    if _,err:=tx.Posts.Update(ctx,models.Posts.ByID.Value(ids[1]),models.Posts.Update(models.Posts.Body.Set("beta pending")));err!=nil{return err}
+    cells,err:=tx.Posts.VectorsRelated(ctx,models.Posts.ByID.Value(ids[1]),models.Posts.ByID.Value(ids[2]));if err!=nil{return err}
+    if err:=checkCells(cells,false,true);err!=nil{return err}
+    rows,err:=tx.Posts.SearchByVectorRelated(ctx,query,10,scope);if err!=nil{return err}
+    if err:=checkRanks(rows,ids[2],ids[0]);err!=nil{return err}
+    return rollback
+  })
+  if !errors.Is(err,rollback){t.Fatalf("prepared system transaction: %v",err)}
+  cells,err = caller.Posts.VectorsRelated(ctx,models.Posts.ByID.Value(ids[2]));if err!=nil{t.Fatal(err)}
+  if err:=checkCells(cells,true);err!=nil{t.Fatal(err)}
+  ranked,err = caller.Posts.SearchByVectorRelated(ctx,query,10,scope);if err!=nil{t.Fatal(err)}
+  if err:=checkRanks(ranked,ids[2],ids[0]);err!=nil{t.Fatal(err)}
+  revision,err:=embedding.NewSpecification("test","deterministic","v2",3,8);if err!=nil{t.Fatal(err)}
+  obsolete,err:=embedding.NewQueryVector(revision,vector);if err!=nil{t.Fatal(err)}
+  if _,err:=caller.Posts.SearchByVectorRelated(ctx,obsolete,10,scope);err==nil{t.Fatal("prepared revision mismatch was accepted")}else if code,_:=embedding.CodeOf(err);code!=embedding.CodeInvalidInput{t.Fatalf("prepared revision error=%v",err)}
+  if provider.count()!=before {t.Fatalf("prepared vector operations invoked embedding provider: before=%d after=%d",before,provider.count())}
+}
+
 `
 	acceptance = strings.NewReplacer(
 		"{{DSN}}", strconv.Quote(dsn),

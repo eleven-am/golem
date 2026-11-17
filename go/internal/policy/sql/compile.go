@@ -77,6 +77,9 @@ func validateCapabilities(condition ir.Condition, provider ir.Provider, resolver
 		return nil
 	}
 	switch condition.Kind() {
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return validateCapabilities(body, provider, resolver, proof)
 	case ir.ConditionLogical:
 		_, children, _ := condition.Logical()
 		for _, child := range children {
@@ -112,6 +115,9 @@ type compiler struct {
 
 func (compiler *compiler) condition(condition ir.Condition, alias physical.PhysicalName) (string, error) {
 	switch condition.Kind() {
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return compiler.condition(body, alias)
 	case ir.ConditionConstant:
 		truth, _ := condition.Constant()
 		if truth {

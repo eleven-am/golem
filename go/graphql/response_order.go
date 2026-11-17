@@ -26,6 +26,10 @@ func (data executableData) decode() (any, error) {
 }
 
 func canonicalExecutableData(raw []byte) (executableData, error) {
+	return canonicalExecutableDataWithLimit(raw, 0)
+}
+
+func canonicalExecutableDataWithLimit(raw []byte, maximum int) (executableData, error) {
 	if !json.Valid(raw) {
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
@@ -33,14 +37,26 @@ func canonicalExecutableData(raw []byte) (executableData, error) {
 		}
 		return nil, errors.New("invalid JSON")
 	}
-	output := make([]byte, 0, len(raw)+len(raw)/32)
+	capacity := len(raw) + len(raw)/32
+	if maximum > 0 && capacity > maximum {
+		capacity = maximum
+	}
+	output := make([]byte, 0, capacity)
 	for index := 0; index < len(raw); {
 		switch character := raw[index]; character {
 		case ' ', '\t', '\n', '\r':
 			index++
 		case '"':
 			end, verbatim := jsonStringEnd(raw, index)
+			// A six-byte Unicode escape can shrink to one output byte. Reject
+			// strings that cannot fit before decoding their complete contents.
+			if maximum > 0 && end-index > 6*(maximum-len(output))+2 {
+				return nil, errResultBytes
+			}
 			if verbatim {
+				if maximum > 0 && end-index > maximum-len(output) {
+					return nil, errResultBytes
+				}
 				output = append(output, raw[index:end]...)
 			} else {
 				var value string
@@ -48,12 +64,15 @@ func canonicalExecutableData(raw []byte) (executableData, error) {
 					return nil, err
 				}
 				var err error
-				if output, err = appendJSONString(output, value); err != nil {
+				if output, err = appendJSONStringWithLimit(output, value, maximum); err != nil {
 					return nil, err
 				}
 			}
 			index = end
 		default:
+			if maximum > 0 && len(output) >= maximum {
+				return nil, errResultBytes
+			}
 			output = append(output, character)
 			index++
 		}
@@ -91,6 +110,17 @@ func appendJSONString(output []byte, value string) ([]byte, error) {
 	output = append(output, '"')
 	output = append(output, value...)
 	return append(output, '"'), nil
+}
+
+func appendJSONStringWithLimit(output []byte, value string, maximum int) ([]byte, error) {
+	if maximum > 0 && len(value)+2 > maximum-len(output) {
+		return nil, errResultBytes
+	}
+	encoded, err := appendJSONString(output, value)
+	if err == nil && maximum > 0 && len(encoded) > maximum {
+		return nil, errResultBytes
+	}
+	return encoded, err
 }
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -148,6 +178,7 @@ type selectionOrderedData struct {
 	value     any
 	schema    *ast.Schema
 	operation Operation
+	encoded   executableData
 }
 
 func (server *Server[P]) selectionOrdered(response Response, operation Operation) Response {
@@ -181,7 +212,22 @@ func (data selectionOrderedData) MarshalJSON() ([]byte, error) {
 }
 
 func (data selectionOrderedData) encodeInto(output *bytes.Buffer) error {
-	writer := selectionWriter{schema: data.schema, fragments: data.operation.Document.Fragments, variables: data.operation.Variables, output: output, encoder: json.NewEncoder(output), plans: map[selectionPlanKey][]collectedField{}}
+	return data.encodeIntoWithLimit(output, 0)
+}
+
+func (data selectionOrderedData) encodeIntoWithLimit(output *bytes.Buffer, maximum int) error {
+	if data.encoded != nil {
+		if maximum > 0 && len(data.encoded) > maximum {
+			return errResultBytes
+		}
+		output.Write(data.encoded)
+		return nil
+	}
+	limit := 0
+	if maximum > 0 {
+		limit = output.Len() + maximum
+	}
+	writer := selectionWriter{schema: data.schema, fragments: data.operation.Document.Fragments, variables: data.operation.Variables, output: output, encoder: json.NewEncoder(output), plans: map[selectionPlanKey][]collectedField{}, limit: limit}
 	var root *ast.Definition
 	if data.schema != nil {
 		switch data.operation.Definition.Operation {
@@ -203,6 +249,7 @@ type selectionWriter struct {
 	output    *bytes.Buffer
 	encoder   *json.Encoder
 	plans     map[selectionPlanKey][]collectedField
+	limit     int
 }
 
 type selectionPlanKey struct {
@@ -219,7 +266,15 @@ type collectedField struct {
 	typename   bool
 }
 
-func (writer *selectionWriter) value(value any, sets []ast.SelectionSet, parent *ast.Definition) error {
+func (writer *selectionWriter) value(value any, sets []ast.SelectionSet, parent *ast.Definition) (err error) {
+	defer func() {
+		if err == nil {
+			err = writer.checkSize()
+		}
+	}()
+	if err := writer.checkSize(); err != nil {
+		return err
+	}
 	if !hasSelections(sets) {
 		return writer.scalar(value)
 	}
@@ -311,27 +366,51 @@ func (writer *selectionWriter) object(value map[string]any, sets []ast.Selection
 }
 
 func (writer *selectionWriter) key(name string) error {
-	encoded, err := appendJSONString(writer.output.AvailableBuffer(), name)
-	if err != nil {
+	if err := writer.string(name); err != nil {
 		return err
 	}
-	writer.output.Write(encoded)
 	writer.output.WriteByte(':')
 	return nil
 }
 
-func (writer *selectionWriter) scalar(value any) error {
+func (writer *selectionWriter) checkSize() error {
+	if writer.limit > 0 && writer.output.Len() > writer.limit {
+		return errResultBytes
+	}
+	return nil
+}
+
+func (writer *selectionWriter) string(value string) error {
+	remaining := 0
+	if writer.limit > 0 {
+		remaining = writer.limit - writer.output.Len()
+		if remaining < 2 {
+			return errResultBytes
+		}
+	}
+	encoded, err := appendJSONStringWithLimit(writer.output.AvailableBuffer(), value, remaining)
+	if err != nil {
+		return err
+	}
+	writer.output.Write(encoded)
+	return nil
+}
+
+func (writer *selectionWriter) scalar(value any) (err error) {
+	defer func() {
+		if err == nil {
+			err = writer.checkSize()
+		}
+	}()
+	if err := writer.checkSize(); err != nil {
+		return err
+	}
 	switch value := value.(type) {
 	case nil:
 		writer.output.WriteString("null")
 		return nil
 	case string:
-		encoded, err := appendJSONString(writer.output.AvailableBuffer(), value)
-		if err != nil {
-			return err
-		}
-		writer.output.Write(encoded)
-		return nil
+		return writer.string(value)
 	case bool:
 		writer.output.Write(strconv.AppendBool(writer.output.AvailableBuffer(), value))
 		return nil

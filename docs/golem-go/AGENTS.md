@@ -1,9 +1,16 @@
 # Golem (Go): a working guide for an AI agent
 
-**Describes go/v0.8.8 and the TypeScript client 0.2.1.** Module path:
+**Baseline examples: go/v0.8.8; added APIs: go/v0.9.0 and client 0.3.0.** Module path:
 `github.com/eleven-am/golem/go`. The `go/` suffix is part of the path. Tags
 are `go/vX.Y.Z`; a plain `vX.Y.Z` tag belongs to the TypeScript packages in the
 same repository and does not describe this module. The module needs Go 1.26.
+
+Sections retaining their original **unreleased** labels describe APIs introduced
+in go/v0.9.0, including P11 queue APIs/storage commands, durable data identity,
+reviewed corrections and local restore. Use matching v0.9.0 CLI/library builds
+and regenerate application code. Historical policy evidence has V3/V4 readers
+but still uses the automatic V3 writer; V4 activation is a later release step.
+See [release notes](RELEASE-NOTES.md#gov090) for upgrade and toolchain requirements.
 
 ```
 go get github.com/eleven-am/golem/go@v0.8.8
@@ -45,6 +52,7 @@ follows the code and says so.
 | record a job's final failure | `OnJobFailed` in `Config.QueueFailed` | 20 |
 | change queue concurrency without a restart | `app.ReconfigureQueue`, `app.QueuePlan` | 20 |
 | cancel a job together with a status write | `tx.CancelJob` on a job ID read in that transaction | 20, 21 |
+| promote pending work (unreleased P11) | `tx.PromoteJob`, with `queue.ReadyNow()` only when delay should be removed | 20 |
 | run a long action users watch | the durable-actions pattern | 21 |
 | expose a custom GraphQL root | `golem.Query`/`golem.Mutation` in `DefineGraphQL` | 13 |
 | run a custom mutation from Go | generated `Mutate(ctx, caller, Resolver, args)` | 13 |
@@ -112,7 +120,8 @@ follows the code and says so.
     Inside a hook, call with the hook's own context or its executor.
 12. **Never cancel a job by an ID taken from arguments.** Read the job ID in
     the same transaction from a row the caller's policy allowed, then call
-    `tx.CancelJob`.
+    `tx.CancelJob`. The same authorization rule applies to the unreleased
+    `tx.PromoteJob`; also check that the business action permits promotion.
 13. **Guard status writes against a concurrent cancel or failure.** A handler's
     success write is a conditional `UpdateMany` that matches the status it
     expects (and the job ID for a failure callback); zero rows means someone
@@ -211,6 +220,7 @@ belong to generate".
 | `migration plan --schema ./p [--provider p]` | What `migration new` would produce now. Read-only. |
 | `migration plan --migration 0002_x [--provider p]` | A written migration's operations, risk labels and warnings. Do not combine with `--schema`. |
 | `migration backfill attach --migration id --field Model.Field --file path` | Attaches a reviewed backfill (PostgreSQL-only schemas, section 22). |
+| `migration data new --name slug --field Model.Field --file path --approve id` | Unreleased: seals one offline data-only correction, section 22. |
 | `migration apply --provider p --dsn dsn` | Applies pending migrations. |
 | `generate --schema ./p --app-out ./p` | Writes `zz_golem_*.gen.go`, `zz_golem_graphql.schema.graphqls`, `zz_golem_client.gen.ts`, `golemgqlgen/` and `.golem/` fingerprints. |
 | `check --schema ./p --app-out ./p` | Fails if generated code or the manifest no longer matches the schema or was hand-edited. |
@@ -613,6 +623,16 @@ version, err := caller.Notes.FindUnique(ctx, notes.Notes.ByID.Value(id), notes.N
 - `X.GolemVersion` is the row version of a model with `Subscriptions`
   (section 14); it works in `Select` and predicates and is never writable.
 - `Explain…` methods on caller clients return a `queryplan.Report`.
+  `ExplainFindMany(ctx, options...)` prepares the same authorized primary
+  statement as `FindMany` with the same caller, context, filters, ordering,
+  limits, selection and read hooks. The provider plans that statement without
+  executing the data read. Included relation batches are deferred; the primary
+  explanation does not diagnose their eventual statements. Traverse the report
+  through `Statements`, each statement's `Root`, and node accessors such as
+  `Kind`, `Access`, `ModelID`, `IndexID` and `Children`. The report contains
+  stable identities rather than SQL, bound values or raw provider plan text.
+  In go/v0.8.8 there is no GraphQL explain CLI or SQL-logging environment
+  variable; `internal/queryplancapture` is an internal implementation boundary.
 
 **Text comparison is exact by default.** `Eq`, `Contains`, `StartsWith`,
 `EndsWith` are case-sensitive. `Field.Compare(golem.ASCIIInsensitive())` folds
@@ -1048,7 +1068,72 @@ writes.
 
 ---
 
+### Development prerequisite: durable data identity
+
+**Unreleased.** `golem.WithDataIncarnation(schema)` opts the schema into
+Physical 4 and provider-owned identity. `golem.PageQuery` now requires this
+declaration. Use matching development CLI/library builds, create and apply the
+reviewed initial or additive migration, then regenerate Go code and the client
+manifest. Unopted schemas keep Physical 3 and their existing history unchanged.
+The migration runner initializes identity with Go-owned `crypto/rand` and a
+bound INSERT derived from the sealed operation; rendered SQL alone cannot do
+it. Startup never automatically repairs a missing or invalid singleton.
+
+`PageConfig.Incarnation` is removed. The runtime binds pages to the admitted
+provider identity, exposed read-only by generated `application.DataIncarnation()`.
+The opaque value has no user constructor; its canonical wire form is 32
+lowercase hexadecimal characters, excluding zero. It stays stable across
+reopening the same database; a new independently initialized database gets a
+different identity.
+
+The opted contract requires manifest 3 and `data-incarnation-v1` on business
+HTTP requests, WebSocket initialization and each subscribe, composed with the
+invalidation capability where applicable. Authentication-only discovery uses
+the same JSON endpoint, static handshake metadata and a nonce, with no
+executable fields or supplied identity. It begins no caller or business policy
+and uses `no-store`, including refusals; SSE discovery is refused. Ordinary
+responses and acknowledgements compare identity only. Call `GolemClient.ready()`
+or `GolemTransport.ready()` before mutations; reads initialize automatically.
+An identity reset clears cached queries and owned React mutation results.
+Already sent stale mutations have an unknown outcome and are not replayed;
+explicit commit errors keep their evidence. Per-call callbacks detach from the
+new UI, while returned promises and hook-global commit reconciliation remain
+responsible for sent work.
+
+See [the durable identity setup](./GUIDE.md#durable-data-identity-unreleased)
+and [continuation pages](./GUIDE.md#custom-continuation-pages) for configuration.
+Snapshot preserves identity. The development [offline restore workflow](./GUIDE.md#offline-sqlite-restore-unreleased)
+uses `sqlite.PrepareRestore` with explicit archive/target bundles and either
+`RestoreResumeAtLeastOnce` or `RestoreAbandonAndResync`. It validates a private
+copy, reconciles archived work once, permits explicit domain reconciliation,
+then verifies the final image and rotates identity before `Publish`. Close all
+staging handles first. The deployment must stop the old fleet and prevent
+restart through fresh application startup; this API does not mechanically prove
+process shutdown. Data-only corrections and NAS/production gates remain pending.
+
 ## 14. Events and subscriptions
+
+### Development contract: custom operation invalidation
+
+The current development API adds `InvalidateRows` and `InvalidateFacts` to
+`Query` and `PageQuery`; this is beyond the released versions described at the
+top of this guide. Follow [the supported contract in GUIDE.md](./GUIDE.md#declared-operation-invalidation)
+for exact binder signatures, limits and setup. Readable dependencies require
+local ordinary predicates and before-image coverage of watched and controlling
+scalars. Ordinary relation paths fail admission; genuine fact observation
+requires bound policy scope and certified V4 history, while the default writer
+remains V3. Never substitute a broader readable-row stream or fabricate fact
+authority to bypass those restrictions. Static APIs remain available.
+Readable invalidation also refuses configured CDC adapters until they can
+certify complete before images. Missing retained evidence closes the source
+generically; it never counts as proof that a row was outside the filter.
+
+An opted schema requires `operation-invalidation-v1` on all requests, including
+static queries and mutations. Upgrade the client and generated manifest with
+the server. Schemas without invalidation or durable data identity retain their
+previous request bytes; pages now require the identity prerequisite above.
+DTO scalars remain trusted resolver output, independently of row authorization
+and of which dependencies can be observed.
 
 ### Setup
 
@@ -1418,10 +1503,19 @@ export const golemClientManifest = {
   `nullable` (go/v0.8.2), `inverse` or `null`), and `computed` (the models a
   computed field's result holds).
 - Per root: `kind` (`generated` or `opaque` for custom, semantic and full-text
-  roots), `models` (the models whose changes the result depends on; a
+  roots), `models` (response models used for result enrichment and read
+  dependencies; a
   `relationGroupBy` also lists the models it groups by since go/v0.8.3),
   `shape` (go/v0.8.2: `rows`, `row`, `deletedRow`, `aggregate`, `groupBy`,
   `updateMany`, `deleteMany`, `value`) and `nullable` (go/v0.8.2).
+- Unreleased: mutation roots also carry optional `mutationScope`, independently
+  of response `models`: `{ kind: "models", models: ["Invite", "Team"] }` bounds
+  possible writes using sorted public model names; `{ kind: "unscoped" }` means
+  no model bound is proven. Generated scopes cover nested writes and FK effects
+  conservatively. Hooks, private or unknown reach, and every custom mutation
+  are unscoped. A custom mutation returning `Invite` can also create `Team`;
+  its response `models` remains `["Invite"]`. Missing scope is unscoped. This
+  additive hint changes no manifest format, required capability or HTTP support.
 - `internal` fields are absent (verified).
 
 ---
@@ -1803,7 +1897,76 @@ no policy: verified, a caller cancelled another user's job by ID and got
 commit.
 
 **Golem owns `golem_queue`** (`main.golem_queue` on SQLite, `_golem` on
-PostgreSQL); any index you add stops startup. Not included: cron, priority.
+PostgreSQL); any index you add stops startup. Cron is not included.
+
+### Unreleased P10: bounded maintenance application reference
+
+Use the [bounded removal reference](QUEUE.md#application-reference-bounded-removal-unreleased-p10)
+when a root's physical descendants exceed one mutation's limits. These are
+application commands, not public Golem API additions: logical removal,
+persistent task and first enqueue commit together; 32-leaf pages commit
+progress and successors atomically. Every caller/System ingest and reparent
+must use the same root CAS and ordered-lock owner. `IntoTx` variants compose
+that same implementation; System still has no universal hooks. Keep command
+IDs stable across retries, exclude external I/O, retain task identities, do
+not reuse root IDs, and authorize any progress/count disclosure explicitly.
+The 1,000-row/1 MiB limits remain unchanged. Generated acceptance passed for
+ordinary SQLite/PostgreSQL and a separate real SQLite semantic variant;
+PostgreSQL pgvector execution and NAS latency remain unverified. Byte checks
+in the reference measure raw stored payloads, not canonical encoder budgets.
+
+### Unreleased P11: priority, promotion and storage upgrade
+
+This development addition is not in go/v0.8.8. There are exactly two lanes:
+`queue.PriorityNormal` (`0`, default) and `queue.PriorityInteractive` (`1`).
+Use `jobType.New(payload, queue.WithPriority(queue.PriorityInteractive))`.
+`Pending.Priority()` reports the requested lane; `Job[T]`, `Meta`, `Status`
+and `Failure[T]` expose `Priority`. Prefer keyed public struct literals when
+updating. Dedupe returns existing work unchanged, including its priority and
+delay. Retries, lease reclaim and operator requeue preserve priority.
+
+Generated `CallerTx` and `SystemTx` expose
+`tx.PromoteJob(ctx, jobID, queue.PriorityInteractive, options...)`; the trusted
+operator exposes `application.QueueOperator().Promote` with the same
+arguments. Only pending jobs can change, priority never decreases, and
+attempts/payload/keys are preserved. Delay stays intact unless the explicit
+`queue.ReadyNow()` option is passed. It can accelerate a pending job already
+at Interactive. Missing, leased (even expired), terminal, lower-priority and
+already-applied requests return `false`. `PromoteJob` commits or rolls back
+with the transaction and wakes the local worker after a changed commit.
+Authorize the business row and obtain its stored job ID in that same caller
+transaction: promotion itself applies no ownership policy.
+
+One continuously running worker offers Normal a turn after three Interactive
+handler admissions when Normal capacity is available. This is an admission
+opportunity across that worker's types/resources, not per-job latency,
+completion order or fleet-wide fairness. `Limits.ReservedInteractive` defaults
+to `0`, must be nonnegative and below resolved `Concurrency`, and limits how
+many local slots Normal can occupy. It is startup-only; a live plan cannot
+lower concurrency to that reservation or below. Neither priority nor reserved
+slots preempts handlers, reserves weighted resources, or bypasses type caps,
+exclusivity, delay or lease fencing.
+
+Storage maintenance commands are `golem queue storage inspect --provider
+sqlite --dsn 'file:notes.db'` and `golem queue storage upgrade` with the same
+flags. For PostgreSQL use `--provider postgresql --dsn "$DATABASE_URL"` and
+the actual `--system-namespace` (default `_golem`). SQLite accepts
+`--sqlite-profile local|network|network-wal` and only namespace `main`.
+Inspection is read-only catalog work; SQLite inspection avoids application
+journal/statistics initialization. Neither command creates a missing SQLite
+database, and upgrade refuses absent queue storage.
+
+The JSON result contains `version` and `historyIndexes`. Only complete known
+`pre-resource` and `v0.8.8` shapes upgrade to `priority-v1`; `absent` is an
+inspection result, and unknown or partial shapes refuse. Existing jobs become
+Normal; job state and the presence of the complete optional history-index set
+are preserved transactionally. Application startup refuses legacy storage
+instead of silently upgrading it. **Drain and stop all producers and workers,
+including old binaries, before the explicit upgrade.** Old startup rejects
+the new canonical index, but already-running old processes are not fenced;
+the maintenance command does not certify that the fleet stopped.
+See [QUEUE.md](QUEUE.md#priority-and-promotion-unreleased-p11) for the complete
+API and [upgrade procedure](QUEUE.md#explicit-storage-upgrade-unreleased-p11).
 
 ---
 
@@ -1984,6 +2147,45 @@ optional are `locking` or `safe` and need none.
 - Temporal columns must match exactly, time zone included; anything else is
   drift (`Open` and `golem doctor`).
 
+**Unreleased SQLite addition:** the development version supports one new
+required column through the existing reviewed backfill workflow when SQLite
+is the schema's sole provider. It stages nullable, executes the companion,
+checks for remaining NULLs, and rebuilds; data, schema and ledger commit or
+roll back together. Stop application writers, workers and live streams first.
+The SQLite companion is a single parameter-free `UPDATE` of only the new
+column, with no returned rows. Reviewed application reads and SQLite
+innocuous functions are allowed; transaction control, schema changes,
+PRAGMAs, ATTACH, system metadata and writes to existing columns are refused.
+Semantic-index input targets are refused until an explicit invalidation path
+exists. No application hooks or ordinary mutation events run. These SQLite
+restrictions do not change PostgreSQL's existing executor. Multi-provider
+companions remain unsupported; data-only corrections have a separate
+development workflow below. The shipped go/v0.8.8 restriction above is unchanged.
+
+**Unreleased PostgreSQL execution hardening:** reviewed companions remain one
+parameter-free, preparable statement and execute inside an atomic PostgreSQL
+procedural context. The outer migration transaction owns commit; transaction
+commands, nested `DO`/`CALL` transaction endings and utilities requiring
+execution outside a transaction cannot commit staged work. Trusted PL/pgSQL
+with `USAGE` is required. Transactional schema/data, ledger and durable identity
+changes roll back together on failure. Operator review still owns SQL effects:
+sequence changes and external effects from privileged functions are not made
+rollbackable. Data-only corrections and offline SQLite restore have separate
+development workflows.
+
+**Unreleased data-only corrections:** `migration data new` seals a separate
+checksummed entry for one existing stored scalar on a single-provider SQLite
+or PostgreSQL schema. It requires reviewed durable data identity, exact
+unchanged schemas and an object-scoped approval. Stop the fleet and prevent
+restart before applying; regenerate and open a fresh app afterward. Actual
+changed rows receive new versions, managed full-text projections remain
+consistent, and fresh identity commits with the correction and ledger. Keys,
+version fields and semantic inputs (including generated dependencies) are
+refused. Queue and immutable facts remain; hooks and ordinary mutation events
+do not run. PostgreSQL correction SQL has a closed expression grammar, separate
+from its existing backfill executor. See [the correction contract](./GUIDE.md#changing-a-schema)
+for syntax, history, rollback and sequence-gap details. NAS duration is pending.
+
 ### Row versions
 
 The first migration after upgrading to go/v0.8.1+ adds
@@ -2053,6 +2255,37 @@ database, err := sqlite.OpenNetworkFilesystem(ctx, sqlite.Config{DataSourceName:
   journal separately.
 - None of this makes SQLite distributed: do not run several replicas against
   one file.
+
+**Unreleased — Snapshot Work A is a copy operation, not restore.**
+`sqlite.Snapshot(ctx, db, expectedBundle, destination) error` takes an open,
+verified local `sqlite.Open` handle and the expected generated
+`golem.SchemaBundle` with its exact reviewed history. Network-filesystem
+profiles are refused; do not promise NAS support or online performance.
+
+- The native incremental copy borrows one source connection, releasing it
+  before verification. Other work can wait for pool capacity or SQLite locks;
+  no pause-duration bound is promised.
+- SQLite normalizes only the owned staging clone to DELETE journal mode.
+  Integrity/CHECK, FK, physical-schema and exact ledger verification uses an
+  RW handle with `query_only=1`, not a physically read-only handle (the latter
+  skips CHECK validation in the supported engine). Ordinary SQL writes are
+  prohibited; source profile, rows, versions, facts and deliveries stay intact.
+- For an opted Physical 4 schema, verification also requires a valid copied
+  identity singleton. The copy preserves its source identity exactly; Snapshot
+  never creates or rotates it, including when the singleton is missing.
+- Require an existing trusted local directory and an unused destination main
+  name plus `-wal`, `-shm` and `-journal` names. Empty files, symlinks and
+  directories also refuse. Never remove existing target objects. Preflight
+  and pre-publication checks cannot atomically fence sidecar creation; the
+  caller must exclude concurrent destination-namespace writers.
+- Cancellation before publication cleans staging. Inspect
+  `provider.CodeOf(err)`: `provider.CodeMaintenance` reports refusal/failure;
+  `provider.CodeSnapshotPublished` means publication happened but subsequent
+  synchronization or cleanup failed. Do not blindly retry that result.
+- No overwrite, restore, epoch rotation, job/event reconciliation or automatic
+  worker/publisher startup is provided. Keep the closed-handle
+  `CheckpointForBackup` procedure above for offline file copies; snapshot
+  success does not establish that restoring or executing copied work is safe.
 
 ---
 

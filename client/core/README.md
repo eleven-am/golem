@@ -58,7 +58,10 @@ const unsubscribe = observer.subscribe((result) => render(result.data))
 - `golem.live.start()` starts live sync and returns a function that stops it. Start it before you observe a query, so no query is fetched before its subscriptions are open.
 - `golem.queryOptions(document, variables?)` returns TanStack options for a live query. It throws `GolemNotLiveError` for a document that cannot be live.
 - `golem.infiniteQueryOptions(document, variables?)` returns options for `InfiniteQueryObserver` over a list query with a `take`. Give `take` a variable with a default, or a literal; never write `cursor` or `skip`.
-- `golem.staticQueryOptions(document, variables?)` returns options for a document fetched once and never refreshed, including one that cannot be live (a model without events, a custom root with no model rows). Counts, aggregates, group-by and custom roots with model rows are live through `golem.queryOptions`: any event on a model they come from refetches the document through the coalescer, and they are never patched.
+- `golem.staticInfiniteQueryOptions(document, variables?)` uses the same generated-list cursor planner without live sync or subscriptions. It works for models without events, forwards cancellation to HTTP, and uses a separate static cache entry. Normal TanStack refetch options still apply. Call `resetSession()` after changing the authenticated principal or selected profile; it clears cached pages and starts a new chain. Custom DTO continuation pages require a separate page contract; this method currently accepts generated list roots.
+- `golem.continuationQueryOptions(document, variables?)` is the live counterpart for a custom page root with generated `invalidation` metadata. Its operation subscription acknowledges before the first fetch and emits no row/data packets. A terminal invalidation clears the whole chain, waits for replacement acknowledgement and restarts at `null`; old in-flight pages cannot append. TanStack invalidation (including committed generic mutations) also resets the chain. `refetchType: 'none'` clears without making a request; explicit ordinary refetch retains the current traversal semantics. A quick remount can reuse open coverage, but reopening after a subscription gap starts a fresh population.
+- `golem.staticContinuationQueryOptions(document, variables?)` pages a registered custom `PageQuery` from a format 3 manifest. It uses opaque `string | null` page parameters and adds the continuation selection automatically. Select one pageable root directly and leave `after` to the client. Empty or short pages continue when the server supplies `next`; only `next: null` ends traversal. Expiry and invalid tokens remain errors: discard accumulated pages before starting a new chain. Call `resetSession()` on principal/profile changes too.
+- `golem.staticQueryOptions(document, variables?)` returns ordinary TanStack query options without event streams, including for a model without events or a custom root with no model rows. Static queries and continuation pages preserve authored model field selections and carry SDK read metadata for own-write invalidation without creating live entries. Normal TanStack refetch options still apply. Counts, aggregates, group-by and custom roots with model rows can be live through `golem.queryOptions`: any event on a model they come from refetches the document through the coalescer, and they are never patched.
 - `golem.mutate(document, variables?)` runs a mutation over HTTP and returns its data. A document holds exactly one operation; one with several is refused with `GolemMultipleOperationsError`.
 
 ```ts
@@ -80,7 +83,13 @@ const off = golem.transport.onStatus((status) => console.log(status))
 
 The status of one query (below) is separate from this connection state.
 
-`golem.dispose()` stops live sync, closes the transport and releases the `QueryClient` for another `GolemClient`.
+`golem.dispose()` stops live sync, cancels reads, clears cached Golem rows and page chains, closes the transport and releases the `QueryClient` for another `GolemClient`. Unrelated cache entries remain intact.
+
+Socket credentials are prepared again for each connection attempt. If that
+preparation rejects, the stream ends with the original error and no socket is
+created for that attempt; a fresh subscription or session reset can retry with
+current credentials. Reset and disposal fence pending preparation and late
+socket opens, including asynchronous cleanup failures from the old session.
 
 ## Live status
 
@@ -89,14 +98,94 @@ The status of one query (below) is separate from this connection state.
 | State | Meaning |
 |---|---|
 | `CONNECTING` | Subscriptions are being opened; the first fetch waits for their acks. |
-| `LIVE` | Every stream is acknowledged; the cache follows the server. |
-| `RECOVERING` | A stream or the socket was lost; it is reopening and the query will refetch once after the acks. |
+| `LIVE` | Every stream is acknowledged and any recovery fetch has committed for the current generation. |
+| `RECOVERING` | Coverage was lost. Cached data is cleared; replacement streams must acknowledge and a current-generation fetch must succeed before returning to LIVE. |
 | `LIMIT` | The connection's subscription cap was reached. The data is still fetched, but not live until a slot frees. |
-| `FORBIDDEN` | The server stopped a stream because the principal lost access. The query refetches once and does not resubscribe. |
+| `FORBIDDEN` | The server stopped a stream because the principal lost access. Cached data is cleared immediately and streams remain stopped until an explicit session reset. |
 | `NOT_FOUND` | A row held in a single result slot left the result; the query refetches. |
 | `FAILED` | A stream failed for good (`error` holds the cause). |
 
 TanStack's own `isFetching`, `isError` and `data` keep their usual meaning.
+
+### Initialization and authenticated data incarnation
+
+A manifest requiring `data-incarnation-v1` needs authenticated discovery before
+its first mutation. Call `await golem.ready()` during initialization. Concurrent
+calls share one discovery; reads initialize lazily. An unready mutation fails
+with `GOLEM_CLIENT_NOT_READY` before credentials or HTTP dispatch. Discovery is
+an authenticated POST with a fresh nonce and no business operation. Its result
+binds later HTTP requests and WebSocket subscriptions to that database identity.
+The supported opted entry points are `GolemClient` and `Transport`; a standalone
+`Session` does not own authenticated HTTP discovery.
+The capability can coexist with `operation-invalidation-v1`. Manifests without
+it need no discovery and preserve their existing wire contract.
+
+Only a fresh discovery can adopt an identity. A business response or socket
+acknowledgement claiming another identity clears Golem data and starts fresh
+authenticated discovery. The client remains unready until that discovery
+succeeds. Active reads restart from their initial page after adoption; discovery
+or authentication failure appears as a query error and `FAILED` live status.
+Raw `Transport` subscribers receive a typed terminal session refusal and can
+subscribe again after readiness. A reset also performs discovery before its
+promise resolves. The old socket is disposed
+before the replacement session becomes ready.
+
+### Principal, profile and logout boundaries
+
+Update the state read by `credentials`, then call and await `golem.resetSession()`:
+
+```ts
+session.set(nextSession) // a new principal/profile, or logout
+await golem.resetSession()
+```
+
+Reset clears all cached Golem rows and page chains immediately, including inactive queries and static/continuation pages. It cancels outstanding reads, fences late responses even if an HTTP implementation ignores abort, renews transport credentials and reopens active live streams. Live refetches wait for the new acknowledgements; active static queries refetch from their initial page. Unrelated TanStack cache entries are preserved. Reset does not detect changes to arbitrary state captured by your credentials callback: call it explicitly for every principal/profile switch and logout. Raw `transport` requests share the same readiness and session fence; they do not write query-cache data. Detaching live sync closes live streams without changing the principal or cancelling independent static reads. Disposal fences all outstanding Golem reads. Core consumers must retain the returned `queryFn` and `structuralSharing` options: together they own the request and cache-commit fences. Overriding either leaves the supported recovery boundary. React hooks reserve both options.
+
+Mutations capture their session and JSON arguments at invocation. A mutation
+queued before reset or disposal fails before dispatch. If it was already sent,
+a stale success becomes `GolemCommitUnknownError`; read back authoritative
+state and do not replay it automatically. Explicit server PARTIAL/UNKNOWN
+errors retain their commit evidence. Old outcomes never invalidate the new
+session's cache. Session boundaries also clear SDK-owned completed TanStack
+mutation records. Pending records retain scope ordering until settlement and
+are then removed if stale; unrelated mutations are preserved.
+`golem.onSessionReset(listener)` provides a read-only lifecycle notification
+for adapters that retain operation results. It runs on reset, authenticated
+identity adoption and disposal and returns an unsubscribe function. `golem.mutations.prepare(document, variables, options)` offers
+the same invocation capture for an external scheduler and returns a single-use
+operation. Preparing requires readiness too.
+
+Recovery uses a query generation that survives stream replacement. Resyncs and loss of network coverage clear uncertain data immediately; an older response cannot restore it. Replacement opens share a fixed 250 ms cooldown plus 0–50 ms jitter within each query. The deadline does not move when more invalidations arrive. After all replacement acknowledgements, recovery refetches immediately; the ordinary event coalescer cannot delay it. Client cooldown scheduling adds at most 300 ms before reopening, excluding acknowledgements and network time. Ordinary event refetches retain their configured coalescing window and maximum wait. Ordinary connection failures retain exponential backoff up to 30 seconds. Permission and credential invalidation never wait to hide data. These cooldown values are provisional; bounded fake-clock tests exercise the coordination, while real workload latency measurements remain required.
+
+Own successful mutations and explicit PARTIAL/UNKNOWN commit errors invalidate
+SDK reads in the same session, including static reads and models without event
+streams. Generated reads use their public model dependencies, including selected
+nested rows and public relation filters. Opaque/custom roots and computed
+results conservatively depend on every own write; the browser does not infer
+hidden policy dependencies. Unscoped mutations invalidate all SDK reads.
+Write reach comes only from generated `mutationScope` metadata, separately from
+the root's response `models`. Generated nested writes include their conservative
+model reach; custom writes are unscoped. Older manifests without the additive
+hint remain supported and conservatively invalidate all SDK reads. The hint
+requires no new manifest version or protocol capability.
+Inactive matching reads become stale; active ones refetch under normal TanStack
+policy. Unrelated generated-model reads and application cache entries stay
+unchanged. Static mode opens no subscriptions.
+
+Invalidating a custom continuation query, static or live, discards its pages and
+restarts at `null`. A held or already-settled obsolete result cannot refill the
+chain. Ordinary explicit refetch retains the current traversal semantics.
+Generated cursor pagination retains its normal refetch traversal.
+
+## Declared operation invalidation
+
+Custom DTO/scalar queries become live only when their generated root declares `invalidation: { kind: 'operation', subscriptionField: '…Changes' }`. The client observes that operation, independently of returned model rows. It preserves authored DTO/model projections and does not add public IDs, versions or typenames to those results. An unexpected data packet on the invalidation stream is a protocol failure; acknowledgement and terminal recovery use the same coordinator as generated lists.
+
+Such manifests remain format 3 and require `operation-invalidation-v1`. Matching clients advertise that capability on HTTP and WebSocket initialization, including static requests. Unknown required capabilities are a configuration error; an old client cannot silently infer returned-row streams against an opted server. Manifests without required capabilities retain their existing handshake bytes. Manually wrapped generated Go servers must pass the exact active `Config.Bundle` so capability requirements cannot be lost behind an executor wrapper.
+
+The capability requirement applies to the whole opted server schema: older clients are rejected for ordinary/static queries and mutations too, not only for the new subscription. Upgrade the client and regenerate its manifest with that server contract. These APIs require the matching development contract; the minimum server version listed below for older client features does not imply support for operation invalidation.
+
+Live admission remains a server authorization and coverage check. Readable dependencies currently require local ordinary row/filter/field-mask conditions and declared before-image coverage of the watched and controlling scalars. Ordinary related-row paths are refused; hidden policy facts require genuine bound scope authority and the certified historical writer, which the default V3 writer does not supply. The client does not fall back to broader model streams or infer authority from DTO values. Use `staticQueryOptions` or `staticContinuationQueryOptions` when live observation is unavailable; static mode skips subscriptions but still sends required capabilities. See [the supported server contract](../../docs/golem-go/GUIDE.md#declared-operation-invalidation).
 
 ## The manifest
 
@@ -137,7 +226,7 @@ You never filter events in the client. The server judges each event against the 
 - `CREATED` refetches.
 - `DELETED` and `EXITED` remove the held row from the cache at once. The query then refetches, because a removal changes a list or empties a slot.
 - A response that carries an older row version than the cache already holds is discarded, and the query refetches.
-- A mutation result is never written into the cache. A committed mutation invalidates the cached queries over the models it touches (TanStack marks them stale and refetches the ones in use).
+- A mutation result is never written into the query cache. A committed mutation invalidates the cached queries over the models it touches (TanStack marks them stale and refetches the ones in use).
 - Refetches that arrive close together are coalesced into one.
 
 #### Row versions
@@ -186,7 +275,7 @@ All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) o
 - `GolemProtocolMismatchError`, `GolemContractMismatchError`: the client and server disagree on the live protocol or the contract. Regenerate the manifest.
 - `GolemDeadlineRequiredError` (`GOLEM_PRINCIPAL_DEADLINE_REQUIRED`): the server refused a live socket because the principal has no deadline. This is a server fix.
 - `GolemUnauthenticatedError`, `GolemHttpError`.
-- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated for you, as they are after every committed mutation.
+- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated in the same session, as after every committed mutation; stale-session outcomes do not invalidate replacement data.
 
 Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError` (a document the client cannot run, for example one that sets `cursor` or `skip` itself) and its subclass `GolemMultipleOperationsError` (a document with more than one operation), `GolemNotLiveError`, `GolemNotFoundError`, `GolemProtocolError`.
 

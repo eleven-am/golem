@@ -21,12 +21,13 @@ const frozenPolicyVersion uint16 = 2
 type FrozenConditionKind uint8
 
 const (
-	FrozenConditionConstant FrozenConditionKind = 1
-	FrozenConditionLogical  FrozenConditionKind = 2
-	FrozenConditionScalar   FrozenConditionKind = 3
-	FrozenConditionList     FrozenConditionKind = 4
-	FrozenConditionJSON     FrozenConditionKind = 5
-	FrozenConditionRelation FrozenConditionKind = 6
+	FrozenConditionConstant      FrozenConditionKind = 1
+	FrozenConditionLogical       FrozenConditionKind = 2
+	FrozenConditionScalar        FrozenConditionKind = 3
+	FrozenConditionList          FrozenConditionKind = 4
+	FrozenConditionJSON          FrozenConditionKind = 5
+	FrozenConditionRelation      FrozenConditionKind = 6
+	FrozenConditionFactReference FrozenConditionKind = 7
 )
 
 // FrozenOperator is the stable public-view operation identity. It is evidence
@@ -265,6 +266,7 @@ type FrozenConditionView interface {
 	Path() FrozenJSONPathView
 	Operand() FrozenOperandView
 	Children() []FrozenConditionView
+	FactName() (string, bool)
 }
 
 type FrozenRuleView interface {
@@ -283,22 +285,28 @@ type FrozenPolicyView interface {
 	Version() uint16
 	ModelID() ModelID
 	Rules() []FrozenRuleView
+	Facts() []FrozenFactView
+	FactScope() (FrozenPredicateView, bool)
+	FactScopeBinding() (FrozenTemplateBindingView, bool)
 	CanonicalBytes() []byte
 }
 
 type predicateNode struct {
-	kind     FrozenConditionKind
-	operator FrozenOperator
-	mode     FrozenComparisonMode
-	truth    bool
-	field    FieldID
-	relation RelationID
-	operand  frozenOperand
-	path     JSONPath
-	children []*predicateNode
+	factName  string
+	factOwner *rulesState
+	kind      FrozenConditionKind
+	operator  FrozenOperator
+	mode      FrozenComparisonMode
+	truth     bool
+	field     FieldID
+	relation  RelationID
+	operand   frozenOperand
+	path      JSONPath
+	children  []*predicateNode
 }
 
 type frozenCondition struct {
+	factName string
 	kind     FrozenConditionKind
 	operator FrozenOperator
 	mode     FrozenComparisonMode
@@ -570,12 +578,23 @@ func (predicate FrozenPredicate) View() FrozenPredicateView {
 	return frozenPredicateView{predicate: predicate}
 }
 
-func (predicate FrozenPredicate) Version() uint16 { return frozenPolicyVersion }
+func (predicate FrozenPredicate) Version() uint16 { return frozenPredicateVersion(predicate.root) }
 func (predicate FrozenPredicate) CanonicalBytes() []byte {
 	return append([]byte(nil), predicate.canonical...)
 }
 
 func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, depth int) (*frozenCondition, error) {
+	return freezePredicateNodeWithMode(node, active, depth, false)
+}
+
+// Fact declarations carry an authored observation inventory as well as truth.
+// Preserve their multi-child logical structure until registry-owned admission
+// can validate every participant, including a Boolean-dead physical branch.
+func freezeFactDeclarationNode(node *predicateNode) (*frozenCondition, error) {
+	return freezePredicateNodeWithMode(node, make(map[*predicateNode]bool), 0, true)
+}
+
+func freezePredicateNodeWithMode(node *predicateNode, active map[*predicateNode]bool, depth int, declaration bool) (*frozenCondition, error) {
 	if node == nil {
 		return nil, freezeFailure(FreezeInvalidPredicate, "zero predicate")
 	}
@@ -589,6 +608,11 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 	defer delete(active, node)
 
 	switch node.kind {
+	case FrozenConditionFactReference:
+		if !validFactName(node.factName) || node.factOwner == nil || node.operator != FrozenOperatorNone || node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || node.path.present || len(node.children) != 0 || node.operand.kind != FrozenOperandNone {
+			return nil, freezeFailure(FreezeInvalidPredicate, "malformed fact reference")
+		}
+		return &frozenCondition{kind: node.kind, factName: node.factName, operand: noOperand()}, nil
 	case FrozenConditionConstant:
 		if node.operator != FrozenOperatorNone || node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || node.path.present || len(node.children) != 0 {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed constant node")
@@ -600,7 +624,7 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		}
 		children := make([]*frozenCondition, len(node.children))
 		for index, child := range node.children {
-			frozen, err := freezePredicateNode(child, active, depth+1)
+			frozen, err := freezePredicateNodeWithMode(child, active, depth+1, declaration)
 			if err != nil {
 				return nil, err
 			}
@@ -608,6 +632,9 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		}
 		switch node.operator {
 		case frozenOperatorAnd, frozenOperatorOr:
+			if declaration && len(children) >= 2 {
+				return &frozenCondition{kind: FrozenConditionLogical, operator: node.operator, operand: noOperand(), children: children}, nil
+			}
 			return normalizeLogical(node.operator, children), nil
 		case frozenOperatorNot:
 			if len(children) != 1 {
@@ -662,7 +689,7 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		}
 		children := make([]*frozenCondition, len(node.children))
 		for index, child := range node.children {
-			frozen, err := freezePredicateNode(child, active, depth+1)
+			frozen, err := freezePredicateNodeWithMode(child, active, depth+1, declaration)
 			if err != nil {
 				return nil, err
 			}
@@ -805,6 +832,16 @@ func validateFrozenOperand(operand frozenOperand) error {
 }
 
 func normalizeLogical(operator FrozenOperator, children []*frozenCondition) *frozenCondition {
+	if len(children) == 1 {
+		return children[0]
+	}
+	for _, child := range children {
+		if frozenHasFacts(child) {
+			// Policy provenance must survive dead Boolean branches so caller
+			// filters cannot disguise a forbidden fact as a constant.
+			return &frozenCondition{kind: FrozenConditionLogical, operator: operator, operand: noOperand(), children: append([]*frozenCondition(nil), children...)}
+		}
+	}
 	flattened := make([]*frozenCondition, 0, len(children))
 	for _, child := range children {
 		if child.kind == FrozenConditionConstant {
@@ -863,7 +900,7 @@ func cloneFrozenValue(value frozenValue) frozenValue {
 type frozenPredicateView struct{ predicate FrozenPredicate }
 
 func (frozenPredicateView) sealedFrozenPredicateView() {}
-func (view frozenPredicateView) Version() uint16       { return frozenPolicyVersion }
+func (view frozenPredicateView) Version() uint16       { return view.predicate.Version() }
 func (view frozenPredicateView) RootModelID() ModelID  { return view.predicate.rootModel }
 func (view frozenPredicateView) Root() FrozenConditionView {
 	return frozenConditionView{condition: view.predicate.root}
@@ -1025,8 +1062,12 @@ type ruleBuilder struct {
 }
 
 type rulesState struct {
-	mu    sync.RWMutex
-	rules []ruleBuilder
+	mu                sync.RWMutex
+	rules             []ruleBuilder
+	facts             []factBuilder
+	scope             *predicateNode
+	scopeBinding      *frozenTemplateBinding
+	scopeDeclarations int
 }
 
 func (rules *Rules[M]) appendModelRule(action FrozenAction, effect FrozenEffect, condition Predicate[M]) {
@@ -1071,11 +1112,14 @@ type frozenRule struct {
 }
 
 type FrozenPolicy struct {
-	model      ModelID
-	rules      []frozenRule
-	canonical  []byte
-	operations []frozenOperationRules
-	aggregates []frozenOperationRules
+	facts        []frozenFact
+	scope        *frozenCondition
+	scopeBinding *frozenTemplateBinding
+	model        ModelID
+	rules        []frozenRule
+	canonical    []byte
+	operations   []frozenOperationRules
+	aggregates   []frozenOperationRules
 }
 
 func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
@@ -1091,8 +1135,24 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 		snapshot[index] = rule
 		snapshot[index].fields = append([]FieldID(nil), rule.fields...)
 	}
+	factSnapshot := append([]factBuilder(nil), rules.state.facts...)
+	scopeSnapshot, scopeDeclarations := rules.state.scope, rules.state.scopeDeclarations
+	bindingSnapshot := rules.state.scopeBinding
 	rules.state.mu.RUnlock()
+	facts, scope, err := freezeFacts(&rules.state, model, factSnapshot, scopeSnapshot, scopeDeclarations, snapshot)
+	if err != nil {
+		return FrozenPolicy{}, err
+	}
+	binding, err := freezeTemplateBinding(bindingSnapshot, model, scopeBindingDomain)
+	if err != nil {
+		return FrozenPolicy{}, err
+	}
 
+	for _, fact := range facts {
+		if fact.binding != nil && binding == nil {
+			return FrozenPolicy{}, freezeFailure(FreezeInvalidRule, "generated facts require a generated authority scope")
+		}
+	}
 	var base []ruleBuilder
 	var operations, aggregates []frozenOperationRules
 	for _, rule := range snapshot {
@@ -1115,7 +1175,7 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 	if err != nil {
 		return FrozenPolicy{}, err
 	}
-	canonical, err := encodeFrozenPolicy(model, frozen)
+	canonical, err := encodeFrozenFactPolicy(model, frozen, scope, facts, binding)
 	if err != nil {
 		return FrozenPolicy{}, freezeFailure(FreezeInvalidRule, err.Error())
 	}
@@ -1130,7 +1190,7 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 			groups[index].builders = nil
 		}
 	}
-	return FrozenPolicy{model: model, rules: frozen, canonical: canonical, operations: operations, aggregates: aggregates}, nil
+	return FrozenPolicy{model: model, rules: frozen, canonical: canonical, operations: operations, aggregates: aggregates, facts: facts, scope: scope, scopeBinding: binding}, nil
 }
 
 func freezeRuleBuilders(model ModelID, builders []ruleBuilder, reported uint32) ([]frozenRule, error) {
@@ -1200,7 +1260,15 @@ func validEffect(effect FrozenEffect) bool {
 }
 
 func (policy FrozenPolicy) View() FrozenPolicyView { return frozenPolicyView{policy: policy} }
-func (policy FrozenPolicy) Version() uint16        { return frozenPolicyVersion }
+func (policy FrozenPolicy) Version() uint16 {
+	if policy.scopeBinding != nil {
+		return frozenTemplatePolicyVersion
+	}
+	if len(policy.facts) != 0 {
+		return frozenFactPolicyVersion
+	}
+	return frozenPolicyVersion
+}
 func (policy FrozenPolicy) CanonicalBytes() []byte {
 	return append([]byte(nil), policy.canonical...)
 }
@@ -1208,7 +1276,7 @@ func (policy FrozenPolicy) CanonicalBytes() []byte {
 type frozenPolicyView struct{ policy FrozenPolicy }
 
 func (frozenPolicyView) sealedFrozenPolicyView() {}
-func (frozenPolicyView) Version() uint16         { return frozenPolicyVersion }
+func (view frozenPolicyView) Version() uint16    { return view.policy.Version() }
 func (view frozenPolicyView) ModelID() ModelID   { return view.policy.model }
 func (view frozenPolicyView) Rules() []FrozenRuleView {
 	result := make([]FrozenRuleView, len(view.policy.rules))
@@ -1268,8 +1336,13 @@ func cloneFrozenCondition(condition *frozenCondition) *frozenCondition {
 
 func encodeFrozenPredicate(model ModelID, condition *frozenCondition) ([]byte, error) {
 	var output bytes.Buffer
-	output.WriteString("golem:public-policy-condition:v2\x00")
-	writeUint16(&output, frozenPolicyVersion)
+	version := frozenPredicateVersion(condition)
+	if version == frozenPolicyVersion {
+		output.WriteString("golem:public-policy-condition:v2\x00")
+	} else {
+		output.WriteString("golem:public-policy-condition:v3\x00")
+	}
+	writeUint16(&output, version)
 	output.Write(model[:])
 	if err := encodeFrozenCondition(&output, condition); err != nil {
 		return nil, err
@@ -1320,6 +1393,8 @@ func encodeFrozenCondition(output *bytes.Buffer, condition *frozenCondition) err
 	output.WriteByte(byte(condition.kind))
 	writeUint16(output, uint16(condition.operator))
 	switch condition.kind {
+	case FrozenConditionFactReference:
+		writeBytes(output, []byte(condition.factName))
 	case FrozenConditionConstant:
 		writeBool(output, condition.truth)
 	case FrozenConditionLogical:

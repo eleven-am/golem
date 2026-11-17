@@ -163,7 +163,7 @@ func writeP5ScalarGeneratedArtifacts(t *testing.T, root string, artifacts []mani
 	t.Helper()
 	for _, artifact := range artifacts {
 		switch artifact.Kind {
-		case manifest.ArtifactModelGo, manifest.ArtifactBindingsGo, manifest.ArtifactRegistryGo, manifest.ArtifactGraphQLGo, manifest.ArtifactGraphQLSDL:
+		case manifest.ArtifactModelGo, manifest.ArtifactEventGo, manifest.ArtifactBindingsGo, manifest.ArtifactRegistryGo, manifest.ArtifactGraphQLGo, manifest.ArtifactGraphQLSDL, manifest.ArtifactClientTS:
 			writePipelineAcceptanceFile(t, root, artifact.Path, string(artifact.Content))
 		}
 	}

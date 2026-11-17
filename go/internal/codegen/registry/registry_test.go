@@ -352,6 +352,14 @@ func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
+	for _, client := range []string{"CallerPostClient", "SystemPostClient", "CallerTxPostClient", "SystemTxPostClient"} {
+		if !strings.Contains(source, "func (client "+client+"[P]) SearchByVectorRelatedPosts(") {
+			t.Fatalf("semantic generated vector search missing for %s", client)
+		}
+		if !strings.Contains(source, "func (client "+client+"[P]) VectorsRelatedPosts(") {
+			t.Fatalf("semantic generated vector retrieval missing for %s", client)
+		}
+	}
 	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", "func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", "func (client CallerTxPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerTxSearch", "func (client CallerTxPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerTxSimilar", "func (client SystemTxPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemTxSearch", "func (client SystemTxPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemTxSimilar", `"related_posts"`} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("semantic generated surface missing %q:\n%s", fragment, source)
@@ -421,6 +429,15 @@ func compileTextSearchCompatibility[P any](caller CallerMessageClient[P], system
 }
 `,
 	}, "app/"+Filename, file.Source)
+}
+
+func TestSemanticVectorAndTextMethodNameCollisionIsRejected(t *testing.T) {
+	for _, names := range [][2]string{{"related", "by_vector_related"}, {"by_vector_related", "related"}} {
+		err := validateSemanticMethodNames(map[ir.ModelID][]semanticcontract.Index{"model": {{Name: names[0]}, {Name: names[1]}}})
+		if err == nil || !strings.Contains(err.Error(), "collide in Go") {
+			t.Fatalf("semantic method collision %v was accepted: %v", names, err)
+		}
+	}
 }
 
 func TestFullTextSelectMethodNameCollisionIsRejected(t *testing.T) {

@@ -37,7 +37,7 @@ func TestListBoundsDeclareEveryCompositeListWithoutATakeDefault(t *testing.T) {
 		}
 	}
 	compiler := &Compiler{compilation: compilation}
-	want := map[string]int{"Query.me": 3, "Mutation.submitAll": 10, "Post.related": 7}
+	want := map[string]int{"Query.me": 3, "Mutation.submitAll": 10, "Post.related": 7, "Query.labels": 4, "Post.tags": 4}
 	got, err := compiler.ListBounds()
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestListBoundsDeclareEveryCompositeListWithoutATakeDefault(t *testing.T) {
 		t.Fatalf("bounds = %v, want %v", got, want)
 	}
 	for key, bound := range want {
-		if got[key] != bound {
+		if got[key].Maximum != bound {
 			t.Fatalf("bounds = %v, want %v", got, want)
 		}
 	}
@@ -111,7 +111,7 @@ func TestListBoundsCoverGroupRootsAtTheirGroupMaximum(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if bounds["Query."+contract.Roots.GroupBy] != testCase.want {
+			if bound := bounds["Query."+contract.Roots.GroupBy]; bound.Maximum != testCase.want || !bound.TakeBounded {
 				t.Fatalf("groupBy bound = %v, want %d", bounds, testCase.want)
 			}
 			if _, present := bounds["Query."+contract.Roots.Aggregate]; present {

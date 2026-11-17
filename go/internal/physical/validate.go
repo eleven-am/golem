@@ -194,10 +194,10 @@ func (v *validator) add(code ValidationCode, path, detail string) {
 }
 
 func (v *validator) validateHeader() {
-	if v.schema.Version != SchemaFormatVersion {
+	if v.schema.Version != SchemaFormatVersion && v.schema.Version != DataIncarnationFormatVersion {
 		v.add(CodeFormat, "version", fmt.Sprintf("got %d, want %d", v.schema.Version, SchemaFormatVersion))
 	}
-	if v.schema.CanonicalVersion != CanonicalFormatVersion {
+	if v.schema.CanonicalVersion != v.schema.Version {
 		v.add(CodeFormat, "canonicalVersion", fmt.Sprintf("got %d, want %d", v.schema.CanonicalVersion, CanonicalFormatVersion))
 	}
 	manifest := v.schema.Provider
@@ -806,6 +806,10 @@ func (v *validator) validateExtensions() {
 func (v *validator) validateSystem() {
 	system := v.schema.System
 	if system.Version == 0 && len(system.Objects) == 0 && system.Namespace.Name == "" {
+		// Only the empty migration-before snapshot can omit the opted singleton.
+		if v.schema.Version == DataIncarnationFormatVersion && (len(v.schema.Tables) != 0 || len(v.schema.Extensions) != 0 || len(v.schema.Unmanaged) != 0) {
+			v.add(CodeExtension, "system.objects", "physical v4 requires the data incarnation singleton")
+		}
 		return
 	}
 	if system.Version == 0 {
@@ -835,6 +839,10 @@ func (v *validator) validateSystem() {
 				v.add(CodeExtension, path, "outbox delivery system object does not match the closed v1 registry entry")
 			}
 			hasOutboxDelivery = hasOutboxDelivery || IsOutboxDeliverySystemObjectV1(object)
+		case SystemDataIncarnation:
+			if v.schema.Version != DataIncarnationFormatVersion || !IsDataIncarnationSystemObjectV1(object) {
+				v.add(CodeExtension, path, "data incarnation requires the exact physical v4 singleton registry entry")
+			}
 		case SystemUpsertGuard:
 			if !IsUpsertGuardSystemObjectV1(object) {
 				v.add(CodeExtension, path, "upsert guard system object does not match the closed v1 registry entry")
@@ -849,6 +857,9 @@ func (v *validator) validateSystem() {
 		v.validateAttributes(object.Attributes, path+".attributes")
 		owner := ObjectRef{Kind: ir.ObjectKind("system"), ObjectID: object.ID}
 		v.validateRequirements(object.RequiredCapabilities, owner, path)
+	}
+	if v.schema.Version == DataIncarnationFormatVersion && !HasDataIncarnation(system) {
+		v.add(CodeExtension, "system.objects", "physical v4 requires the data incarnation singleton")
 	}
 	if hasOutboxDelivery && !hasOutbox {
 		v.add(CodeExtension, "system.objects", "outbox delivery v1 requires the immutable outbox v1 system object")

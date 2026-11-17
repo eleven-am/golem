@@ -180,7 +180,7 @@ func ValidatePlanShape(plan Plan) error {
 	} else if len(plan.Phases) == 0 {
 		return fmt.Errorf("changed plan must have operations and phases")
 	}
-	if plan.snapshotFacts != nil && reflect.DeepEqual(plan.snapshotFacts.before, plan.snapshotFacts.after) && (len(plan.Operations) != 0 || len(plan.Phases) != 0) && !matchesExactHistoricalV1IdentityPlan(plan) {
+	if plan.snapshotFacts != nil && reflect.DeepEqual(plan.snapshotFacts.before, plan.snapshotFacts.after) && (len(plan.Operations) != 0 || len(plan.Phases) != 0) && !matchesExactHistoricalV1IdentityPlan(plan) && !matchesExactDataCorrectionPlan(plan) {
 		return fmt.Errorf("identical normalized snapshots must not contain migration work")
 	}
 	for index := range ordered {

@@ -356,6 +356,83 @@ func TestTamperAndExactDestructiveApprovals(t *testing.T) {
 	}
 }
 
+func TestSQLiteReviewedBackfillAttachProducesCanonicalImmutableHistory(t *testing.T) {
+	compiled, allProviders := socialResult(t)
+	providers := providerSubset(t, allProviders, ir.SQLite)
+	module := t.TempDir()
+	initial := prepare(t, module, "initial", compiled.Compilation.Model, nil, compiled.ContractFingerprint, providers, nil)
+	publish(t, module, initial)
+	beforeTree := tree(t, module)
+	previous := compiled.Compilation.Model
+	current, currentProviders, modelID, fieldID := addRequiredPostSlug(t, previous, providers)
+	fingerprint, err := ir.ModelFingerprint(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := PrepareNew(context.Background(), NewRequest{ModuleDir: module, Root: DefaultRoot, Name: "add_post_slug", Model: current, PreviousModel: &previous, ModelFingerprint: fingerprint, ContractFingerprint: compiled.ContractFingerprint, Providers: currentProviders})
+	if err != nil {
+		t.Fatalf("SQLite required field must enter reviewed attach workflow: %v", err)
+	}
+	if pending.Pending == nil || pending.Pending.Provider != ir.SQLite || pending.MigrationID != "0002_add_post_slug" || pending.Prospective.Bytes != nil {
+		t.Fatalf("pending result=%#v", pending)
+	}
+	if !reflect.DeepEqual(tree(t, module), beforeTree) {
+		t.Fatal("preparing a draft changed reviewed history")
+	}
+	if _, err := WritePendingBackfill(module, *pending.Pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), module, DefaultRoot, providers); err != nil {
+		t.Fatalf("draft changed published history: %v", err)
+	}
+	reviewed := []byte("UPDATE \"posts\" SET \"slug\"=lower(\"title\") WHERE \"slug\" IS NULL;\n")
+	request := BackfillAttachRequest{ModuleDir: module, Root: DefaultRoot, MigrationID: pending.MigrationID, Field: "Post.Slug", SQL: reviewed, Render: currentProviders[0].Render}
+	wrong := request
+	wrong.Field = "Post.Title"
+	if _, err := PrepareBackfillAttach(context.Background(), wrong); err == nil {
+		t.Fatal("attach accepted an existing field as the new backfill target")
+	}
+	attached, err := PrepareBackfillAttach(context.Background(), request)
+	if err != nil {
+		t.Fatalf("attach SQLite companion: %v", err)
+	}
+	if attached.Provider != ir.SQLite || len(attached.Entry.Manual) != 1 || attached.Entry.Manual[0].File.SHA256 != migration.Checksum(reviewed) || attached.Entry.Manual[0].Postcondition != migration.BackfillPostcondition(modelID, fieldID) {
+		t.Fatalf("sealed SQLite companion=%#v", attached.Entry.Manual)
+	}
+	if _, err := publication.Apply(context.Background(), publication.Request{ModuleDir: module, ManifestPath: attached.PublicationPath, Prospective: attached.Prospective}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePendingBackfill(module, attached.PendingPath, attached.PendingSHA256); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(context.Background(), module, DefaultRoot, currentProviders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := state.Histories[ir.SQLite]
+	if len(history.Manifest.Entries) != 2 || history.Manifest.Entries[1].ChainHash != attached.Entry.ChainHash {
+		t.Fatalf("history=%#v", history.Manifest.Entries)
+	}
+	companion := attached.Entry.Manual[0].File.Path
+	if !strings.HasPrefix(companion, "migrations/sqlite/") || !bytes.Equal(history.Files[companion], reviewed) {
+		t.Fatalf("companion path=%q bytes=%q", companion, history.Files[companion])
+	}
+	prior, err := os.ReadFile(filepath.Join(module, DefaultRoot, "models", "0001_initial.after.snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(module, DefaultRoot, "models", "0002_add_post_slug.before.snapshot.json"))
+	if err != nil || !bytes.Equal(prior, before) {
+		t.Fatalf("prior reviewed model bytes changed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(module, filepath.FromSlash(companion)), append(append([]byte(nil), reviewed...), []byte("-- changed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), module, DefaultRoot, currentProviders); err == nil || !strings.Contains(err.Error(), "rewritten") {
+		t.Fatalf("tampered companion error=%v", err)
+	}
+}
+
 func TestPostgreSQLReviewedBackfillAttachProducesCanonicalImmutableHistory(t *testing.T) {
 	compiled, allProviders := socialResult(t)
 	postgresProviders := providerSubset(t, allProviders, ir.PostgreSQL)
@@ -728,7 +805,11 @@ func addRequiredPostSlug(t *testing.T, model ir.ModelIR, providers []Provider) (
 			}
 			table := schema.Tables[tableIndex]
 			table.Columns = append([]physical.PhysicalColumn(nil), table.Columns...)
-			table.Columns = append(table.Columns, physical.PhysicalColumn{ID: fieldID, Name: "slug", Ordinal: uint32(len(table.Columns)), Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+			storage := physical.StorageType{Kind: physical.StoragePostgreSQLText}
+			if schema.Provider.Provider == ir.SQLite {
+				storage.Kind = physical.StorageSQLiteText
+			}
+			table.Columns = append(table.Columns, physical.PhysicalColumn{ID: fieldID, Name: "slug", Ordinal: uint32(len(table.Columns)), Storage: storage, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
 			schema.Tables[tableIndex] = table
 		}
 		normalized, err := physical.Normalize(schema)

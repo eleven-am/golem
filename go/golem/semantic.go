@@ -8,6 +8,38 @@ import (
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 )
 
+// RuntimeSemanticIdentityProjection selects only the identity needed to apply
+// the ordinary read planner's identity masks to semantic vector sources.
+func RuntimeSemanticIdentityProjection[M any](descriptor ModelDescriptor[M]) (Projection[M], error) {
+	for _, identity := range descriptor.Metadata().Identities() {
+		if identity.Kind() != PrimaryIdentity {
+			continue
+		}
+		fields := identity.Fields()
+		if len(fields) == 0 {
+			break
+		}
+		selection := make([]readSelectionNode, len(fields))
+		for i, field := range fields {
+			selection[i] = readSelectionNode{kind: readSelectionScalar, field: field}
+		}
+		return projectionValue[M]{node: readOptionNode{kind: readOptionSelect, selection: selection}}, nil
+	}
+	return nil, fmt.Errorf("semantic source: model has no primary identity")
+}
+
+// RuntimeSemanticVectorCell preserves the ordinary Get/presence contract:
+// absent, unauthorized and unready vector sources all have the same null cell.
+func RuntimeSemanticVectorCell[V interface{ Validate() error }](vector V, present bool) (ReadValue[V], error) {
+	if !present {
+		return ReadValue[V]{state: ReadNull}, nil
+	}
+	if err := vector.Validate(); err != nil {
+		return ReadValue[V]{}, err
+	}
+	return ReadValue[V]{state: ReadPresent, value: vector}, nil
+}
+
 // SemanticResult is one authorized model row with its portable cosine
 // distance. Lower distances are more similar; similarity is 1-distance.
 type SemanticResult[M any] struct {

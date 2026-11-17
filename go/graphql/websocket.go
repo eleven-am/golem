@@ -138,7 +138,7 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	state.ctx, state.principal = derived, principal
 	_ = conn.SetReadDeadline(time.Time{})
 	conn.SetReadLimit(int64(server.limits.MaxRequestBytes))
-	if err := state.write(wsMessage{Type: "connection_ack"}); err != nil {
+	if err := state.write(wsMessage{Type: "connection_ack", Payload: server.connectionAckPayload()}); err != nil {
 		return
 	}
 	stopLiveness := state.startLiveness()
@@ -187,7 +187,7 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				state.operationError(message.ID, PresentError(state.ctx, events.Failure(events.CodeSubscriptionLimit), nil, nil))
 				continue
 			}
-			requestValue, decodeFailure := decodeWSRequest(message.Payload, server.limits)
+			requestValue, decodeFailure := server.decodeWSRequest(message.Payload)
 			if decodeFailure != nil {
 				state.operationError(message.ID, *decodeFailure)
 				continue
@@ -265,7 +265,7 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		}
 		finishGraphQLChild(observation, operationErr)
 	}()
-	if err := state.writeOperation(stopped, wsMessage{ID: id, Type: "next", Payload: liveAckPayload}); err != nil {
+	if err := state.writeOperation(stopped, wsMessage{ID: id, Type: "next", Payload: state.server.operationAckPayload()}); err != nil {
 		operationErr = err
 		return
 	}
@@ -287,15 +287,12 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 			}
 			return
 		}
-		serialized := state.server.selectionOrdered(response, prepared.Operation)
-		if state.server.executable != nil && response.Data != nil {
-			serialized = state.server.executePrepared(ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
-		}
+		serialized := state.server.renderResponse(ctx, request, prepared.Operation, response)
 		if ctx.Err() != nil {
 			operationErr = context.Canceled
 			return
 		}
-		payload, err := encodeResponse(serialized)
+		payload, err := encodeResponse(state.server.stampDataIncarnation(serialized))
 		if err != nil {
 			operationErr = err
 			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
@@ -525,13 +522,20 @@ func (state *wsConnection[P]) closeStream(stream ResponseStream) {
 	_ = stream.Close()
 }
 
-func decodeWSRequest(payload json.RawMessage, limits Limits) (Request, *Error) {
-	request, extensions, failure := decodeHTTPRequest(bytes.NewReader(payload), limits)
-	if failure == nil && extensions != nil {
+func (server *Server[P]) decodeWSRequest(payload json.RawMessage) (Request, *Error) {
+	request, extensions, failure := decodeHTTPRequest(bytes.NewReader(payload), server.limits)
+	if failure != nil {
+		return Request{}, failure
+	}
+	if server.dataIncarnation.Valid() {
+		if failure := server.handshakeFailure(extensions, true); failure != nil {
+			return Request{}, failure
+		}
+	} else if extensions != nil {
 		invalid := publicError("BAD_REQUEST", "invalid GraphQL request")
 		return Request{}, &invalid
 	}
-	return request, failure
+	return request, nil
 }
 
 func containsProtocol(protocols []string, expected string) bool {

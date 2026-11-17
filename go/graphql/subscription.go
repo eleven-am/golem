@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -83,7 +83,7 @@ type generatedResponseStream[P any] struct {
 	executor *generatedExecutor[P]
 	root     graphqloperation.EventRoot
 	source   EventStream
-	hydrator resultHydrator
+	caller   CallerExecution
 	once     sync.Once
 	closeErr error
 }
@@ -95,6 +95,24 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
 	if err != nil {
 		return nil, err
+	}
+	if compiled.Invalidation != nil {
+		caller, err := executor.begin(ctx, principal)
+		if err != nil || caller == nil {
+			return nil, errOr(err, "caller execution is unavailable")
+		}
+		capability, ok := caller.(CallerInvalidationExecution)
+		if !ok {
+			return nil, fmt.Errorf("generated caller has no operation invalidation capability")
+		}
+		source, err := capability.GolemGraphQLSubscribeInvalidation(ctx, string(compiled.Invalidation.OperationID), compiled.Invalidation.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		if source == nil {
+			return nil, fmt.Errorf("operation invalidation stream is unavailable")
+		}
+		return &invalidationResponseStream{source: source}, nil
 	}
 	if compiled.Event == nil {
 		return nil, compileerr.Invariantf("subscription compiled without an event root")
@@ -111,7 +129,7 @@ func (executor *generatedExecutor[P]) Subscribe(ctx context.Context, principal P
 	if err != nil {
 		return nil, err
 	}
-	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source, hydrator: resultHydrator{compiler: executor.compiler, caller: caller}}, nil
+	return &generatedResponseStream[P]{executor: executor, root: *compiled.Event, source: source, caller: caller}, nil
 }
 
 func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, error) {
@@ -127,7 +145,7 @@ func (stream *generatedResponseStream[P]) Recv(ctx context.Context) (Response, e
 		return Response{}, err
 	}
 	defer computed.close()
-	computed.hydrator = &stream.hydrator
+	computed.hydrator = stream.executor.newHydrator(stream.caller)
 	var entity *golem.RuntimeModelRow
 	if event.entityPresent {
 		entity = &event.entity

@@ -37,6 +37,7 @@ func (sample Sample) Latency() time.Duration { return sample.Done - sample.Arriv
 
 type Quantiles struct {
 	P50 float64 `json:"p50"`
+	P95 float64 `json:"p95"`
 	P99 float64 `json:"p99"`
 	Max float64 `json:"max"`
 }
@@ -60,7 +61,7 @@ func quantilesOf(values []float64) Quantiles {
 	}
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
-	return Quantiles{P50: quantile(sorted, 0.50), P99: quantile(sorted, 0.99), Max: sorted[len(sorted)-1]}
+	return Quantiles{P50: quantile(sorted, 0.50), P95: quantile(sorted, 0.95), P99: quantile(sorted, 0.99), Max: sorted[len(sorted)-1]}
 }
 
 type Span struct {

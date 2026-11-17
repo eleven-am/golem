@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -23,6 +23,8 @@ const (
 	SlotRelationCount
 	SlotTypename
 	SlotComputed
+	SlotObjectField
+	SlotObjectGate
 )
 
 type Slot struct {
@@ -33,6 +35,14 @@ type Slot struct {
 	Occurrence   readir.OccurrenceID
 	Children     []Slot
 	Computed     *graphqlextension.ComputedSelection
+	ObjectField  string
+	Model        *ModelSelection
+}
+
+// ModelSelection is the caller projection for one model-valued DTO occurrence.
+type ModelSelection struct {
+	Model      compilerir.ModelID
+	Projection []readir.Selection
 }
 
 type ChildRequestBuilder func(target compilerir.ModelID, field *ast.Field, selections []readir.Selection) (readir.Request, error)
@@ -77,6 +87,15 @@ func Compile(request Request) (Result, error) {
 	if request.Model == "" || len(request.Selections) == 0 {
 		return Result{}, compileerr.Invariantf("selection compile requires a model and a selection set")
 	}
+	entry := newCompiler(request)
+	selections, slots, err := entry.compileModel(request.Model, request.Selections, 1, map[string]bool{})
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Selections: selections, Slots: slots, Depth: entry.maxDepth, Fields: entry.fields, Aliases: entry.aliases}, nil
+}
+
+func newCompiler(request Request) *compiler {
 	if request.MaxDepth <= 0 {
 		request.MaxDepth = 12
 	}
@@ -102,11 +121,7 @@ func Compile(request Request) (Result, error) {
 	for _, fragment := range request.Fragments {
 		entry.fragments[fragment.Name] = fragment
 	}
-	selections, slots, err := entry.compileModel(request.Model, request.Selections, 1, map[string]bool{})
-	if err != nil {
-		return Result{}, err
-	}
-	return Result{Selections: selections, Slots: slots, Depth: entry.maxDepth, Fields: entry.fields, Aliases: entry.aliases}, nil
+	return entry
 }
 
 type fieldOccurrence struct {
@@ -161,15 +176,8 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 	selectedScalars := map[compilerir.FieldID]bool{}
 	selectedDependencyRelations := map[compilerir.FieldID]graphqlextension.DependencyAccess{}
 	for _, occurrence := range occurrences {
-		in.fields++
-		if in.fields > in.request.MaxFields {
-			return nil, nil, selectionLimit("MaxSelectedFields", in.request.MaxFields)
-		}
-		if occurrence.responseName != occurrence.field.Name {
-			in.aliases++
-			if in.aliases > in.request.MaxAliases {
-				return nil, nil, selectionLimit("MaxAliases", in.request.MaxAliases)
-			}
+		if err := in.countField(occurrence); err != nil {
+			return nil, nil, err
 		}
 		if occurrence.field.Name == "__typename" {
 			slots = append(slots, Slot{Kind: SlotTypename, ResponseName: occurrence.responseName})
@@ -201,6 +209,14 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 					return nil, nil, shapeError(compileerr.ShapeNeedsSelection, computed.Name, contract.GraphQLName)
 				}
 				outputProjection, children, dependencyErr = in.compileModel(target, occurrence.selections, depth+1, stack)
+				if dependencyErr != nil {
+					return nil, nil, dependencyErr
+				}
+			} else if name := computedResultObjectName(computed.Result); name != "" {
+				if len(occurrence.selections) == 0 {
+					return nil, nil, shapeError(compileerr.ShapeNeedsSelection, computed.Name, contract.GraphQLName)
+				}
+				children, dependencyErr = in.compileObject(name, occurrence.selections, depth+1, stack)
 				if dependencyErr != nil {
 					return nil, nil, dependencyErr
 				}
@@ -271,6 +287,22 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 		}
 		selections = append(selections, selection)
 		slots = append(slots, Slot{Kind: SlotRelation, ResponseName: occurrence.responseName, FieldID: binding.model.ID, RelationID: relation.ID, Occurrence: id, Children: childSlots})
+	}
+	// A computed-only or typename-only object still needs an authorized row
+	// occurrence. Keep its identity projection private; it adds no response slots
+	// and its scalar cells are withheld from computed resolvers unless required.
+	if len(selections) == 0 && model.PrimaryKey != nil {
+		for _, id := range model.PrimaryKey.Fields {
+			field, err := policyFieldID(id)
+			if err != nil {
+				return nil, nil, err
+			}
+			selection, err := readir.NewScalarSelection(field)
+			if err != nil {
+				return nil, nil, err
+			}
+			selections = append(selections, selection)
+		}
 	}
 	return selections, slots, nil
 }
@@ -588,24 +620,21 @@ func sameFieldArguments(left, right ast.ArgumentList, variables map[string]any) 
 
 func canonicalFieldArguments(arguments ast.ArgumentList, variables map[string]any) (string, error) {
 	values := make([]graphqlextension.CanonicalArgument, 0, len(arguments))
-	seen := map[string]bool{}
 	for _, argument := range arguments {
-		if seen[argument.Name] {
-			return "", compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateArgument, compileerr.Path(argument.Name))
-		}
-		seen[argument.Name] = true
 		if argument.Value == nil {
 			return "", compileerr.Invariantf("argument %q has no value", argument.Name)
 		}
-		value, err := argument.Value.Value(variables)
-		if err != nil {
-			return "", compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name))
-		}
+	}
+	raw, err := ArgumentValues(arguments, variables)
+	if err != nil {
+		return "", err
+	}
+	for name, value := range raw {
 		encoded, err := json.Marshal(value)
 		if err != nil {
-			return "", compileerr.Invariantf("argument %q cannot be canonicalized: %w", argument.Name, err)
+			return "", compileerr.Invariantf("argument %q cannot be canonicalized: %w", name, err)
 		}
-		values = append(values, graphqlextension.CanonicalArgument{Name: argument.Name, Value: encoded})
+		values = append(values, graphqlextension.CanonicalArgument{Name: name, Value: encoded})
 	}
 	key, err := graphqlextension.CanonicalArguments(values...)
 	if err != nil {
@@ -655,6 +684,26 @@ func StableSlots(values []Slot) []Slot {
 	for index := range result {
 		result[index].Children = StableSlots(result[index].Children)
 		result[index].Computed = graphqlextension.CloneComputedSelection(result[index].Computed)
+		if model := result[index].Model; model != nil {
+			copyModel := *model
+			copyModel.Projection = append([]readir.Selection(nil), model.Projection...)
+			result[index].Model = &copyModel
+		}
 	}
 	return result
+}
+
+// countField owns the limits shared by DTO and model selection occurrences.
+func (in *compiler) countField(occurrence fieldOccurrence) error {
+	in.fields++
+	if in.fields > in.request.MaxFields {
+		return selectionLimit("MaxSelectedFields", in.request.MaxFields)
+	}
+	if occurrence.responseName != occurrence.field.Name {
+		in.aliases++
+		if in.aliases > in.request.MaxAliases {
+			return selectionLimit("MaxAliases", in.request.MaxAliases)
+		}
+	}
+	return nil
 }

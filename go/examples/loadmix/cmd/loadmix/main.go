@@ -123,7 +123,7 @@ func render(out io.Writer, detail RunDetail) {
 	fmt.Fprintf(out, "%s users=%d %s (ran %.0fs, measured %.0fs, drain %.1fs)\n", detail.Kind, detail.Users, verdict, detail.RanSecs, detail.MeasuredSecs, detail.DrainSecs)
 	for _, class := range allClasses {
 		stats := detail.Classes[class]
-		fmt.Fprintf(out, "  %-15s offered %6d achieved %6d %8.1f/s  commit ms p50 %7.1f p99 %8.1f max %8.1f\n", class, stats.Offered, stats.Achieved, stats.PerSecond, stats.LatencyMilli.P50, stats.LatencyMilli.P99, stats.LatencyMilli.Max)
+		fmt.Fprintf(out, "  %-15s offered %6d achieved %6d %8.1f/s  commit ms p50 %7.1f p95 %7.1f p99 %8.1f max %8.1f\n", class, stats.Offered, stats.Achieved, stats.PerSecond, stats.LatencyMilli.P50, stats.LatencyMilli.P95, stats.LatencyMilli.P99, stats.LatencyMilli.Max)
 	}
 	delivery := detail.Delivery
 	fmt.Fprintf(out, "  delivery        expected %d delivered %d foreign %d duplicates %d lag p99 %.1f ms\n", delivery.Expected, delivery.Delivered, delivery.Foreign, delivery.Duplicates, detail.DeliveryLagP99)
@@ -136,7 +136,7 @@ func render(out io.Writer, detail RunDetail) {
 		fmt.Fprintf(out, "  terminated      %s x%d\n", code, delivery.Terminations[code])
 	}
 	counters := detail.Counters
-	fmt.Fprintf(out, "  publisher       claims %d notices %d claim size p50 %.0f p99 %.0f max %.0f\n", counters.Claims, counters.Claimed, counters.ClaimSize.P50, counters.ClaimSize.P99, counters.ClaimSize.Max)
+	fmt.Fprintf(out, "  publisher       claims %d notices %d claim size p50 %.0f p95 %.0f p99 %.0f max %.0f\n", counters.Claims, counters.Claimed, counters.ClaimSize.P50, counters.ClaimSize.P95, counters.ClaimSize.P99, counters.ClaimSize.Max)
 	fmt.Fprintf(out, "  evaluation      %d evaluations, %.2f per notice, judge+suppress %.3f ms per notice\n", counters.Evaluations, counters.EvaluationsPerNotice, counters.JudgeMsPerNotice)
 	reasons := make([]string, 0, len(counters.Suppressions))
 	for reason := range counters.Suppressions {

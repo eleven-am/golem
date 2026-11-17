@@ -45,6 +45,7 @@ const (
 	DropProviderExtension       OperationKind = "dropProviderExtension"
 	UpgradeSemanticState        OperationKind = "upgradeSemanticState"
 	BackfillColumn              OperationKind = "backfillColumn"
+	CorrectDataColumn           OperationKind = "correctDataColumn"
 	InitializeConcurrencyColumn OperationKind = "initializeConcurrencyColumn"
 	RebuildTable                OperationKind = "rebuildTable"
 	ValidateConstraint          OperationKind = "validateConstraint"

@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	"github.com/eleven-am/golem/go/internal/dataincarnation"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -44,6 +45,14 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion,
 		Provider: provider.Manifest(), Namespace: physical.Namespace{Name: namespace},
 		System: systemSchema(),
+	}
+	enabled, err := ir.ModelDataIncarnation(model)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	if enabled {
+		schema.Version, schema.CanonicalVersion = physical.DataIncarnationFormatVersion, physical.DataIncarnationFormatVersion
+		schema.System.Objects = append(schema.System.Objects, physical.DataIncarnationSystemObjectV1())
 	}
 	schema.Unmanaged = append(schema.Unmanaged, physical.QueueUnmanagedObjects()...)
 	schema.Unmanaged = append(schema.Unmanaged, physical.OutboxDeliveryUnmanagedObjects()...)
@@ -86,7 +95,7 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		if extension.Provider != ir.PostgreSQL {
 			continue
 		}
-		if extension.Kind == semanticcontract.SpaceKind {
+		if extension.Kind == semanticcontract.SpaceKind || extension.Kind == dataincarnation.Kind {
 			continue
 		}
 		if extension.Kind != semanticcontract.IndexKind && extension.Kind != fulltextcontract.IndexKind {

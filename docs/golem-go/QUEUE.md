@@ -6,6 +6,11 @@ no broker, and no window where the row committed but the job did not.
 
 The program on this page is executed by `TestQueueApplicationRuns`.
 
+**Unreleased P11:** the development tree adds the priority, promotion and
+explicit storage-upgrade sections below. These APIs and commands are not in
+go/v0.8.8. Use matching development CLI/library builds and regenerate the
+application for `PromoteJob`; the existing runnable recipe remains separate.
+
 ## Registering a job type
 
 A job type binds a payload struct to a handler. Registration happens before the
@@ -131,6 +136,84 @@ returns that job's ID rather than creating a second; once the job is terminal
 the key is free again. Keys are at most 256 bytes. `New` returns the error for
 an option it refuses.
 
+## Priority and promotion (unreleased P11)
+
+There are exactly two lanes: `queue.PriorityNormal` (`0`, the default) and
+`queue.PriorityInteractive` (`1`). Set a job's lane when constructing it:
+
+```go
+pending, err := welcome.New(payload, queue.WithPriority(queue.PriorityInteractive))
+```
+
+`pending.Priority()` reports the requested lane. `queue.Job[T]`, `queue.Meta`,
+`queue.Status` and `queue.Failure[T]` carry a `Priority` field. Prefer keyed
+struct literals when updating: these fields and `Limits.ReservedInteractive`
+are additions to public structs. Custom `queue.Operator` implementations and
+mocks must also implement the new `Promote` method.
+
+An enqueue that coalesces through `queue.Dedupe` returns the existing job
+unchanged, even if the new request asks for Interactive or a shorter delay.
+Retries, lease release/reclaim and operator requeue preserve the stored lane.
+Promotion is a separate, explicit operation:
+
+```go
+changed, err := tx.PromoteJob(ctx, jobID, queue.PriorityInteractive)
+// Explicitly remove remaining delay as well:
+changed, err = tx.PromoteJob(ctx, jobID, queue.PriorityInteractive, queue.ReadyNow())
+// Trusted operator equivalent, outside a caller transaction:
+changed, err = application.QueueOperator().Promote(ctx, jobID, queue.PriorityInteractive)
+```
+
+The generated `CallerTx` and `SystemTx` both expose `PromoteJob`. It commits
+or rolls back with the transaction and wakes the local worker after a changed
+transaction commits. `Promote` on the operator changes durable state; workers
+observe it through their normal polling.
+
+**Authorize the business row before deriving its job ID.** In a caller
+transaction, read the action through the caller's policy, check that the
+business action permits promotion, and obtain `jobID` from that row in the
+same transaction. Never promote an ID taken directly from request arguments.
+`PromoteJob` does not apply a job ownership policy. A queue mutation and any
+associated status write must share the transaction; avoid slow work while
+holding its locks.
+
+Only `pending` rows change. Promotion never lowers priority or resets
+attempts, payload, dedupe or exclusivity keys. It preserves `AvailableAt`
+unless `queue.ReadyNow()` is explicit; that option can accelerate an already
+Interactive pending job without moving an already-due job later. A lower
+priority request changes nothing, including its delay. Missing, leased
+(including expired leases), canceled, failed and succeeded jobs return
+`changed == false`. Repeating an already-applied request also returns false.
+
+### Scheduling scope and reserved slots
+
+One continuously running worker gives Normal a scheduling opportunity after
+at most three Interactive handler admissions when capacity for Normal is
+available. With both lanes eligible, a mixed-work round admits up to three
+Interactive jobs and one Normal job; an empty Interactive lane allows Normal
+batching. The worker rotates capped/uncapped type cohorts and resource groups
+within each lane. This is a per-worker opportunity bound, not a FIFO,
+completion-order, per-job waiting-time or fleet-wide ratio guarantee. A
+restart starts a new scheduling history.
+
+```go
+limits := queue.DefaultLimits()
+limits.Concurrency = 4
+limits.ReservedInteractive = 1
+```
+
+`ReservedInteractive` defaults to `0`. It must be nonnegative and strictly
+less than the resolved `Concurrency`. In this example, Normal can occupy at
+most three local slots; Interactive can use any free slot. A reservation can
+leave capacity idle when only Normal work is waiting. It is fixed at startup,
+not a `queue.Plan` field, and a live concurrency reduction to the reservation
+or below is refused.
+
+Priority and reservations never interrupt an existing handler. They do not
+reserve shared resource capacity or bypass `MaxConcurrent`, weighted
+`QueueConfig.Resources`, exclusivity, delays or lease fencing. Busy workers
+or an exhausted resource may still delay Interactive work.
+
 ## Inspecting and operating
 
 ```go
@@ -242,6 +325,9 @@ operator calls `RunRetention`.
 
 ## The queue's own tables
 
+The following describes the released storage checks. The unreleased P11
+upgrade below requires a complete recognized shape before startup proceeds.
+
 Golem creates `golem_queue` and its indexes when the application opens with
 `Queue` set, and checks then, and again each time `RunQueueWorker` starts,
 that the primary key is exactly `id` and that **every index on `golem_queue`
@@ -258,6 +344,70 @@ system namespace, `_golem` unless your schema names another.
 If you added your own index to `golem_queue`, startup now refuses it. Golem
 owns this table, so move that index to a table you own.
 
+### Explicit storage upgrade (unreleased P11)
+
+The development worker requires the `priority-v1` storage shape. Startup
+creates current storage only when the queue is absent; it refuses recognized
+legacy storage with `QUEUE_STORAGE_UPGRADE_REQUIRED`. It does not add the
+priority column or replace the claim index automatically. Unknown or partial
+shapes are refused as `QUEUE_STORAGE_UNRECOGNIZED`; do not manually drop
+objects to make an incomplete shape look current.
+
+Fresh creation and installation of newly admitted operator-history indexes
+commit in one serialized provider transaction. A failed creation leaves the
+previous complete shape intact and can be retried. PostgreSQL startup and
+explicit upgrades share the same namespace lock; SQLite uses its immediate
+write transaction. This does not repair storage that was already partial.
+
+Use the provider-owned maintenance commands against an existing database:
+
+```sh
+golem queue storage inspect --provider sqlite --dsn 'file:notes.db'
+# Stop all queue producers and workers before this command:
+golem queue storage upgrade --provider sqlite --dsn 'file:notes.db'
+
+golem queue storage inspect --provider postgresql --dsn "$DATABASE_URL" --system-namespace _golem
+golem queue storage upgrade --provider postgresql --dsn "$DATABASE_URL" --system-namespace _golem
+```
+
+Both commands emit JSON with `version` and `historyIndexes`. `inspect` reads
+catalogs without upgrading or repairing storage. SQLite inspection uses a
+read-only connection rather than the application opener; neither command
+creates a missing SQLite database. Memory databases and create-enabled SQLite
+DSNs are refused. `upgrade` also refuses an existing database with no queue.
+
+SQLite accepts `--sqlite-profile local` (default), `network`, or `network-wal`;
+choose the profile used by the application. Upgrade uses the corresponding
+verified provider opener. Inspection does not switch journal mode, and
+`network-wal` inspection requests exclusive locking. SQLite's namespace is
+`main`. PostgreSQL defaults `--system-namespace` to `_golem`; supply the actual
+generated system namespace when it differs. SQLite network-profile flags do
+not apply to PostgreSQL. Errors do not echo the supplied DSN.
+
+The supported shapes form a closed set:
+
+| Reported version | Meaning and upgrade behavior |
+|---|---|
+| `absent` | no queue objects; inspection succeeds, upgrade refuses |
+| `pre-resource` | complete legacy queue before all three resource-lease snapshot columns; explicit upgrade adds them and priority |
+| `v0.8.8` | complete legacy queue with resource snapshots and the old claim index; explicit upgrade adds priority |
+| `priority-v1` | complete current shape; repeated upgrade preserves it |
+
+These labels describe exact provider-owned shapes, not arbitrary historical
+tables or a version string supplied by the operator. Optional operator-history
+indexes must be either the complete known set or absent. Upgrade preserves
+that choice, existing job rows, payloads, attempts, availability, lease tokens
+and resource snapshots. Existing jobs receive Normal priority. The column and
+claim-index changes commit together; a failure rolls them back.
+
+**Drain and stop every producer and worker, including old binaries, before
+upgrade.** Stop processes that can enqueue through requests, hooks or other
+background work too. Keep them stopped until the command succeeds and the
+matching new application is deployed. The command's database locks serialize
+the storage change; they do not certify a fleet drain or prevent an old
+process from resuming afterward. An old worker's next startup rejects the new
+canonical claim index, but an already-running old worker is not fenced out.
+
 ### Operator-history indexes
 
 Three indexes serve the operator surface rather than the claim loop:
@@ -273,7 +423,9 @@ chooses.
 
 **Golem creates them only when your generated schema admits them.** That
 happens when you regenerate and author the migration that records them, so a
-library upgrade on its own changes nothing and stays reversible. Until you
+released library upgrade for these history indexes on its own changes nothing
+and stays reversible. This is separate from the unreleased priority storage
+upgrade above. Until you
 regenerate, the queue behaves exactly as it did before, with no speedup. The
 same regeneration also delivers the semantic strike column, so one action
 delivers both.
@@ -300,8 +452,89 @@ protect you.
 - **Recurring or cron scheduling.** A loop calling `Enqueue` with `Dedupe` is a
   few lines; building it in drags timezones, drift and leader election into a
   queue that has none of them.
-- **Priority.** Delayed execution plus one queue per job class covers most
-  orderings. Revisit on a named starvation case.
+- **Arbitrary priority levels or preemption.** The unreleased two-lane policy
+  above does not interrupt busy workers or provide a fleet scheduler.
+
+## Application reference: bounded removal (unreleased P10)
+
+The development-tree [bounded maintenance application](../../go/internal/compiler/compile/testdata/boundedmaintenance/schema.go)
+and its [generated acceptance tests](../../go/internal/generate/pipeline/maintenance_acceptance_test.go)
+show how to remove a large root using existing transactions and the durable
+queue. `Maintenance`, `RequestRemoval`, `ProcessPage`, `IngestCaller`,
+`IngestSystem` and their `IntoTx` variants are **application functions in that
+fixture**, not new public Golem APIs. This reference requires matching
+unreleased CLI/library builds and fresh generation.
+
+The caller command authorizes the root, marks it logically removed, creates
+a persistent removal task, and enqueues its first page in one transaction.
+Read policies immediately hide the root and its episodes. The task survives
+physical root deletion and records the owner, generation, expected sequence,
+phase, deleted count and completion status. The example deliberately grants
+the owner access to that progress, including counts of private physical
+leaves. An application that must hide those counts must expose a coarser
+status or apply appropriate field policy; background authority does not grant
+progress disclosure automatically.
+
+Every ingest, reparent and removal entry point must share the root fence.
+The reference orders locks for both old and new roots, checks their removal
+state, and conditionally increments a root `Fence` value inside the same
+transaction as the descendant write. The actual compare-and-write matters:
+`LockKeys` alone does not refresh an older database snapshot, and is a no-op
+on SQLite. Caller and System commands share one implementation; standalone
+commands wrap it in a transaction, while `IntoTx` composes it with an existing
+transaction whose owner controls retry and commit. Route **all** application
+writers through these commands. A direct generated caller/System write can
+bypass this application invariant; System does not gain universal hooks.
+
+Each cleanup transaction verifies the persisted task generation/sequence and
+root fence, then performs one phase:
+
+| Phase | Bounded work |
+|---|---|
+| Private leaves | Read up to 32 Asset IDs in primary-key order and delete exactly those leaves. |
+| Episodes | First prove no Asset remains under the root, then delete up to 32 childless Episodes in primary-key order. |
+| Root | Prove no Episode remains, physically remove the root and mark the task complete together. |
+
+The next page, progress update and deletion facts commit together. Empty
+pages advance the phase. Pages select from the remaining rows, without an
+offset; the shared ingest fence prevents new descendants from entering a
+removed root. The fixed page size bounds physical effects, not just the
+number of parents selected: a normal page has at most 32 deletions plus the
+root-fence and task updates, and final removal has three facts. Titles and
+bodies use `varchar(1024)` (a character bound, not a 1024-byte promise). Adding
+larger fields or more descendant types requires reassessing page effects and
+snapshot size. The 1,000 touched-row and 1 MiB causation limits stay unchanged;
+this workflow does not exempt cleanup from them.
+
+Job dedupe keys include task, generation and sequence. A single root-wide key
+could coalesce a successor into the still-leased current job. Task progress
+also fences the acknowledgement gap: if a page commits and the worker dies
+before acknowledging it, replay observes committed progress and does no more
+work. A concurrent stale attempt can be refused by the final task CAS and
+retried. Keep the task record and do not reuse root identities: the retained
+unique root/task association is part of this reference's idempotency model.
+Generate command identities before retryable work, and perform no external
+I/O inside transaction retries.
+
+`TestFreshGeneratedBoundedMaintenance` runs the real generated application on
+SQLite and PostgreSQL: the unbounded cascade over 511 episodes and 1,022
+private assets refuses and rolls back, while real worker pages converge. It
+also covers enqueue faults, replay, caller/System ingest and reparent commit
+orders, duplicate pages, surviving row versions and complete fact ordinals.
+PostgreSQL version-sequence gaps are allowed. Its byte assertions measure
+**raw stored BLOB payloads**, not canonical encoder accounting or a general
+proof that arbitrary content fits the limit.
+
+`TestFreshGeneratedBoundedMaintenanceSemantic` adds a real Episode index to a
+separate 33-episode variant on SQLite and PostgreSQL with pgvector. It verifies
+that logical removal hides already-ready vectors immediately, an episode-page
+semantic-drain enqueue
+failure rolls back rows, versions, facts, marks, progress and queue work, and
+the real worker eventually removes owned vectors and shadow state.
+Both providers run the same assertions; PostgreSQL uses the explicitly
+configured disposable pgvector fixture. NAS latency and performance have not
+been measured by either acceptance; bounded transactions are not a latency or
+preemption guarantee.
 
 ## Recipe: durable actions
 

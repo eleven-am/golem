@@ -2,7 +2,7 @@ package bind
 
 import (
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )

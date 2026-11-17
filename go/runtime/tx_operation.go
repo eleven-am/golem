@@ -27,6 +27,9 @@ func RunCallerTxOperation[P, A, T, Args, R any](ctx context.Context, transaction
 		if !ok {
 			return result, fmt.Errorf("P5_CUSTOM_OPERATION: operation is not a generated transaction operation")
 		}
+		// The admitted transaction owns actor authority. An ambient resolver
+		// context may belong to another caller, or carry no actor at all.
+		ctx = CallerOperationContext(ctx, caller)
 		ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, golem.ModelID{}, observe.KindMutation, observe.OperationMutationOperation)
 		policies, hide, release := caller.policies.WithinTransaction(identity)
 		caller.executor.releaseAfterTransaction(release)

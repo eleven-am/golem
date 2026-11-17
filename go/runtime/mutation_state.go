@@ -49,19 +49,24 @@ type mutationState struct {
 	finished   bool
 	failure    error
 	facts      []mutationfact.OutboxRow
+	factEpoch  uint64
 	marks      []semanticMark
 	markIndex  map[semanticMarkIdentity]struct{}
 	after      []mutationAfterCommit
 	invalidate func()
 	observer   events.Observer
 
-	binding    *executionBinding
-	registry   *schema.Registry
-	open       map[*heldWrite][]*mutationScope
-	factOwners []*mutationScope
-	touches    []mutationTouch
-	markOwners map[semanticMarkIdentity][]*mutationScope
-	failures   []mutationFailure
+	binding      *executionBinding
+	registry     *schema.Registry
+	open         map[*heldWrite][]*mutationScope
+	factOwners   []*mutationScope
+	touches      []mutationTouch
+	markOwners   map[semanticMarkIdentity][]*mutationScope
+	failures     []mutationFailure
+	history      []mutationHistoryTransition
+	historyBytes int
+	historyEpoch uint64
+	historySeal  *mutationHistorySeal
 }
 
 type mutationTouch struct {
@@ -195,6 +200,7 @@ func (scope *mutationScope) rollback() error {
 	}
 	dirty = dirty || len(state.facts) != 0
 	state.removeMarks(scope)
+	state.removeHistory(scope)
 	after := state.after[:0]
 	for _, work := range state.after {
 		if !scope.contains(work.owner) {
@@ -237,6 +243,7 @@ func (state *mutationState) removeFacts(scope *mutationScope) error {
 		owners = append(owners, state.factOwners[index])
 	}
 	state.facts, state.factOwners = facts, owners
+	state.factEpoch++
 	state.ordinal = uint32(len(facts))
 	state.bytes = 0
 	for _, row := range facts {
@@ -422,6 +429,7 @@ func (state *mutationState) buildFact(ctx context.Context, registry *schema.Regi
 	state.ordinal = ordinal
 	state.bytes += row.EncodedBytes()
 	state.facts = append(state.facts, cloneOutboxRow(row))
+	state.factEpoch++
 	state.factOwners = append(state.factOwners, state.currentScope(ctx))
 	state.registry = registry
 	state.dirty = true
@@ -476,6 +484,7 @@ func (state *mutationState) appendOutboxRow(ctx context.Context, row mutationfac
 	state.ordinal = wantOrdinal
 	state.bytes += row.EncodedBytes()
 	state.facts = append(state.facts, cloneOutboxRow(row))
+	state.factEpoch++
 	state.factOwners = append(state.factOwners, state.currentScope(ctx))
 	state.dirty = true
 	return nil
@@ -531,6 +540,7 @@ func (state *mutationState) completeBeforeParentFacts(start int, ordinal uint32,
 		segment[index].Metadata = metadata
 	}
 	copy(state.facts[start:], segment)
+	state.factEpoch++
 	copy(state.factOwners[start:], owners)
 	state.registry = registry
 	state.ordinal = ordinal + uint32(len(segment))
@@ -592,6 +602,9 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 	}
 	if state.flushed {
 		return fmt.Errorf("P4_MUTATION_STATE: outbox was already flushed")
+	}
+	if state.historySeal != nil && (state.historySeal.historyEpoch != state.historyEpoch || state.historySeal.factEpoch != state.factEpoch) {
+		return fmt.Errorf("P5_POLICY_HISTORY: mutation evidence changed after historical graph sealing")
 	}
 	statements, err := mutationfact.RenderInsertsAt(config.provider, config.outboxNamespace, state.facts, state.limits.statementParameters)
 	if err != nil {
@@ -660,6 +673,8 @@ func (state *mutationState) committed(ctx context.Context, report func(context.C
 	dirty := state.dirty
 	after := append([]mutationAfterCommit(nil), state.after...)
 	state.facts = nil
+	state.history, state.historyBytes = nil, 0
+	state.historySeal = nil
 	state.marks, state.markIndex = nil, nil
 	state.after = nil
 	state.mu.Unlock()
@@ -699,6 +714,8 @@ func (state *mutationState) discarded() {
 	defer state.mu.Unlock()
 	state.finished = true
 	state.facts = nil
+	state.history, state.historyBytes = nil, 0
+	state.historySeal = nil
 	state.marks, state.markIndex = nil, nil
 	state.after = nil
 	state.invalidate = nil

@@ -29,7 +29,7 @@ func PhysicalFingerprint(schema PhysicalSchema) (Digest, error) {
 		return Digest{}, err
 	}
 	normalized.System = SystemSchema{}
-	encoded, err := canonicalValue(normalized)
+	encoded, err := canonicalValueVersion(normalized, normalized.CanonicalVersion)
 	if err != nil {
 		return Digest{}, err
 	}
@@ -86,7 +86,7 @@ func UnmanagedAllowlistFingerprint(schema PhysicalSchema) (Digest, error) {
 		Namespace Namespace
 		Unmanaged []UnmanagedObject
 	}{Provider: normalized.Provider, Namespace: normalized.Namespace, Unmanaged: normalized.Unmanaged}
-	encoded, err := canonicalValue(value)
+	encoded, err := canonicalValueVersion(value, normalized.CanonicalVersion)
 	if err != nil {
 		return Digest{}, err
 	}
@@ -140,13 +140,21 @@ func historicalV3UnmanagedAllowlistFingerprintNormalized(normalized PhysicalSche
 // versioned system schema in a domain that cannot collide with application
 // objects.
 func SystemFingerprint(provider ProviderManifest, system SystemSchema) (Digest, error) {
+	version := CanonicalFormatVersion
+	if HasDataIncarnation(system) {
+		version = DataIncarnationFormatVersion
+	}
+	return SystemFingerprintVersion(provider, system, version)
+}
+
+func SystemFingerprintVersion(provider ProviderManifest, system SystemSchema, version uint32) (Digest, error) {
 	namespace := PhysicalName("public")
 	if provider.Provider == ir.SQLite {
 		namespace = "main"
 	}
 	probe := PhysicalSchema{
-		Version:          SchemaFormatVersion,
-		CanonicalVersion: CanonicalFormatVersion,
+		Version:          version,
+		CanonicalVersion: version,
 		Provider:         provider,
 		Namespace:        Namespace{Name: namespace},
 		System:           system,
@@ -159,7 +167,7 @@ func SystemFingerprint(provider ProviderManifest, system SystemSchema) (Digest, 
 		Provider ProviderManifest
 		System   SystemSchema
 	}{Provider: normalized.Provider, System: normalized.System}
-	encoded, err := canonicalValue(value)
+	encoded, err := canonicalValueVersion(value, version)
 	if err != nil {
 		return Digest{}, err
 	}

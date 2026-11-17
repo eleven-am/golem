@@ -154,6 +154,17 @@ func parseSQLitePlanDetail(detail string, children []queryplancapture.Node, regi
 	if len(fields) == 0 {
 		return queryplancapture.Unknown(children...)
 	}
+	// SQLite adds a numbered subquery wrapper around the correlated access.
+	// The renderer-proven child already describes that relation. Retaining an
+	// Unknown wrapper would duplicate structure and spend warning capacity.
+	if ordinal, ok := strings.CutPrefix(detail, "CORRELATED SCALAR SUBQUERY "); ok && sqliteSubqueryOrdinal(ordinal) && len(children) == 1 {
+		child := children[0]
+		_, model := child.ModelID()
+		_, relation := child.RelationID()
+		if child.Kind() == queryplancapture.NodeCorrelatedRelation && model && relation {
+			return child
+		}
+	}
 	if detail == "SCAN CONSTANT ROW" {
 		return queryplancapture.Constant()
 	}
@@ -197,6 +208,18 @@ func parseSQLitePlanDetail(detail string, children []queryplancapture.Node, regi
 		return queryplancapture.Structural(queryplancapture.NodeCorrelatedRelation, identity, accessNode)
 	}
 	return accessNode
+}
+
+func sqliteSubqueryOrdinal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func sqliteSearchAccess(detail string, model golem.ModelID, registry *schema.Registry) (queryplancapture.AccessKind, queryplancapture.IndexID, bool) {

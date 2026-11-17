@@ -15,6 +15,7 @@ const (
 
 type Failure[T any] struct {
 	ID          JobID
+	Priority    Priority
 	Payload     T
 	Code        FailureCode
 	Attempt     int
@@ -27,7 +28,7 @@ func (jobType Type[T]) Name() string {
 }
 
 func (jobType Type[T]) DecodeFailure(meta Meta, payload []byte, code FailureCode) Failure[T] {
-	failure := Failure[T]{ID: meta.ID, Code: code, Attempt: meta.Attempt, MaxAttempts: meta.MaxAttempts, EnqueuedAt: meta.EnqueuedAt}
+	failure := Failure[T]{ID: meta.ID, Priority: meta.Priority, Code: code, Attempt: meta.Attempt, MaxAttempts: meta.MaxAttempts, EnqueuedAt: meta.EnqueuedAt}
 	var value T
 	if err := json.Unmarshal(payload, &value); err != nil {
 		failure.Code = FailurePayloadInvalid

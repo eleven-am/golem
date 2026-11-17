@@ -1,5 +1,6 @@
 import { createClient, type Client } from 'graphql-ws'
-import { GolemError, GolemProtocolError, type GraphQLResponseBody } from './errors.js'
+import { GolemError, GolemProtocolError, GolemSessionError, type GraphQLResponseBody } from './errors.js'
+import { sessionState, type SessionState, type SessionStamp } from './session-state.js'
 import { AckTracker, backoffDelay, classifyClose, golemBlock, isFatalHandshakeStatus, type ContractManifest, type SessionStatus } from './protocol.js'
 
 export interface Credentials {
@@ -63,6 +64,23 @@ function socketUrl(url: string): string {
   return url.replace(/^http/, 'ws')
 }
 
+// graphql-ws does not observe rejection of its asynchronous URL initializer.
+// Preparation failures therefore enter its normal socket-error path after the
+// handlers are installed, without constructing a native/application socket.
+class SocketPreparationError extends Error {
+  constructor(readonly reason: unknown) { super('socket preparation failed') }
+}
+
+function failedSocket(reason: unknown): SocketLike {
+  const socket = {
+    readyState: 3,
+    onerror: undefined as ((reason: unknown) => void) | undefined,
+    close() {},
+  }
+  queueMicrotask(() => socket.onerror?.(new SocketPreparationError(reason)))
+  return socket
+}
+
 function socketClass(factory: SocketFactory, credentials: () => Credentials) {
   return class {
     static readonly CONNECTING = 0
@@ -70,24 +88,31 @@ function socketClass(factory: SocketFactory, credentials: () => Credentials) {
     static readonly CLOSING = 2
     static readonly CLOSED = 3
     constructor(url: string, protocols: string | string[]) {
-      return factory(url, protocols, credentials()) as unknown as object
+      try {
+        return factory(url, protocols, credentials()) as unknown as object
+      } catch (reason) {
+        return failedSocket(reason) as unknown as object
+      }
     }
   }
 }
 
 export class Session {
   private readonly options: SessionOptions
+  private readonly state: SessionState
   private client: Client | undefined
   private currentStatus: SessionStatus = 'idle'
   private readonly listeners = new Set<(status: SessionStatus) => void>()
-  private readonly active = new Set<{ readonly tracker: AckTracker; readonly handlers: StreamHandlers }>()
-  private connectionCredentials: Credentials = {}
+  private readonly active = new Set<{ readonly tracker: AckTracker; readonly handlers: StreamHandlers; stop?: () => void }>()
   private acknowledged = false
   private latched: { readonly status: SessionStatus; readonly error: Error } | undefined
   private lastCloseAcknowledged = false
 
   constructor(options: SessionOptions) {
+    golemBlock(options.manifest)
     this.options = options
+    this.state = sessionState(this, options.manifest)
+    this.state.onReset((_adopting, refusal) => this.resetSocket(refusal))
   }
 
   get status(): SessionStatus {
@@ -102,12 +127,30 @@ export class Session {
   }
 
   subscribe(request: SubscriptionRequest, handlers: StreamHandlers): () => void {
+    const entry = this.state.capture()
+    const owned = JSON.parse(JSON.stringify(request)) as SubscriptionRequest
+    if (this.state.initialized) return this.subscribeReady(owned, handlers, entry)
+    let stopped = false
+    let pendingStamp = entry
+    let stop: (() => void) | undefined
+    void this.state.read(entry).then((stamp) => {
+      pendingStamp = stamp
+      if (!stopped && this.state.current(stamp)) stop = this.subscribeReady(owned, handlers, stamp)
+    }).catch((error: unknown) => {
+      if (!stopped && this.state.current(pendingStamp)) handlers.onEnd({ kind: 'fatal', status: 'invalid', error: error instanceof Error ? error : new GolemProtocolError('discovery failed') })
+    })
+    return () => { stopped = true; stop?.() }
+  }
+
+  private subscribeReady(request: SubscriptionRequest, handlers: StreamHandlers, stamp: SessionStamp): () => void {
+    this.state.assert(stamp)
     if (this.latched !== undefined) {
       const { status, error } = this.latched
-      queueMicrotask(() => handlers.onEnd({ kind: 'fatal', status, error }))
-      return () => undefined
+      let stopped = false
+      queueMicrotask(() => { if (!stopped && this.state.current(stamp)) handlers.onEnd({ kind: 'fatal', status, error }) })
+      return () => { stopped = true }
     }
-    const stream = { tracker: new AckTracker(), handlers }
+    const stream: { tracker: AckTracker; handlers: StreamHandlers; stop?: () => void } = { tracker: new AckTracker(), handlers }
     this.active.add(stream)
     let ended = false
     const finish = (end: StreamEnd) => {
@@ -116,13 +159,20 @@ export class Session {
       }
       ended = true
       this.active.delete(stream)
+      // graphql-ws leaves disposal to us after connection/preparation errors.
+      // Release before notifying a handler that may start another stream.
+      dispose()
       handlers.onEnd(end)
     }
-    const dispose = this.connection().subscribe(
-      { query: request.query, variables: request.variables as Record<string, unknown> | undefined },
+    const dispose = this.connection(stamp).subscribe(
+      { query: request.query, variables: request.variables as Record<string, unknown> | undefined, ...(stamp.incarnation === undefined ? {} : { extensions: { golem: { ...golemBlock(this.options.manifest), dataIncarnation: stamp.incarnation } } }) },
       {
         next: (value) => {
-          if (ended) {
+          if (ended || !this.state.current(stamp)) {
+            return
+          }
+          if (this.state.opted && (value as GraphQLResponseBody).extensions?.golem?.dataIncarnation !== stamp.incarnation) {
+            this.state.refuse(stamp)
             return
           }
           const outcome = stream.tracker.accept(value as GraphQLResponseBody)
@@ -135,14 +185,15 @@ export class Session {
               return
             case 'error':
               finish({ kind: 'error', errors: outcome.errors })
-              dispose()
               return
             case 'violation':
               finish({ kind: 'fatal', status: 'invalid', error: outcome.error })
-              dispose()
           }
         },
         error: (reason) => {
+          if (ended || !this.state.current(stamp)) return
+          if (reason instanceof SocketPreparationError) reason = reason.reason
+          if (isCloseEventLike(reason) && reason.reason === 'golem:incarnation') { this.state.refuse(stamp); return }
           if (isCloseEventLike(reason)) {
             const disposition = classifyClose(reason.code, reasonOf(reason), this.lastCloseAcknowledged)
             if (disposition.action === 'fatal') {
@@ -158,32 +209,55 @@ export class Session {
             return
           }
           if (Array.isArray(reason)) {
+            if (this.state.opted && reason.some((shape) => shape?.extensions?.code === 'GOLEM_DATA_INCARNATION_MISMATCH')) { this.state.refuse(stamp); return }
             finish({ kind: 'error', errors: reason.map((shape) => new GolemError(shape)) })
             return
           }
-          finish({ kind: 'fatal', status: 'invalid', error: reason instanceof Error ? reason : new GolemProtocolError(String(reason)) })
+          const failure = reason instanceof Error ? reason : new GolemProtocolError(String(reason))
+          this.fail('invalid', failure)
+          finish({ kind: 'fatal', status: 'invalid', error: failure })
         },
-        complete: () => finish({ kind: 'complete' }),
+        complete: () => { if (this.state.current(stamp)) finish({ kind: 'complete' }) },
       },
     )
-    return () => {
+    const stop = () => {
       if (!ended) {
         ended = true
         this.active.delete(stream)
         dispose()
       }
     }
+    stream.stop = stop
+    return stop
   }
 
   renew(): void {
     this.client?.terminate()
   }
 
-  dispose(): void {
-    this.client?.dispose()
+  dispose(): void { this.state.close() }
+
+  private resetSocket(refusal?: GolemSessionError): void {
+    const refused = refusal === undefined ? [] : [...this.active]
+    const fenced = refusal === undefined || this.state.disposed ? undefined : this.state.capture()
+    for (const stream of [...this.active]) stream.stop?.()
+    // graphql-ws disposal awaits an in-flight handshake. Its rejection belongs
+    // to the invalidated session; callbacks are fenced below and at dispatch.
+    void Promise.resolve(this.client?.dispose()).catch(() => undefined)
     this.client = undefined
     this.active.clear()
+    this.acknowledged = false
+    this.lastCloseAcknowledged = false
+    this.latched = undefined
     this.setStatus('idle')
+    if (refusal !== undefined && fenced !== undefined) {
+      queueMicrotask(() => {
+        for (const stream of refused) {
+          if (!this.state.current(fenced)) return
+          stream.handlers.onEnd({ kind: 'fatal', status: 'invalid', error: refusal })
+        }
+      })
+    }
   }
 
   private fail(status: SessionStatus, error: Error): void {
@@ -203,32 +277,57 @@ export class Session {
     }
   }
 
-  private connection(): Client {
+  private connection(stamp: SessionStamp): Client {
+    this.state.assert(stamp)
     if (this.client !== undefined) {
       return this.client
     }
     const { options } = this
     const sleep = options.sleep ?? defaultSleep
     const random = options.random ?? Math.random
-    const webSocketImpl = options.createSocket === undefined ? undefined : socketClass(options.createSocket, () => this.connectionCredentials)
+    let credentials: Credentials = {}
+    let preparationFailure: { readonly reason: unknown } | undefined
+    const factory: SocketFactory = options.createSocket ?? ((url, protocols) => new globalThis.WebSocket(url, protocols))
+    const webSocketImpl = socketClass(factory, () => {
+      this.state.assert(stamp)
+      if (preparationFailure !== undefined) throw preparationFailure.reason
+      return credentials
+    })
     const client = createClient({
       url: async () => {
-        this.connectionCredentials = (await options.credentials?.()) ?? {}
+        preparationFailure = undefined
+        try {
+          this.state.assert(stamp)
+          const resolved = (await options.credentials?.()) ?? {}
+          this.state.assert(stamp)
+          credentials = resolved
+        } catch (reason) {
+          preparationFailure = { reason }
+        }
+        // Always settle URL preparation. The adapter fences again before any
+        // real factory call and routes failure through graphql-ws's sink.
         return socketUrl(options.url)
       },
-      connectionParams: () => ({ ...this.connectionCredentials.connectionParams, golem: golemBlock(options.manifest) }),
+      connectionParams: () => {
+        this.state.assert(stamp)
+        return { ...credentials.connectionParams, golem: { ...golemBlock(options.manifest), ...(stamp.incarnation === undefined ? {} : { dataIncarnation: stamp.incarnation }) } }
+      },
       lazy: true,
       retryAttempts: Number.POSITIVE_INFINITY,
       retryWait: (retries) => sleep(backoffDelay(retries, random)),
-      shouldRetry: (event) => !isCloseEventLike(event) || classifyClose(event.code, reasonOf(event), this.lastCloseAcknowledged).action === 'retry',
-      ...(webSocketImpl === undefined ? {} : { webSocketImpl }),
+      shouldRetry: (event) => !(event instanceof SocketPreparationError) && (!isCloseEventLike(event) || classifyClose(event.code, reasonOf(event), this.lastCloseAcknowledged).action === 'retry'),
+      webSocketImpl,
       on: {
-        connecting: (retrying) => this.setStatus(retrying ? 'reconnecting' : 'connecting'),
-        connected: () => {
+        connecting: (retrying) => { if (this.state.current(stamp)) this.setStatus(retrying ? 'reconnecting' : 'connecting') },
+        connected: (_socket, payload) => {
+          if (!this.state.current(stamp)) return
+          if (this.state.opted && (payload as { golem?: { dataIncarnation?: unknown } } | undefined)?.golem?.dataIncarnation !== stamp.incarnation) { this.state.refuse(stamp); return }
           this.acknowledged = true
           this.setStatus('open')
         },
         closed: (event) => {
+          if (!this.state.current(stamp)) return
+          if (isCloseEventLike(event) && event.reason === 'golem:incarnation') { this.state.refuse(stamp); return }
           this.lastCloseAcknowledged = this.acknowledged
           this.acknowledged = false
           if (this.currentStatus === 'open') {

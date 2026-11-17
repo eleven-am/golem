@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/migration"
@@ -27,30 +26,9 @@ func prepareReviewedMigrationStartup(database *providerapi.Database, bundle gole
 	if database != nil && (*providerhandle.Database)(database).IsUnverifiedForTest() {
 		return nil, nil
 	}
-	manifestBytes, err := bundle.MigrationManifest(provider)
+	manifest, err := migration.PrepareReviewedStartup(bundle, provider, expected)
 	if err != nil {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: provider %s reviewed migration manifest is missing or does not match the generated application", provider)
-	}
-	manifest, err := migration.ParseManifest(manifestBytes)
-	if err != nil {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: decode reviewed migration manifest: %w", err)
-	}
-	if err := migration.VerifyEmbeddedManifest(manifest); err != nil {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: invalid reviewed migration manifest: %w", err)
-	}
-	if len(manifest.Entries) == 0 {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: reviewed migration manifest is empty")
-	}
-	if string(manifest.Provider.Provider) != string(provider) || !reflect.DeepEqual(manifest.Provider, expected.Provider) {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: reviewed migration provider does not match the generated physical schema")
-	}
-	head := manifest.Entries[len(manifest.Entries)-1]
-	physicalFingerprint, err := physical.PhysicalFingerprint(expected)
-	if err != nil {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: fingerprint generated physical schema: %w", err)
-	}
-	if head.AfterModel != migration.Digest(bundle.Model().Fingerprint().String()) || head.AfterPhysical != migration.Digest(physicalFingerprint.String()) {
-		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: reviewed migration head does not match the generated schema")
+		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: %w", err)
 	}
 	return &reviewedMigrationStartup{manifest: manifest}, nil
 }

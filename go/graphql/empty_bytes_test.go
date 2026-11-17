@@ -21,7 +21,7 @@ func TestEmptyBytesStayEmptyThroughCustomComputedAndGeneratedResults(t *testing.
 	computed := cloneComputedArguments([]ComputedArgument{{Name: "payload", Value: []byte{}}, {Name: "list", Value: []any{[]byte{}}}})
 	assertGraphQLEmptyBytes(t, "computed argument", computed[0].Value)
 	assertGraphQLEmptyBytes(t, "computed list argument", computed[1].Value.([]any)[0])
-	result, err := normalizeGeneratedCustomResult[struct{}](compilerir.CompilationIR{}, compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeScalar, Name: "Bytes"}, []byte{}, false)
+	result, err := normalizeGeneratedResult[struct{}](compilerir.CompilationIR{}, compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeScalar, Name: "Bytes"}, []byte{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

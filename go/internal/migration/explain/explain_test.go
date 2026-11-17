@@ -156,7 +156,7 @@ func TestMigrationExplainEffectMappingIsExhaustive(t *testing.T) {
 		migration.AddForeignKey, migration.DropForeignKey, migration.AddCheck, migration.DropCheck,
 		migration.CreateIndex, migration.DropIndex, migration.RenameIndex,
 		migration.CreateProviderExtension, migration.DropProviderExtension, migration.UpgradeSemanticState,
-		migration.BackfillColumn,
+		migration.BackfillColumn, migration.CorrectDataColumn,
 		migration.InitializeConcurrencyColumn,
 		migration.RebuildTable, migration.ValidateConstraint, migration.ManualStep,
 		migration.RecordSchemaVersion,

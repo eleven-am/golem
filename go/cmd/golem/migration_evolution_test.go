@@ -7,12 +7,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
@@ -522,7 +524,46 @@ func TestMigrationNewExplainsARequiredFieldWithoutADefault(t *testing.T) {
 			added := value.schema
 			added.noteFields = []string{"ID", "AuthorID", "Title", "Body", "Slug", "Author"}
 			value.write(added)
+			before := treeSnapshot(t, filepath.Join(value.module, "migrations"))
 			code, stdout, stderr := value.newMigration("add_note_slug", nil)
+			if providers == "golem.SQLite" {
+				if code != 0 || stderr != "" {
+					t.Fatalf("pending draft code=%d stdout=%s stderr=%s", code, stdout, stderr)
+				}
+				var output migrationNewOutput
+				if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+					t.Fatal(err)
+				}
+				draftPath := filepath.ToSlash(filepath.Join("migrations", workflow.PendingBackfillFilename))
+				if output.FormatVersion != migrationOutputFormatVersion || !output.Pending || output.MigrationID != "0002_add_note_slug" || !reflect.DeepEqual(output.Providers, []ir.Provider{ir.SQLite}) || output.Draft != draftPath || !reflect.DeepEqual(output.Changed, []string{draftPath}) {
+					t.Fatalf("pending draft output=%#v", output)
+				}
+				after := treeSnapshot(t, filepath.Join(value.module, "migrations"))
+				draftBytes, present := after[workflow.PendingBackfillFilename]
+				if !present {
+					t.Fatal("pending draft was not written")
+				}
+				var draft workflow.PendingBackfill
+				if err := json.Unmarshal([]byte(draftBytes), &draft); err != nil {
+					t.Fatal(err)
+				}
+				if draft.FormatVersion != workflow.PendingBackfillFormatVersion || draft.Root != "migrations" || draft.MigrationID != output.MigrationID || draft.Provider != ir.SQLite || draft.Entry.ID != output.MigrationID || draft.Entry.AfterSnapshot.Provider.Provider != ir.SQLite {
+					t.Fatalf("pending draft identity=%#v", draft)
+				}
+				delete(after, workflow.PendingBackfillFilename)
+				// Includes the published head, manifests and every reviewed SQL
+				// byte: only the draft may appear before reviewed attach.
+				if !reflect.DeepEqual(before, after) {
+					t.Fatal("pending backfill changed published migration history or added SQL")
+				}
+				if _, err := os.Stat(filepath.Join(value.module, "migrations", "sqlite", "0002_add_note_slug.sql")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("pending draft published SQL: %v", err)
+				}
+				return
+			}
+			if after := treeSnapshot(t, filepath.Join(value.module, "migrations")); !reflect.DeepEqual(before, after) {
+				t.Fatal("unsupported multi-provider backfill changed migration history")
+			}
 			if code == 0 {
 				t.Fatalf("migration new succeeded: %s", stdout)
 			}

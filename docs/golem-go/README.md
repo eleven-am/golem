@@ -47,3 +47,46 @@ SQL of every query, so an unauthorized row is never read rather than read and
 filtered out. That is why search can rank within what a caller may see, why
 similarity refuses a source you cannot read, and why a masked field is
 indistinguishable from an absent one.
+
+## Repository verification prerequisites
+
+Before the first local `scripts/verify.sh database-bound` or
+`scripts/verify.sh oracle-failure-and-event` run, explicitly cache the pinned
+Core NATS image with `scripts/verify.sh cache-nats`. The cache action uses the
+image declared in the verifier; it does not start a container. It requires an
+available local Unix Docker socket. Set `DOCKER_HOST=unix:///absolute/socket/path`
+when that socket is not `/var/run/docker.sock`; remote endpoints are refused.
+
+Ordinary verification does not fetch or inspect images in the shell. Its Go
+fixtures inspect the exact cached image through a 15-second Docker command
+bound and fail required gates when the image or daemon is unavailable. The
+explicit cache action can wait on the daemon or network; cancel it if the local
+daemon stalls. CI runs it as a separate prerequisite with a five-minute step
+deadline, before either NATS-dependent verification tier. It is not an additional
+verification matrix tier. PostgreSQL prerequisites and private cluster ownership
+remain unchanged.
+
+The database tier first runs the ordinary V3 suite, then a scoped V4 compiler
+overlay for the named history/policy-fact runtime tests and four generated
+consumers covering authorization equivalence and bound scope/fact templates.
+These template consumers require historical route evidence and run in the
+mandatory V4 pass. The existing client CI job separately runs
+`scripts/verify.sh writer4-client` after installing and checking the locked
+client packages. This starts fresh generated applications for continuation,
+custom invalidation, and browser recovery after restore on their declared
+providers. These required passes reject missing or skipped tests, including
+skipped subtests; the checked-in writer default remains V3.
+
+For focused local verification, `scripts/verify.sh writer4-database` runs the
+staged database acceptances without repeating the ordinary database tier.
+Both explicit writer actions use the existing private PostgreSQL owner. The
+client action also requires Node and the installed client dependencies.
+Existing Go flags are preserved; an existing compiler overlay is refused rather
+than silently replaced. Temporary overlay files are removed on exit.
+
+The staged runtime pass uses temporary stubs for the external test package
+when it contains no selected tests, `TestMain`, or `init` functions. This avoids
+compiling unrelated generated-application tests for the internal selection;
+the ordinary V3 suite still runs them. Finding any of those declarations keeps
+the entire external package, including its helpers. The runtime package import
+path, required-test inventory, and generated-application checks stay intact.

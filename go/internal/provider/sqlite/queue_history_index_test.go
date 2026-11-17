@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -161,8 +162,8 @@ func TestQueueIndexVerificationRefusesForeignAndRedefinedIndexes(t *testing.T) {
 	if _, err := database.Exec(`CREATE INDEX "golem_queue_sneaky" ON "golem_queue" ("type")`); err != nil {
 		t.Fatal(err)
 	}
-	err := store.verifyQueueGuarantees(ctx)
-	if err == nil || !strings.Contains(err.Error(), "was not created by golem") {
+	err := store.EnsureSchema(ctx)
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
 		t.Fatalf("a foreign index on golem_queue was tolerated: %v", err)
 	}
 	if _, err := database.Exec(`DROP INDEX "golem_queue_sneaky"`); err != nil {
@@ -174,8 +175,8 @@ func TestQueueIndexVerificationRefusesForeignAndRedefinedIndexes(t *testing.T) {
 	if _, err := database.Exec(`CREATE INDEX "golem_queue_terminal" ON "golem_queue" ("finished_at")`); err != nil {
 		t.Fatal(err)
 	}
-	err = store.verifyQueueGuarantees(ctx)
-	if err == nil || !strings.Contains(err.Error(), "does not match") {
+	err = store.EnsureSchema(ctx)
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
 		t.Fatalf("a redefined golem index was tolerated: %v", err)
 	}
 }
@@ -356,10 +357,16 @@ func TestAQueueDatabaseFromV030ThroughV040PassesIndexVerification(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := store.EnsureSchema(ctx); !errors.Is(err, queueprovider.ErrStorageUpgradeRequired) {
+			t.Fatalf("legacy startup did not refuse: %v", err)
+		}
+		if _, err := store.(queueprovider.StorageMaintenance).UpgradeStorage(ctx); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.EnsureSchema(ctx); err != nil {
 			t.Fatalf("admitted=%v: a released queue database was refused on upgrade: %v", admitted, err)
 		}
-		if err := store.(*queueStore).verifyQueueGuarantees(ctx); err != nil {
+		if err := store.(*queueStore).EnsureSchema(ctx); err != nil {
 			t.Fatalf("admitted=%v: released queue indexes failed verification: %v", admitted, err)
 		}
 	}
@@ -379,10 +386,8 @@ func TestAUserIndexOnTheQueueTableIsRefusedByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a user-authored index on golem_queue was tolerated")
 	}
-	for _, fragment := range []string{"tenant_queue_by_type", "drop it"} {
-		if !strings.Contains(err.Error(), fragment) {
-			t.Fatalf("refusal must name the object and say what to do: %v", err)
-		}
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+		t.Fatalf("foreign queue index must refuse startup before mutation: %v", err)
 	}
 }
 
@@ -447,12 +452,12 @@ func TestSQLiteRefusesAMissingQueueIndex(t *testing.T) {
 			if _, err := database.Exec(`DROP INDEX "` + name + `"`); err != nil {
 				t.Fatal(err)
 			}
-			err := store.verifyQueueGuarantees(ctx)
+			err := store.EnsureSchema(ctx)
 			if err == nil {
 				t.Fatalf("a missing %s was accepted", name)
 			}
-			if !strings.Contains(err.Error(), name) {
-				t.Fatalf("refusal must name the absent object, got: %v", err)
+			if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+				t.Fatalf("missing %s must fail strict storage admission: %v", name, err)
 			}
 		})
 	}
@@ -476,7 +481,7 @@ func TestSQLiteNameCollisionOnAnotherTableIsCaught(t *testing.T) {
 	if err == nil {
 		t.Fatal("a queue whose claim index name was taken by another table started anyway")
 	}
-	if !strings.Contains(err.Error(), "golem_queue_claim") {
-		t.Fatalf("refusal must name the absent index, got: %v", err)
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+		t.Fatalf("foreign index-name collision must fail closed before bootstrap: %v", err)
 	}
 }

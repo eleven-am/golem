@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -11,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	queryplancapture "github.com/eleven-am/golem/go/internal/queryplancapture"
+	"github.com/eleven-am/golem/go/internal/queryplanreport"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 )
@@ -94,6 +96,98 @@ func TestQueryPlanSQLiteUnknownAliasAndOversizeFailClosed(t *testing.T) {
 	}
 	if root := plan.Root(); root.Kind() != queryplancapture.NodeUnknown || root.AccessKind() != queryplancapture.AccessUnknown {
 		t.Fatalf("unknown alias guessed: kind=%v access=%v", root.Kind(), root.AccessKind())
+	}
+}
+
+func TestQueryPlanSQLiteCorrelatedWrappersPreserveProvenanceWithoutDuplicateWarnings(t *testing.T) {
+	fixture := schematest.NewIndexed(t)
+	users := physicalTable(t, fixture.SQLite, fixture.User)
+	posts := physicalTable(t, fixture.SQLite, fixture.Post)
+	userID := physicalColumn(t, users, fixture.UserID)
+	postID := physicalColumn(t, posts, fixture.PostID)
+	authorID := physicalColumn(t, posts, fixture.AuthorID)
+	authorIndex := physicalIndex(t, posts, fixture.AuthorID)
+	database := sqlx.MustOpen("sqlite", ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	database.MustExec(fmt.Sprintf("CREATE TABLE %q (%q BLOB PRIMARY KEY)", users.Name, userID.Name))
+	database.MustExec(fmt.Sprintf("CREATE TABLE %q (%q BLOB PRIMARY KEY, %q BLOB NOT NULL)", posts.Name, postID.Name, authorID.Name))
+	database.MustExec(fmt.Sprintf("CREATE INDEX %q ON %q (%q)", authorIndex.Name, posts.Name, authorID.Name))
+	connection, err := database.Connx(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	for _, test := range []struct {
+		name     string
+		branches int
+		proof    string
+	}{
+		{"known-single", 1, "exact"},
+		{"known-many", 64, "exact"},
+		{"unregistered", 1, "missing"},
+		{"ambiguous", 1, "ambiguous"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, err := queryplancapture.NewAliasFact(func(candidate string) bool { return candidate == "plan_root" }, fixture.User, golem.RelationID{}, []golem.FieldID{fixture.UserID}, queryplancapture.AliasPhysicalAccess)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts := []queryplancapture.AliasFact{root}
+			branches := make([]string, test.branches)
+			for index := range branches {
+				alias := fmt.Sprintf("plan_child_%d", index)
+				branches[index] = fmt.Sprintf("EXISTS (SELECT 1 FROM %q AS %s WHERE %s.%q = plan_root.%q)", posts.Name, alias, alias, authorID.Name, userID.Name)
+				if test.proof == "missing" {
+					continue
+				}
+				child, err := queryplancapture.NewAliasFact(func(candidate string) bool { return candidate == alias }, fixture.Post, fixture.Authorship, []golem.FieldID{fixture.AuthorID}, queryplancapture.AliasCorrelatedRelation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				facts = append(facts, child)
+				if test.proof == "ambiguous" {
+					facts = append(facts, child)
+				}
+			}
+			statement := fmt.Sprintf("SELECT plan_root.%q FROM %q AS plan_root WHERE plan_root.%q = ? AND (%s)", userID.Name, users.Name, userID.Name, strings.Join(branches, " OR "))
+			plan, err := sqliteprovider.CaptureQueryPlan(context.Background(), connection, statement, []any{[]byte{1}}, fixture.Registry, queryplancapture.NewAliasMap(facts...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			unknown, correlated := 0, 0
+			var walk func(queryplancapture.Node)
+			walk = func(node queryplancapture.Node) {
+				if node.Kind() == queryplancapture.NodeUnknown {
+					unknown++
+				}
+				if node.Kind() == queryplancapture.NodeCorrelatedRelation {
+					correlated++
+					model, hasModel := node.ModelID()
+					relation, hasRelation := node.RelationID()
+					if !hasModel || model != fixture.Post || !hasRelation || relation != fixture.Authorship || len(node.Children()) != 1 || node.Children()[0].AccessKind() != queryplancapture.AccessIndex {
+						t.Fatal("correlated access lost its renderer-proven identity or indexed child")
+					}
+				}
+				for _, child := range node.Children() {
+					walk(child)
+				}
+			}
+			walk(plan.Root())
+			if test.proof != "exact" {
+				if unknown == 0 || correlated != 0 {
+					t.Fatalf("unproven aliases acquired authority: unknown=%d correlated=%d", unknown, correlated)
+				}
+				return
+			}
+			report, err := queryplanreport.Build(queryplanreport.Input{Provider: golem.SQLite, Operation: "findMany", RootModelID: fixture.User,
+				Statements: []queryplanreport.StatementInput{{Purpose: "root", Root: plan.RootInput()}}, MinimumExecutionStatements: 1, MaximumExecutionStatements: 1})
+			if err != nil {
+				t.Fatalf("report for bounded, known correlated plan: %v (nodes=%d unknown=%d)", err, plan.NodeCount(), unknown)
+			}
+			if unknown != 0 || correlated != test.branches || len(report.Warnings()) != 0 {
+				t.Fatalf("redundant provider wrappers: unknown=%d correlated=%d want=%d warnings=%v", unknown, correlated, test.branches, report.Warnings())
+			}
+		})
 	}
 }
 

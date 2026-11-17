@@ -7,9 +7,9 @@ import (
 	"reflect"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
-	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
+	graphqlcustom "github.com/eleven-am/golem/go/internal/operationargs"
 	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
@@ -33,8 +33,9 @@ type CustomBindingSpec struct {
 // CustomArgument is one already-coerced exact value in declaration order.
 // Generated glue converts it into the statically known application Args field.
 type CustomArgument struct {
-	name  string
-	value any
+	name    string
+	value   any
+	present bool
 }
 
 func (argument CustomArgument) Name() string { return argument.name }
@@ -63,6 +64,7 @@ type CustomBinding struct {
 	operation   CustomOperation
 	resolver    compilerir.AttachedMethodIR
 	invoke      func(context.Context, any, []CustomArgument) (any, error)
+	page        bool
 }
 
 func BindCustomQuery[C, A, R any](spec CustomBindingSpec, decode CustomArgumentDecoder[A], resolver func(context.Context, C, A) (R, error), encode CustomResultEncoder[R]) (CustomBinding, error) {
@@ -188,6 +190,9 @@ func NewCustomRegistry(bundle golem.SchemaBundle, supplied ...CustomBinding) (*C
 		if compilerir.CustomOperationKind(binding.operation) != operation.Operation || binding.resolver != operation.Resolver {
 			return nil, fmt.Errorf("GraphQL custom binding %s does not match its attached resolver", id)
 		}
+		if binding.page != (operation.Pagination != nil) {
+			return nil, fmt.Errorf("GraphQL custom binding %s does not match its registered page dispatch", id)
+		}
 		bindings[id] = binding
 	}
 	for _, operation := range contract.Operations() {
@@ -214,7 +219,10 @@ func (registry *CustomRegistry) ForCaller(caller CustomCallerCapability) (*Calle
 	return &CallerCustomExecution{registry: registry, caller: caller}, nil
 }
 
-type CustomResult struct{ value any }
+type CustomResult struct {
+	value any
+	page  *golem.RuntimePageResult
+}
 
 func (result CustomResult) Value() any { return cloneCustomValue(result.value) }
 
@@ -238,23 +246,32 @@ func (execution *CallerCustomExecution) Execute(ctx context.Context, operation C
 	internalArguments := request.Arguments()
 	publicArguments := make([]CustomArgument, len(internalArguments))
 	for index, argument := range internalArguments {
-		publicArguments[index] = CustomArgument{name: argument.Name(), value: argument.Value()}
+		publicArguments[index] = CustomArgument{name: argument.Name(), value: argument.Value(), present: argument.Present()}
 	}
 	value, err := binding.invoke(ctx, execution.caller, publicArguments)
 	if err != nil {
 		return CustomResult{}, err
 	}
+	var page *golem.RuntimePageResult
+	if wrapped, ok := value.(pageCustomValue); ok {
+		if !binding.page {
+			return CustomResult{}, &CustomResultError{cause: fmt.Errorf("ordinary custom result contains page state")}
+		}
+		value, page = wrapped.value, &wrapped.pending
+	} else if binding.page {
+		return CustomResult{}, &CustomResultError{cause: fmt.Errorf("page result has no registered runtime state")}
+	}
 	finished, err := execution.registry.contract.Finish(request, value)
 	if err != nil {
 		return CustomResult{}, &CustomResultError{cause: err}
 	}
-	return CustomResult{value: finished.Value()}, nil
+	return CustomResult{value: finished.Value(), page: page}, nil
 }
 
 func cloneCustomArguments(values []CustomArgument) []CustomArgument {
 	result := make([]CustomArgument, len(values))
 	for index, value := range values {
-		result[index] = CustomArgument{name: value.name, value: cloneCustomValue(value.value)}
+		result[index] = CustomArgument{name: value.name, value: cloneCustomValue(value.value), present: value.present}
 	}
 	return result
 }

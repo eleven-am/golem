@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -131,3 +132,94 @@ func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, pro
 }
 
 const semanticCandidateAlias = physical.PhysicalName("golem_r0")
+
+// SemanticSources maps each requested unique selector to its owner identity.
+// Authorization is supplied separately by SemanticCandidates and joined by
+// identity in the same vector-read statement; it is never inferred from keys.
+type SemanticSources struct {
+	text     string
+	args     []any
+	columns  []physical.PhysicalName
+	count    int
+	position physical.PhysicalName
+}
+
+func (sources SemanticSources) SQL() string { return sources.text }
+func (sources SemanticSources) Args() []any { return cloneArgs(sources.args) }
+func (sources SemanticSources) Count() int  { return sources.count }
+func (sources SemanticSources) PositionColumn() physical.PhysicalName {
+	return sources.position
+}
+func (sources SemanticSources) Columns() []physical.PhysicalName {
+	return append([]physical.PhysicalName(nil), sources.columns...)
+}
+
+func RenderSemanticSources(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, sources []policyir.Condition) (SemanticSources, error) {
+	if registry == nil || len(sources) == 0 {
+		return SemanticSources{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "semantic sources and registry are required", nil)
+	}
+	dialect, err := providerDialect(provider)
+	if err != nil {
+		return SemanticSources{}, err
+	}
+	resolver := policysql.SchemaResolver(registry)
+	model, ok := resolver.Model(provider, plan.ModelID())
+	if !ok {
+		return SemanticSources{}, fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "semantic source model is absent", nil)
+	}
+	modelFact, ok := registry.Model(golem.ModelID(plan.ModelID()))
+	if !ok || len(modelFact.PrimaryKey()) == 0 {
+		return SemanticSources{}, fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "semantic source model has no primary identity", nil)
+	}
+	result := SemanticSources{count: len(sources)}
+	projection := make([]string, len(modelFact.PrimaryKey()))
+	alias := physical.PhysicalName("golem_requested_owner")
+	for i, id := range modelFact.PrimaryKey() {
+		field, ok := resolver.Field(provider, plan.ModelID(), policyir.FieldID(id))
+		if !ok {
+			return SemanticSources{}, fail(CodeSchema, plan.ModelID(), policyir.FieldID(id), "semantic source identity column is absent", nil)
+		}
+		result.columns = append(result.columns, field.Column)
+		projection[i] = dialect.Quote(alias) + "." + dialect.Quote(field.Column) + " AS " + dialect.Quote(field.Column)
+	}
+	// Reserve both the input position and the reader's cardinality column.
+	// Model authors may use either name for a real primary-key column.
+	for suffix := 0; ; suffix++ {
+		name := "golem_semantic_position"
+		if suffix != 0 {
+			name += strconv.Itoa(suffix)
+		}
+		collision := false
+		for _, column := range result.columns {
+			if strings.EqualFold(string(column), name) || strings.EqualFold(string(column), name+"_matches") {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			result.position = physical.PhysicalName(name)
+			break
+		}
+	}
+	parts := make([]string, len(sources))
+	for i, source := range sources {
+		if source.ModelID() != plan.ModelID() {
+			return SemanticSources{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "semantic source selector belongs to another model", nil)
+		}
+		fragment, err := policysql.Compile(policysql.Request{Condition: source, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias})
+		if err != nil {
+			return SemanticSources{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "semantic source selector did not render", err)
+		}
+		predicate := policysql.RebasePlaceholders(fragment.SQL(), len(result.args), provider)
+		parts[i] = "SELECT " + strconv.Itoa(i) + " AS " + dialect.Quote(result.PositionColumn()) + ", " + strings.Join(projection, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + predicate
+		result.args = append(result.args, fragment.Args()...)
+	}
+	result.text = strings.Join(parts, " UNION ALL ")
+	if err := enforceStatementParameterLimitWith(plan.ModelID(), result.args, plan.Limits().MaxStatementParameters); err != nil {
+		return SemanticSources{}, err
+	}
+	if err := ValidateStatementComplexity(plan.ModelID(), result.text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
+		return SemanticSources{}, err
+	}
+	return result, nil
+}

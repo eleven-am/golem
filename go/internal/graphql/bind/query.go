@@ -3,8 +3,8 @@ package bind
 import (
 	"strconv"
 
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/operator"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -32,6 +32,12 @@ func (s *inputState) step(path string, depth int) error {
 }
 
 func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, raw any, path string, depth int) (policyir.Condition, error) {
+	return s.whereObject(model, contract, raw, path, depth, false)
+}
+
+// Only an explicit relation predicate may use an empty object as true. Root
+// where inputs and logical operands retain their explicit-all requirement.
+func (s *inputState) whereObject(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, raw any, path string, depth int, allowEmpty bool) (policyir.Condition, error) {
 	if err := s.step(path, depth); err != nil {
 		return policyir.Condition{}, err
 	}
@@ -39,12 +45,19 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 	if err != nil {
 		return policyir.Condition{}, err
 	}
-	if len(value) == 0 {
+	if len(value) == 0 && !allowEmpty {
 		return policyir.Condition{}, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))
 	}
 	modelID, err := policyModelID(model.ID)
 	if err != nil {
 		return policyir.Condition{}, err
+	}
+	if len(value) == 0 {
+		condition, err := policyir.NewConstant(modelID, true)
+		if err != nil {
+			return policyir.Condition{}, compileerr.Invariant(err)
+		}
+		return validateCondition(condition, s.binder.providers, path)
 	}
 	if all, present := value["all"]; present {
 		truth, ok := all.(bool)
@@ -436,7 +449,7 @@ func (s *inputState) relationCondition(owner compilerir.ModelDeclIR, field field
 				operatorID = policyir.OperatorRelationIsNotNull
 			}
 		} else {
-			bound, childErr := s.where(target, targetContract, filter[name], joinPath(path, name), depth+1)
+			bound, childErr := s.whereObject(target, targetContract, filter[name], joinPath(path, name), depth+1, cardinality == policyir.RelationToMany)
 			if childErr != nil {
 				return policyir.Condition{}, childErr
 			}
@@ -573,7 +586,19 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 func (s *inputState) orderBy(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, raw any, path string) ([]readir.Order, error) {
 	items, err := list(raw, path)
 	if err != nil {
-		return nil, err
+		if raw == nil {
+			return nil, err
+		}
+		options := []compileerr.Option{compileerr.Path(path), compileerr.ExpectedType("[" + contract.GraphQLName + "OrderByInput!]")}
+		fields := indexFields(model, contract)
+		for _, name := range sortedKeys(fields) {
+			field := fields[name]
+			if compilerir.ModesGraphQLReadable(field.contract.Modes) && field.model.Scalar != nil && !compilerir.IsRowVersionField(field.model) {
+				options = append(options, compileerr.Example("[{"+name+": asc}]"))
+				break
+			}
+		}
+		return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueExpectedList, options...)
 	}
 	if len(items) == 0 {
 		return nil, compileerr.New(compileerr.KindEmpty, compileerr.DetailNone, compileerr.Path(path))

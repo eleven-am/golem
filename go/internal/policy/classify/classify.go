@@ -134,7 +134,7 @@ func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, f
 		validatedFields = append(validatedFields, field)
 	}
 
-	policyCopy, err := ir.NewPolicy(model, policy.Rules())
+	policyCopy, err := ir.NewPolicyWithFacts(model, policy.Rules(), policy.Facts(), policy.FactScope())
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: invalid policy: %w", err)
 	}
@@ -275,8 +275,17 @@ func Fields(request Request) (Plan, error) {
 		}
 
 		conditions := supportingConditions(request.policy, field)
+		if len(request.policy.Facts()) != 0 {
+			conditions = append(conditions, request.policy.FactScope().Condition())
+		}
 		if len(conditions) == 0 {
 			return Plan{}, fmt.Errorf("policy classify: conditional field %x has no supporting condition", field)
+		}
+		for index, condition := range conditions {
+			conditions[index], err = resolve.Condition(request.policy, condition)
+			if err != nil {
+				return Plan{}, fmt.Errorf("policy classify: resolve supporting condition for field %x: %w", field, err)
+			}
 		}
 		dependencies, err := dependency.Collect(conditions...)
 		if err != nil {

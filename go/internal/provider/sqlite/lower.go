@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/dataincarnation"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -69,6 +70,14 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 			},
 		},
 	}
+	enabled, err := ir.ModelDataIncarnation(model)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	if enabled {
+		schema.Version, schema.CanonicalVersion = physical.DataIncarnationFormatVersion, physical.DataIncarnationFormatVersion
+		schema.System.Objects = append(schema.System.Objects, physical.DataIncarnationSystemObjectV1())
+	}
 	schema.Unmanaged = append(schema.Unmanaged, physical.QueueUnmanagedObjects()...)
 	schema.Unmanaged = append(schema.Unmanaged, physical.OutboxDeliveryUnmanagedObjects()...)
 	schema.Unmanaged = append(schema.Unmanaged, physical.RowVersionUnmanagedObjects()...)
@@ -90,7 +99,7 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 		if extension.Provider != ir.SQLite {
 			continue
 		}
-		if extension.Kind == semanticcontract.SpaceKind {
+		if extension.Kind == semanticcontract.SpaceKind || extension.Kind == dataincarnation.Kind {
 			continue
 		}
 		if extension.Kind != semanticcontract.IndexKind && extension.Kind != fulltextcontract.IndexKind {

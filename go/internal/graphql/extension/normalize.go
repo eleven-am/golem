@@ -21,8 +21,16 @@ type ComputedDeclaration struct {
 }
 
 type CustomOperationDeclaration struct {
-	Operation ir.CustomOperationContractIR
-	Span      ir.SourceSpan
+	Operation             ir.CustomOperationContractIR
+	Span                  ir.SourceSpan
+	InvalidationTemplates map[ir.ExtensionID]InvalidationTemplateDeclaration
+}
+
+// Template names are source-only references. Normalize replaces them with
+// registered identities before publishing any custom-operation contract.
+type InvalidationTemplateDeclaration struct {
+	Scope string
+	Facts []string
 }
 
 // SortDeclarations freezes traversal-order independence before normalization
@@ -55,6 +63,14 @@ func Normalize(compilation *ir.CompilationIR, computed []ComputedDeclaration, cu
 	if compilation == nil {
 		return []ir.Diagnostic{ir.NewError("P5_EXTENSION_COMPILATION_REQUIRED", "GraphQL extension normalization requires a compilation", ir.SourceSpan{})}
 	}
+	if err := ir.ValidateDataIncarnation(*compilation); err != nil {
+		return []ir.Diagnostic{ir.NewError("P12_DATA_INCARNATION", err.Error(), ir.SourceSpan{})}
+	}
+	resolvedCustom, invalidationDiagnostics := resolveInvalidationDeclarations(compilation, custom)
+	if len(invalidationDiagnostics) != 0 {
+		return invalidationDiagnostics
+	}
+	custom = resolvedCustom
 
 	modelByID := make(map[ir.ModelID]ir.ModelDeclIR, len(compilation.Model.Models))
 	modelName := make(map[string]ir.ModelID, len(compilation.Model.Models))
@@ -87,7 +103,19 @@ func Normalize(compilation *ir.CompilationIR, computed []ComputedDeclaration, cu
 	}
 	customOperations := append([]ir.CustomOperationContractIR(nil), compilation.Contract.CustomOperations...)
 
-	typeContext := graphQLTypeContext{models: modelName, enums: enumNames, versioned: versionedModelName}
+	definitions := make(map[string]ir.GraphQLTypeKind, len(compilation.Contract.GraphQLTypes))
+	for _, definition := range compilation.Contract.GraphQLTypes {
+		definitions[definition.Name] = definition.Kind
+	}
+	definitionContract := compilation.Contract
+	definitionContract.CustomOperations = append([]ir.CustomOperationContractIR(nil), compilation.Contract.CustomOperations...)
+	for _, declaration := range custom {
+		definitionContract.CustomOperations = append(definitionContract.CustomOperations, declaration.Operation)
+	}
+	if err := ir.ValidateGraphQLTypeDefinitions(definitionContract); err != nil {
+		return []ir.Diagnostic{ir.NewError("P5_OBJECT_DEFINITION", err.Error(), ir.SourceSpan{})}
+	}
+	typeContext := graphQLTypeContext{models: modelName, enums: enumNames, versioned: versionedModelName, definitions: definitions}
 	extensionIDs := map[ir.ExtensionID]string{}
 	var diagnostics []ir.Diagnostic
 	reserveID := func(id ir.ExtensionID, owner string, span ir.SourceSpan) bool {
@@ -248,9 +276,10 @@ const (
 )
 
 type graphQLTypeContext struct {
-	models    map[string]ir.ModelID
-	enums     map[string]struct{}
-	versioned map[string]bool
+	models      map[string]ir.ModelID
+	enums       map[string]struct{}
+	versioned   map[string]bool
+	definitions map[string]ir.GraphQLTypeKind
 }
 
 func (context graphQLTypeContext) validate(value ir.GraphQLTypeIR, use typeUse, span ir.SourceSpan) []ir.Diagnostic {
@@ -275,6 +304,10 @@ func (context graphQLTypeContext) validate(value ir.GraphQLTypeIR, use typeUse, 
 	case ir.GraphQLTypeModel:
 		_, known = context.models[value.Name]
 		known = known && (use == typeComputedResult || use == typeCustomResult)
+	case ir.GraphQLTypeObject:
+		known = context.definitions[value.Name] == value.Kind && (use == typeComputedResult || use == typeCustomResult)
+	case ir.GraphQLTypeInputObject:
+		known = context.definitions[value.Name] == value.Kind && (use == typeComputedArgument || use == typeCustomArgument)
 	case ir.GraphQLTypePredicate, ir.GraphQLTypeSelector, ir.GraphQLTypeCreateInput, ir.GraphQLTypeUpdateInput, ir.GraphQLTypeUpdateManyInput:
 		_, known = context.models[value.Name]
 		known = known && use == typeCustomArgument
@@ -289,6 +322,9 @@ func (context graphQLTypeContext) validateArguments(arguments []ir.GraphQLArgume
 	seen := map[string]bool{}
 	var diagnostics []ir.Diagnostic
 	for _, argument := range arguments {
+		if argument.PresenceAware && !argument.Type.CanTrackInputPresence() {
+			diagnostics = append(diagnostics, ir.NewError("P5_EXTENSION_ARGUMENT_PRESENCE", fmt.Sprintf("argument %q has invalid input presence metadata", argument.Name), span))
+		}
 		if !validName(argument.Name) {
 			diagnostics = append(diagnostics, ir.NewError("P5_EXTENSION_ARGUMENT_NAME", fmt.Sprintf("%q is not a legal GraphQL argument name", argument.Name), span))
 		} else if seen[argument.Name] {

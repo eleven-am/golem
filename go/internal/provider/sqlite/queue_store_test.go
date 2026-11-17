@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,18 +102,18 @@ func TestQueueSchemaBootstrapIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestExistingQueueSchemaAddsResourceLeaseSnapshots(t *testing.T) {
+func TestPartialCurrentQueueSchemaRefusesResourceLeaseRepair(t *testing.T) {
 	fixture := newQueueFixture(t)
 	for _, column := range []string{"resource_name", "resource_cost", "resource_capacity"} {
 		if _, err := fixture.Database.ExecContext(context.Background(), `ALTER TABLE `+sqliteQueueTable+` DROP COLUMN "`+column+`"`); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := fixture.Store.EnsureSchema(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := fixture.Store.EnsureSchema(context.Background()); !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+		t.Fatalf("partial current schema was repaired: %v", err)
 	}
 	var columns int
-	if err := fixture.Database.GetContext(context.Background(), &columns, `SELECT COUNT(*) FROM pragma_table_info('golem_queue') WHERE "name" IN ('resource_name','resource_cost','resource_capacity')`); err != nil || columns != 3 {
+	if err := fixture.Database.GetContext(context.Background(), &columns, `SELECT COUNT(*) FROM pragma_table_info('golem_queue') WHERE "name" IN ('resource_name','resource_cost','resource_capacity')`); err != nil || columns != 0 {
 		t.Fatalf("resource snapshot columns=%d error=%v", columns, err)
 	}
 }
@@ -219,7 +220,7 @@ func TestQueueTableWithoutIdentityKeyIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.EnsureSchema(ctx); err == nil || !strings.Contains(err.Error(), "primary key") {
+	if err := store.EnsureSchema(ctx); !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
 		t.Fatalf("bootstrap accepted a queue table without its identity key: %v", err)
 	}
 }
@@ -246,6 +247,12 @@ func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
 	}
 	store, err := provider.QueueStore(database, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureSchema(ctx); !errors.Is(err, queueprovider.ErrStorageUpgradeRequired) {
+		t.Fatalf("legacy startup did not refuse: %v", err)
+	}
+	if _, err := store.(queueprovider.StorageMaintenance).UpgradeStorage(ctx); err != nil {
 		t.Fatal(err)
 	}
 	providertest.LegacySchemaUpgradesInPlace(t, providertest.Fixture{Store: store, Database: database}, "legacy-live", "legacy-done")

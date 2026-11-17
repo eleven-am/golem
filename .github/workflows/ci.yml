@@ -43,6 +43,7 @@ jobs:
             client:
               - client/**
               - go/**
+              - scripts/verify.sh
               - .github/workflows/ci.yml
             dependencies:
               - go/go.mod
@@ -103,7 +104,42 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          cache-dependency-path: |
+            go/go.sum
+            go/compatibility/testdata/priorrelease/go.sum
+            go/compatibility/testdata/framesgqlgen/go.sum
+            go/internal/generate/pipeline/session_acceptance_test.go
+      - name: Cache pinned compatibility consumer dependencies
+        if: matrix.step == 'database-bound'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_dir=$(mktemp -d)
+          trap 'rm -rf "$consumer_dir"' EXIT
+          cp go/compatibility/testdata/priorrelease/go.mod "$consumer_dir/go.mod"
+          cp go/compatibility/testdata/priorrelease/go.sum "$consumer_dir/go.sum"
+          (cd "$consumer_dir" && GOWORK=off go mod download all)
+          cp go/compatibility/testdata/framesgqlgen/go.mod "$consumer_dir/go.mod"
+          cat go/go.sum go/compatibility/testdata/framesgqlgen/go.sum > "$consumer_dir/go.sum"
+          # Model the generated server's imports so tidy also caches the
+          # dependency test imports needed by first-generation normalization.
+          printf '%s\n' 'package compatibilitycache' 'import _ "github.com/eleven-am/golem/go/graphql"' > "$consumer_dir/cache.go"
+          (cd "$consumer_dir" && GOWORK=off go mod edit "-replace=github.com/eleven-am/golem/go=$GITHUB_WORKSPACE/go" && GOWORK=off go mod tidy && GOWORK=off go mod download all)
+          # Keep the shared-session consumer's existing application pin in its
+          # test owner. Cache it without changing Golem's module dependencies.
+          pond_version=$(sed -nE 's/^const sessionConsumerPondVersion = "(v[^"]+)"$/\1/p' go/internal/generate/pipeline/session_acceptance_test.go)
+          [[ "$pond_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'invalid shared-session PondSocket pin' >&2; exit 1; }
+          printf '%s\n' 'module example.test/sessioncache' '' 'go 1.26' > "$consumer_dir/go.mod"
+          cp go/go.sum "$consumer_dir/go.sum"
+          printf '%s\n' 'package compatibilitycache' 'import (' '_ "github.com/eleven-am/golem/go/runtime"' '_ "github.com/eleven-am/pondsocket/go/pondsocket"' ')' > "$consumer_dir/cache.go"
+          (cd "$consumer_dir" && GOWORK=off go mod edit '-require=github.com/eleven-am/golem/go@v0.0.0' "-replace=github.com/eleven-am/golem/go=$GITHUB_WORKSPACE/go" "-require=github.com/eleven-am/pondsocket/go/pondsocket@$pond_version" && GOWORK=off go mod tidy && GOWORK=off go mod download all)
+      - name: Cache pinned Core NATS image
+        if: matrix.step == 'database-bound' || matrix.step == 'oracle-failure-and-event'
+        timeout-minutes: 5
+        run: scripts/verify.sh cache-nats
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
       - run: scripts/verify.sh "$STEP"
         env:
           STEP: ${{ matrix.step }}
@@ -269,3 +305,6 @@ jobs:
         run: npm run check:no-use-effect
       - run: npm run build
       - run: npm test
+      - name: Generated browser acceptance with staged writer
+        timeout-minutes: 45
+        run: ../scripts/verify.sh writer4-client

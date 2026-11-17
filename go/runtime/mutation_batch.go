@@ -352,7 +352,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	if ctx == nil || app == nil || binding == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, batchOperationName(program.Operation()), programModel(program), golem.FieldID{}, "batch execution is unavailable", nil)
 	}
-	scope, err := beginBatchExecution(ctx, app.database, app.provider, binding, program.TransactionRequirement())
+	scope, err := beginBatchExecution(ctx, app.database, app.provider, binding, program.TransactionRequirement(), app.registry)
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
@@ -451,6 +451,12 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	}
 	verification, err := prepared.VerifyAuthorized(authorized, applied, after, 0)
 	if err != nil {
+		return 0, publicBatchExecutionError(program, err)
+	}
+	if err := recordBatchHistory(ctx, state, app.registry, app.provider, verification); err != nil {
+		return 0, publicBatchExecutionError(program, err)
+	}
+	if err := recordAppliedCascadeHistory(ctx, scope.queryer, app.registry, app.provider, app.mutationLimits, state, cascade); err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if program.SemanticIndexed() {
@@ -680,7 +686,7 @@ func (failure *batchCardinalityError) Error() string {
 	return fmt.Sprintf("batch role %d returned %d rows; expected %d", failure.role, failure.got, failure.want)
 }
 
-func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policyir.Provider, binding *executionBinding, requirement mutationbatch.TransactionRequirement) (batchExecutionScope, error) {
+func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policyir.Provider, binding *executionBinding, requirement mutationbatch.TransactionRequirement, registry *schema.Registry) (batchExecutionScope, error) {
 	if database == nil || binding == nil {
 		return batchExecutionScope{}, fmt.Errorf("batch database and execution binding are required")
 	}
@@ -730,11 +736,15 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 		if requirement != mutationbatch.PostgreSQLTransaction {
 			return batchExecutionScope{}, fmt.Errorf("PostgreSQL batch has the wrong transaction requirement")
 		}
-		transaction, err := database.BeginTxx(ctx, nil)
+		plan, err := planMutationTransaction(provider, registry, mutationTransactionDefaultIsolation(provider, registry))
 		if err != nil {
 			return batchExecutionScope{}, err
 		}
-		active := transactionExecution(database, transaction)
+		active, err := beginMutationTransaction(ctx, database, plan)
+		if err != nil {
+			return batchExecutionScope{}, err
+		}
+		transaction := active.transaction
 		queryer, err := active.queryerFor(database)
 		if err != nil {
 			active.close()

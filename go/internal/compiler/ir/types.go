@@ -15,7 +15,7 @@ const (
 	// ModelIR format that owns the optimistic-concurrency field identity.
 	// Released v1 documents remain owned by CanonicalDecodeModelV1.
 	OptimisticConcurrencyModelFormatVersionRequired uint16 = 2
-	ContractFormatVersion                           uint16 = 7
+	ContractFormatVersion                           uint16 = 8
 	// OptimisticConcurrencyContractFormatVersionRequired freezes the first
 	// ContractIR format that carries the optimistic-concurrency projection.
 	OptimisticConcurrencyContractFormatVersionRequired uint16 = 6
@@ -76,6 +76,7 @@ type RawSchemaDecl struct {
 	Providers       []RawProviderRef    `json:"providers"`
 	EmbeddingSpaces []RawEmbeddingSpace `json:"embeddingSpaces"`
 	Models          []RawModelRef       `json:"models"`
+	DataIncarnation bool                `json:"dataIncarnation,omitempty"`
 	WithoutGraphQL  bool                `json:"withoutGraphQL,omitempty"`
 	Span            SourceSpan          `json:"span"`
 }
@@ -649,6 +650,7 @@ type CompilationIR struct {
 }
 
 type ContractIR struct {
+	DataIncarnation   *DataIncarnationContractIR  `json:"dataIncarnation,omitempty"`
 	FormatVersion     uint16                      `json:"formatVersion"`
 	GraphQLABIVersion uint16                      `json:"graphqlAbiVersion"`
 	Models            []ModelContractIR           `json:"models"`
@@ -656,6 +658,7 @@ type ContractIR struct {
 	Methods           []AttachedMethodIR          `json:"methods"`
 	CustomOperations  []CustomOperationContractIR `json:"customOperations"`
 	TxOperations      []TxOperationContractIR     `json:"txOperations,omitempty"`
+	GraphQLTypes      []GraphQLTypeDefinitionIR   `json:"graphqlTypes,omitempty"`
 }
 
 type ModelContractIR struct {
@@ -680,6 +683,8 @@ type ModelContractIR struct {
 	Operations          []Operation               `json:"operations"`
 	Subscriptions       bool                      `json:"subscriptions"`
 	Event               *EventContractIR          `json:"event,omitempty"`
+	ScopeTemplates      []ScopeTemplateIR         `json:"scopeTemplates,omitempty"`
+	FactTemplates       []FactTemplateIR          `json:"factTemplates,omitempty"`
 	Aggregation         *AggregationContractIR    `json:"aggregation,omitempty"`
 	ScopedReads         bool                      `json:"scopedReads"`
 	Limits              LimitContractIR           `json:"limits"`
@@ -860,6 +865,8 @@ const (
 	GraphQLTypeEnum            GraphQLTypeKind = "enum"
 	GraphQLTypeModel           GraphQLTypeKind = "model"
 	GraphQLTypeList            GraphQLTypeKind = "list"
+	GraphQLTypeObject          GraphQLTypeKind = "object"
+	GraphQLTypeInputObject     GraphQLTypeKind = "inputObject"
 	GraphQLTypePredicate       GraphQLTypeKind = "predicate"
 	GraphQLTypeSelector        GraphQLTypeKind = "selector"
 	GraphQLTypeCreateInput     GraphQLTypeKind = "createInput"
@@ -868,7 +875,7 @@ const (
 )
 
 // GraphQLTypeIR is a closed transport type tree. Name is populated only for a
-// scalar, enum, model, or model-derived input leaf; list nodes contain exactly
+// scalar, enum, model, named object, or model-derived input leaf; list nodes contain exactly
 // one Element.
 type GraphQLTypeIR struct {
 	Kind     GraphQLTypeKind `json:"kind"`
@@ -879,8 +886,27 @@ type GraphQLTypeIR struct {
 }
 
 type GraphQLArgumentContractIR struct {
-	Name string        `json:"name"`
-	Type GraphQLTypeIR `json:"type"`
+	Name          string        `json:"name"`
+	Type          GraphQLTypeIR `json:"type"`
+	PresenceAware bool          `json:"presenceAware,omitempty"`
+}
+
+type GraphQLTypeDefinitionIR struct {
+	// Page marks a compiler-owned continuation wrapper, with no application Go witness.
+	Page    bool                   `json:"page,omitempty"`
+	Kind    GraphQLTypeKind        `json:"kind"`
+	Name    string                 `json:"name"`
+	Go      GoNamedTypeIR          `json:"go"`
+	Fields  []GraphQLObjectFieldIR `json:"fields"`
+	RowGate string                 `json:"rowGate,omitempty"`
+	OneOf   bool                   `json:"oneOf,omitempty"`
+}
+
+type GraphQLObjectFieldIR struct {
+	Name          string        `json:"name"`
+	GoName        string        `json:"goName"`
+	Type          GraphQLTypeIR `json:"type"`
+	PresenceAware bool          `json:"presenceAware,omitempty"`
 }
 
 type ComputedFieldContractIR struct {
@@ -911,14 +937,24 @@ type CustomOperationCapability string
 
 const CustomOperationCallerOnly CustomOperationCapability = "callerOnly"
 
+type CustomPaginationIR struct {
+	DefaultTake   uint32        `json:"defaultTake"`
+	MaxTake       uint32        `json:"maxTake"`
+	MaxCandidates uint32        `json:"maxCandidates"`
+	Revision      string        `json:"revision"`
+	Item          GraphQLTypeIR `json:"item"`
+}
+
 type CustomOperationContractIR struct {
-	ExtensionID ExtensionID                 `json:"extensionId"`
-	Operation   CustomOperationKind         `json:"operation"`
-	Name        string                      `json:"name"`
-	Arguments   []GraphQLArgumentContractIR `json:"arguments"`
-	Result      GraphQLTypeIR               `json:"result"`
-	Resolver    AttachedMethodIR            `json:"resolver"`
-	Capability  CustomOperationCapability   `json:"capability"`
+	Invalidation *CustomInvalidationIR       `json:"invalidation,omitempty"`
+	Pagination   *CustomPaginationIR         `json:"pagination,omitempty"`
+	ExtensionID  ExtensionID                 `json:"extensionId"`
+	Operation    CustomOperationKind         `json:"operation"`
+	Name         string                      `json:"name"`
+	Arguments    []GraphQLArgumentContractIR `json:"arguments"`
+	Result       GraphQLTypeIR               `json:"result"`
+	Resolver     AttachedMethodIR            `json:"resolver"`
+	Capability   CustomOperationCapability   `json:"capability"`
 }
 
 type TxOperationContractIR struct {

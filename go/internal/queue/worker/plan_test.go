@@ -74,6 +74,11 @@ func dispatchOnce(t *testing.T, worker *Worker) {
 
 func claimFor(claims []queueprovider.ClaimOptions, jobType string) (queueprovider.ClaimOptions, bool) {
 	for _, claim := range claims {
+		// Plan bounds are checked on the normal lane; interactive claims also
+		// carry the independent three-admission scheduling quota.
+		if claim.Priority != int(queue.PriorityNormal) {
+			continue
+		}
 		for _, name := range claim.Types {
 			if name == jobType {
 				return claim, true
@@ -209,12 +214,16 @@ func TestPlanApplyWaitsForTheDispatchRoundInFlight(t *testing.T) {
 	fixture := newHarness(t)
 	entered := make(chan struct{})
 	proceed := make(chan struct{})
-	var limits []int
+	type laneClaim struct {
+		priority int
+		limit    int
+	}
+	var claims []laneClaim
 	var mutex sync.Mutex
 	store := stubStore{Store: fixture.store, claim: func(_ context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {
 		mutex.Lock()
-		limits = append(limits, options.Limit)
-		first := len(limits) == 1
+		claims = append(claims, laneClaim{priority: options.Priority, limit: options.Limit})
+		first := len(claims) == 1
 		mutex.Unlock()
 		if first {
 			close(entered)
@@ -253,8 +262,14 @@ func TestPlanApplyWaitsForTheDispatchRoundInFlight(t *testing.T) {
 	dispatchOnce(t, worker)
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(limits) != 2 || limits[0] != 4 || limits[1] != 2 {
-		t.Fatalf("claim limits across the swap = %v", limits)
+	want := []laneClaim{
+		{priority: int(queue.PriorityInteractive), limit: 3},
+		{priority: int(queue.PriorityNormal), limit: 4},
+		{priority: int(queue.PriorityInteractive), limit: 2},
+		{priority: int(queue.PriorityNormal), limit: 2},
+	}
+	if !reflect.DeepEqual(claims, want) {
+		t.Fatalf("lane claims across the swap = %v, want %v", claims, want)
 	}
 }
 

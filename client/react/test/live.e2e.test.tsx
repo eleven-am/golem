@@ -156,7 +156,7 @@ describe('useGolemQuery against the social server', () => {
   it('shows a row created by useGolemMutation in the list', async () => {
     const one = await fresh()
     const tag = token()
-    const mutate = vi.spyOn(one.client, 'mutate')
+    const prepare = vi.spyOn(one.client.mutations, 'prepare')
     one.render(
       <GolemProvider client={one.client}>
         <PostList token={tag} />
@@ -167,8 +167,10 @@ describe('useGolemQuery against the social server', () => {
     await settled(one)
     one.container.querySelector<HTMLButtonElement>('[data-testid="compose"]')?.click()
     await until(() => listed(one).includes(`${tag}-composed`), 15_000, 'mutation row')
-    expect(mutate).toHaveBeenCalledTimes(1)
-    expect(mutate.mock.calls[0]?.[0]).toBe(CREATE)
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(prepare.mock.calls[0]?.[0]).toBe(CREATE)
+    expect(prepare.mock.calls[0]?.[1]).toMatchObject({ data: { title: `${tag}-composed`, published: true } })
+    expect(listed(one).filter((title) => title === `${tag}-composed`)).toHaveLength(1)
   })
 
   it('updates a component that only reads the live status', async () => {

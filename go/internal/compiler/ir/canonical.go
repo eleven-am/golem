@@ -23,6 +23,9 @@ func CanonicalRaw(input RawDeclIR) ([]byte, error) {
 }
 
 func CanonicalModel(input ModelIR) ([]byte, error) {
+	if _, err := ModelDataIncarnation(input); err != nil {
+		return nil, err
+	}
 	if input.FormatVersion != ModelFormatVersion {
 		return nil, fmt.Errorf("model IR version %d is unsupported; expected %d", input.FormatVersion, ModelFormatVersion)
 	}
@@ -51,6 +54,9 @@ func CanonicalContract(input ContractIR) ([]byte, error) {
 		return nil, err
 	}
 	normalizeContract(&copy)
+	if err := ValidateGraphQLTypeDefinitions(copy); err != nil {
+		return nil, err
+	}
 	return json.Marshal(copy)
 }
 
@@ -529,9 +535,27 @@ func normalizeModel(model *ModelIR) {
 }
 
 func normalizeContract(contract *ContractIR) {
+	sort.Slice(contract.GraphQLTypes, func(i, j int) bool { return contract.GraphQLTypes[i].Name < contract.GraphQLTypes[j].Name })
+	for index := range contract.GraphQLTypes {
+		definition := &contract.GraphQLTypes[index]
+		sort.Slice(definition.Fields, func(i, j int) bool { return definition.Fields[i].Name < definition.Fields[j].Name })
+		for field := range definition.Fields {
+			normalizeGraphQLType(&definition.Fields[field].Type)
+		}
+	}
 	sort.Slice(contract.Models, func(i, j int) bool { return contract.Models[i].ModelID < contract.Models[j].ModelID })
 	for i := range contract.Models {
 		model := &contract.Models[i]
+		sort.Slice(model.ScopeTemplates, func(a, b int) bool { return model.ScopeTemplates[a].ID < model.ScopeTemplates[b].ID })
+		for index := range model.ScopeTemplates {
+			template := &model.ScopeTemplates[index]
+			sort.Slice(template.Parameters, func(a, b int) bool { return template.Parameters[a].Name < template.Parameters[b].Name })
+		}
+		sort.Slice(model.FactTemplates, func(a, b int) bool { return model.FactTemplates[a].ID < model.FactTemplates[b].ID })
+		for index := range model.FactTemplates {
+			template := &model.FactTemplates[index]
+			sort.Slice(template.Parameters, func(a, b int) bool { return template.Parameters[a].Name < template.Parameters[b].Name })
+		}
 		if len(model.Fields) == 0 && len(model.FieldModes) != 0 {
 			model.Fields = append([]FieldContractIR(nil), model.FieldModes...)
 		}
@@ -674,11 +698,24 @@ func normalizeContract(contract *ContractIR) {
 	})
 	for operationIndex := range contract.CustomOperations {
 		operation := &contract.CustomOperations[operationIndex]
+		if operation.Invalidation != nil {
+			sort.Slice(operation.Invalidation.Dependencies, func(i, j int) bool {
+				return operation.Invalidation.Dependencies[i].ID < operation.Invalidation.Dependencies[j].ID
+			})
+			for index := range operation.Invalidation.Dependencies {
+				dependency := &operation.Invalidation.Dependencies[index]
+				sort.Slice(dependency.Fields, func(i, j int) bool { return dependency.Fields[i] < dependency.Fields[j] })
+				sort.Slice(dependency.FactTemplateIDs, func(i, j int) bool { return dependency.FactTemplateIDs[i] < dependency.FactTemplateIDs[j] })
+			}
+		}
 		sort.Slice(operation.Arguments, func(i, j int) bool { return operation.Arguments[i].Name < operation.Arguments[j].Name })
 		if operation.Arguments == nil {
 			operation.Arguments = []GraphQLArgumentContractIR{}
 		}
 		normalizeGraphQLType(&operation.Result)
+		if operation.Pagination != nil {
+			normalizeGraphQLType(&operation.Pagination.Item)
+		}
 		for argumentIndex := range operation.Arguments {
 			normalizeGraphQLType(&operation.Arguments[argumentIndex].Type)
 		}

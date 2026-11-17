@@ -100,6 +100,7 @@ type Backoff struct {
 // Job is one claimed unit of work handed to a handler.
 type Job[T any] struct {
 	ID          JobID
+	Priority    Priority
 	Payload     T
 	Attempt     int
 	MaxAttempts int
@@ -133,6 +134,7 @@ type Resource struct {
 // undecoded payload.
 type Meta struct {
 	ID          JobID
+	Priority    Priority
 	Attempt     int
 	MaxAttempts int
 	EnqueuedAt  time.Time
@@ -250,7 +252,7 @@ func Register[T any](registry *Registry, definition Definition[T]) (Type[T], err
 		if err := json.Unmarshal(payload, &value); err != nil {
 			return Terminal(Fail(CodePayloadInvalid, "job %s payload does not decode", meta.ID))
 		}
-		return handle(ctx, Job[T]{ID: meta.ID, Payload: value, Attempt: meta.Attempt, MaxAttempts: meta.MaxAttempts, EnqueuedAt: meta.EnqueuedAt})
+		return handle(ctx, Job[T]{ID: meta.ID, Priority: meta.Priority, Payload: value, Attempt: meta.Attempt, MaxAttempts: meta.MaxAttempts, EnqueuedAt: meta.EnqueuedAt})
 	}
 	registry.mutex.Lock()
 	defer registry.mutex.Unlock()
@@ -263,9 +265,10 @@ func Register[T any](registry *Registry, definition Definition[T]) (Type[T], err
 }
 
 type enqueueOptions struct {
-	delay  time.Duration
-	dedupe string
-	err    error
+	priority Priority
+	delay    time.Duration
+	dedupe   string
+	err      error
 }
 
 // Option adjusts one enqueue.
@@ -296,6 +299,7 @@ func Dedupe(key string) Option {
 // Pending is one validated job awaiting a durable enqueue. It can only be
 // produced by the Type its payload belongs to.
 type Pending struct {
+	priority     Priority
 	typeName     string
 	payload      []byte
 	delay        time.Duration
@@ -331,7 +335,7 @@ func (jobType Type[T]) New(payload T, options ...Option) (Pending, error) {
 	if resolved.err != nil {
 		return Pending{}, resolved.err
 	}
-	pending := Pending{typeName: jobType.name, payload: encoded, delay: resolved.delay, dedupeKey: resolved.dedupe, maxAttempts: jobType.maxAttempts}
+	pending := Pending{typeName: jobType.name, priority: resolved.priority, payload: encoded, delay: resolved.delay, dedupeKey: resolved.dedupe, maxAttempts: jobType.maxAttempts}
 	if jobType.exclusiveBy != nil {
 		key := jobType.exclusiveBy(payload)
 		if len(key) > MaximumKeyBytes {
@@ -363,11 +367,15 @@ func (pending Pending) MaxAttempts() int { return pending.maxAttempts }
 
 // Limits bound one worker. Zero-valued fields take the package defaults.
 type Limits struct {
-	Concurrency   int
-	ClaimBatch    int
-	LeaseDuration time.Duration
-	PollInterval  time.Duration
-	ShutdownGrace time.Duration
+	Concurrency int
+	// ReservedInteractive keeps this many local slots unavailable to Normal
+	// admissions. Zero reserves none; it must be less than Concurrency.
+	// Reservation neither preempts work nor reserves shared resource capacity.
+	ReservedInteractive int
+	ClaimBatch          int
+	LeaseDuration       time.Duration
+	PollInterval        time.Duration
+	ShutdownGrace       time.Duration
 	// AbandonGrace is how long the worker waits for a handler to return after
 	// cancelling it, on shutdown and on a per-type Timeout. Go cannot kill a
 	// goroutine: once the grace elapses the worker stops waiting and records
@@ -411,16 +419,17 @@ func DefaultLimits() Limits {
 func (limits Limits) Resolved() Limits {
 	defaults := DefaultLimits()
 	return Limits{
-		Concurrency:     orDefaultInt(limits.Concurrency, defaults.Concurrency),
-		ClaimBatch:      orDefaultInt(limits.ClaimBatch, defaults.ClaimBatch),
-		LeaseDuration:   orDefaultDuration(limits.LeaseDuration, defaults.LeaseDuration),
-		PollInterval:    orDefaultDuration(limits.PollInterval, defaults.PollInterval),
-		ShutdownGrace:   orDefaultDuration(limits.ShutdownGrace, defaults.ShutdownGrace),
-		AbandonGrace:    orDefaultDuration(limits.AbandonGrace, defaults.AbandonGrace),
-		MaxPayloadBytes: orDefaultInt(limits.MaxPayloadBytes, defaults.MaxPayloadBytes),
-		RetentionAge:    orDefaultDuration(limits.RetentionAge, defaults.RetentionAge),
-		RetentionEvery:  orDefaultDuration(limits.RetentionEvery, defaults.RetentionEvery),
-		RetentionRows:   orDefaultInt(limits.RetentionRows, defaults.RetentionRows),
+		Concurrency:         orDefaultInt(limits.Concurrency, defaults.Concurrency),
+		ReservedInteractive: limits.ReservedInteractive,
+		ClaimBatch:          orDefaultInt(limits.ClaimBatch, defaults.ClaimBatch),
+		LeaseDuration:       orDefaultDuration(limits.LeaseDuration, defaults.LeaseDuration),
+		PollInterval:        orDefaultDuration(limits.PollInterval, defaults.PollInterval),
+		ShutdownGrace:       orDefaultDuration(limits.ShutdownGrace, defaults.ShutdownGrace),
+		AbandonGrace:        orDefaultDuration(limits.AbandonGrace, defaults.AbandonGrace),
+		MaxPayloadBytes:     orDefaultInt(limits.MaxPayloadBytes, defaults.MaxPayloadBytes),
+		RetentionAge:        orDefaultDuration(limits.RetentionAge, defaults.RetentionAge),
+		RetentionEvery:      orDefaultDuration(limits.RetentionEvery, defaults.RetentionEvery),
+		RetentionRows:       orDefaultInt(limits.RetentionRows, defaults.RetentionRows),
 	}
 }
 
@@ -435,6 +444,8 @@ func (limits Limits) RetentionEnabled() bool {
 func (limits Limits) Validate() error {
 	resolved := limits.Resolved()
 	switch {
+	case resolved.ReservedInteractive < 0 || resolved.ReservedInteractive >= resolved.Concurrency:
+		return Fail(CodeConfigInvalid, "ReservedInteractive must be nonnegative and below Concurrency")
 	case limits.Concurrency < 0 || limits.ClaimBatch < 0 || limits.MaxPayloadBytes < 0 || limits.RetentionRows < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative bound")
 	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0 || limits.RetentionAge < 0:
@@ -478,6 +489,7 @@ const (
 // Status is the sanitized operator view of one job. It carries no payload.
 type Status struct {
 	ID              JobID
+	Priority        Priority
 	Type            string
 	State           State
 	Attempt         int
@@ -570,6 +582,9 @@ type Operator interface {
 	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
 	CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
 	Cancel(ctx context.Context, id JobID) (bool, error)
+	// Promote changes pending work only, never lowers priority, and preserves
+	// its delay unless ReadyNow is explicit. Leased and terminal jobs are unchanged.
+	Promote(ctx context.Context, id JobID, priority Priority, options ...PromotionOption) (bool, error)
 	CancelMany(ctx context.Context, ids []JobID) (int, error)
 	Requeue(ctx context.Context, id JobID) (bool, error)
 	RequeueFailed(ctx context.Context, ids []JobID) (int, error)

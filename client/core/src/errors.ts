@@ -55,6 +55,16 @@ export class GolemUnauthenticatedError extends GolemError {
   }
 }
 
+export class GolemSessionError extends GolemError {
+  readonly dispatched: boolean
+  readonly reason: 'not-ready' | 'changed' | 'disposed'
+  constructor(reason: 'not-ready' | 'changed' | 'disposed', dispatched: boolean) {
+    super({ message: reason === 'not-ready' ? 'await client.ready() before sending a mutation' : 'the client session changed or was disposed', extensions: { code: reason === 'not-ready' ? 'GOLEM_CLIENT_NOT_READY' : reason === 'disposed' ? 'GOLEM_CLIENT_DISPOSED' : 'GOLEM_SESSION_CHANGED' } }, false)
+    this.reason = reason
+    this.dispatched = dispatched
+  }
+}
+
 export class GolemHttpError extends GolemError {
   readonly status: number
 
@@ -164,7 +174,7 @@ export function toGolemError(shape: GraphQLErrorShape): GolemError {
 export interface GraphQLResponseBody {
   readonly data?: unknown
   readonly errors?: ReadonlyArray<GraphQLErrorShape>
-  readonly extensions?: { readonly golem?: { readonly commit?: unknown; readonly live?: unknown } }
+  readonly extensions?: { readonly golem?: { readonly commit?: unknown; readonly live?: unknown; readonly dataIncarnation?: unknown; readonly discover?: unknown; readonly protocol?: unknown; readonly contract?: unknown; readonly manifestVersion?: unknown; readonly capabilities?: unknown } }
 }
 
 export function commitState(body: GraphQLResponseBody): CommitState | undefined {

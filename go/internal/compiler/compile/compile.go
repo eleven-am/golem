@@ -25,6 +25,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/gomodfile"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	"github.com/eleven-am/golem/go/internal/policy/scopecontract"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
@@ -184,9 +185,19 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, interpreted.GraphQLModels)...)
 	}
 	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, scopecontract.Normalize(&resolved.Compilation, interpreted.ScopeTemplates)...)
+	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, scopecontract.NormalizeFacts(&resolved.Compilation, interpreted.FactTemplates)...)
+	}
+	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, rowversion.Apply(&resolved.Compilation)...)
 	}
 	if !hasErrors(diagnostics) {
+		// Publish transport definitions together with their declarations. Base
+		// model normalization validates the contract it receives; a synthetic
+		// page definition without its owning PageQuery is an invalid contract.
+		resolved.Compilation.Contract.GraphQLTypes = interpreted.GraphQLTypes
 		diagnostics = append(diagnostics, graphqlextension.Normalize(&resolved.Compilation, interpreted.GraphQLComputed, interpreted.GraphQLCustom)...)
 	}
 	if !hasErrors(diagnostics) {
@@ -404,6 +415,9 @@ func finish(raw ir.RawDeclIR, compilation ir.CompilationIR, diagnostics []ir.Dia
 
 func disabledGraphQLExtensions(interpreted methods.Result) []ir.Diagnostic {
 	var diagnostics []ir.Diagnostic
+	for _, definition := range interpreted.GraphQLTypes {
+		diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_DISABLED_EXTENSION", fmt.Sprintf("type %q exists only to extend GraphQL, which WithoutGraphQL disables", definition.Name), ir.SourceSpan{}))
+	}
 	for _, declaration := range interpreted.GraphQLComputed {
 		diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_DISABLED_EXTENSION", fmt.Sprintf("computed field %q exists only to extend GraphQL, which WithoutGraphQL disables", declaration.Field.Name), declaration.Span))
 	}
@@ -586,6 +600,12 @@ func canonicalCompilation(compilation ir.CompilationIR) (ir.CompilationIR, error
 
 func validateComplete(compilation ir.CompilationIR) []ir.Diagnostic {
 	diagnostics := compilerconcurrency.ValidateAgreement(compilation)
+	if err := ir.ValidateDataIncarnation(compilation); err != nil {
+		diagnostics = append(diagnostics, ir.NewError("P12_DATA_INCARNATION_CONTRACT", err.Error(), ir.SourceSpan{}))
+	}
+	if err := scopecontract.Validate(compilation.Model, compilation.Contract); err != nil {
+		diagnostics = append(diagnostics, ir.NewError("P05_SCOPE_CONTRACT", err.Error(), ir.SourceSpan{}))
+	}
 	semanticOwners := make(map[ir.ObjectID]struct{})
 	for _, extension := range compilation.Model.Extensions {
 		if extension.Kind == semanticcontract.IndexKind {

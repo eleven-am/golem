@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	postgresqlQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
-	postgresqlQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
+	postgresqlQueueColumns = `"id","priority","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
+	postgresqlQueueSummary = `"id","priority","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	postgresqlQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=clock_timestamp())`
 
 	postgresqlQueueDedupePredicate = `(status = ANY (ARRAY['pending'::text, 'leased'::text]))`
@@ -66,12 +66,24 @@ func newQueueStore(database *sqlx.DB, namespace physical.PhysicalName, unmanaged
 func (store *queueStore) table() string { return qualified(store.namespace, "golem_queue") }
 
 func (store *queueStore) EnsureSchema(ctx context.Context) error {
+	transaction, err := store.database.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	if err := store.lockStorage(ctx, transaction); err != nil {
+		return err
+	}
+	before, err := store.inspectStorage(ctx, transaction)
+	if err != nil {
+		return err
+	}
+	if before.Version != queueprovider.StorageAbsent && before.Version != queueprovider.StoragePriorityV1 {
+		return queueprovider.ErrStorageUpgradeRequired
+	}
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS ` + store.table() + ` ("id" TEXT PRIMARY KEY NOT NULL,"type" TEXT NOT NULL,"payload" BYTEA NOT NULL,"status" TEXT NOT NULL,"attempt_count" BIGINT NOT NULL DEFAULT 0,"max_attempts" BIGINT NOT NULL,"available_at" TIMESTAMPTZ NOT NULL,"lease_token" TEXT,"lease_until" TIMESTAMPTZ,"resource_name" TEXT,"resource_cost" BIGINT,"resource_capacity" BIGINT,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" TIMESTAMPTZ,"last_code" TEXT,"enqueued_at" TIMESTAMPTZ NOT NULL,"finished_at" TIMESTAMPTZ,"updated_at" TIMESTAMPTZ NOT NULL)`,
-		`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_name" TEXT`,
-		`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_cost" BIGINT`,
-		`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_capacity" BIGINT`,
-		`CREATE INDEX IF NOT EXISTS "golem_queue_claim" ON ` + store.table() + ` ("status","available_at","type")`,
+		`CREATE TABLE IF NOT EXISTS ` + store.table() + ` ("id" TEXT PRIMARY KEY NOT NULL,"priority" BIGINT NOT NULL DEFAULT 0 CHECK ("priority" IN (0,1)),"type" TEXT NOT NULL,"payload" BYTEA NOT NULL,"status" TEXT NOT NULL,"attempt_count" BIGINT NOT NULL DEFAULT 0,"max_attempts" BIGINT NOT NULL,"available_at" TIMESTAMPTZ NOT NULL,"lease_token" TEXT,"lease_until" TIMESTAMPTZ,"resource_name" TEXT,"resource_cost" BIGINT,"resource_capacity" BIGINT,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" TIMESTAMPTZ,"last_code" TEXT,"enqueued_at" TIMESTAMPTZ NOT NULL,"finished_at" TIMESTAMPTZ,"updated_at" TIMESTAMPTZ NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS "golem_queue_claim" ON ` + store.table() + ` ("status","priority","available_at","id","type")`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS "golem_queue_dedupe" ON ` + store.table() + ` ("dedupe_key") WHERE "status" IN ('pending','leased')`,
 		`CREATE INDEX IF NOT EXISTS "golem_queue_exclusive" ON ` + store.table() + ` ("exclusive_key") WHERE "status"='leased'`,
 	}
@@ -83,44 +95,21 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 		)
 	}
 	for _, statement := range statements {
-		if _, err := store.database.ExecContext(ctx, statement); err != nil {
+		if _, err := transaction.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: create durable job storage: %w", err)
 		}
 	}
-	if err := store.verifyQueueGuarantees(ctx); err != nil {
+	after, err := store.inspectStorage(ctx, transaction)
+	if err != nil {
 		return err
 	}
-	if _, err := store.database.ExecContext(ctx, `UPDATE `+store.table()+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
+	if after.Version != queueprovider.StoragePriorityV1 || after.HistoryIndexes != (before.HistoryIndexes || store.history) {
+		return queueprovider.ErrStorageUnrecognized
+	}
+	if _, err := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
 		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: align existing lease eligibility: %w", err)
 	}
-	return nil
-}
-
-func (store *queueStore) verifyQueueGuarantees(ctx context.Context) error {
-	var keys []string
-	if err := store.database.SelectContext(ctx, &keys, `SELECT a.attname FROM pg_catalog.pg_constraint con CROSS JOIN LATERAL unnest(con.conkey) AS key(attnum) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE con.conrelid=$1::regclass AND con.contype='p' ORDER BY a.attname`, store.table()); err != nil {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect queue identity: %w", err)
-	}
-	if len(keys) != 1 || keys[0] != "id" {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing golem_queue table has primary key %v, want [id]", keys)
-	}
-	var shape struct {
-		Table         string `db:"table_name"`
-		Method        string `db:"method"`
-		Unique        bool   `db:"indisunique"`
-		Valid         bool   `db:"indisvalid"`
-		Ready         bool   `db:"indisready"`
-		NullsDistinct bool   `db:"nulls_distinct"`
-		Columns       string `db:"columns"`
-		Predicate     string `db:"predicate"`
-	}
-	if err := store.database.GetContext(ctx, &shape, `SELECT ct.relname AS "table_name",am.amname AS "method",i.indisunique,i.indisvalid,i.indisready,NOT i.indnullsnotdistinct AS "nulls_distinct",COALESCE((SELECT string_agg(COALESCE(a.attname,'<expression>'),',' ORDER BY key.position) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS key(attnum,position) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=key.attnum),'') AS "columns",COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') AS "predicate" FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE ci.relnamespace=$1::regnamespace AND ci.relname='golem_queue_dedupe'`, `"`+string(store.namespace)+`"`); err != nil {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect golem_queue_dedupe: %w", err)
-	}
-	if shape.Table != "golem_queue" || shape.Method != "btree" || !shape.Unique || !shape.Valid || !shape.Ready || !shape.NullsDistinct || shape.Columns != "dedupe_key" || shape.Predicate != postgresqlQueueDedupePredicate {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing golem_queue_dedupe index (table=%s method=%s unique=%t valid=%t ready=%t nulls_distinct=%t columns=%s predicate=%q) does not enforce UNIQUE (dedupe_key) WHERE %s; drop it so the queue can create its own", shape.Table, shape.Method, shape.Unique, shape.Valid, shape.Ready, shape.NullsDistinct, shape.Columns, shape.Predicate, postgresqlQueueDedupePredicate)
-	}
-	return store.verifyQueueIndexDefinitions(ctx)
+	return transaction.Commit()
 }
 
 type postgresqlQueueIndex struct {
@@ -132,50 +121,13 @@ type postgresqlQueueIndex struct {
 func postgresqlQueueIndexDefinitions() map[string]postgresqlQueueIndex {
 	return map[string]postgresqlQueueIndex{
 		"golem_queue_pkey":      {unique: true, columns: "id"},
-		"golem_queue_claim":     {columns: "status,available_at,type"},
+		"golem_queue_claim":     {columns: "status,priority,available_at,id,type"},
 		"golem_queue_dedupe":    {unique: true, columns: "dedupe_key", predicate: postgresqlQueueDedupePredicate},
 		"golem_queue_exclusive": {columns: "exclusive_key", predicate: `(status = 'leased'::text)`},
 		"golem_queue_enqueued":  {columns: "enqueued_at,id"},
 		"golem_queue_history":   {columns: "status,enqueued_at,id"},
 		"golem_queue_terminal":  {columns: "status,finished_at,id"},
 	}
-}
-
-func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error {
-	var rows []struct {
-		Name      string `db:"relname"`
-		Unique    bool   `db:"indisunique"`
-		Valid     bool   `db:"indisvalid"`
-		Ready     bool   `db:"indisready"`
-		Method    string `db:"amname"`
-		Columns   string `db:"columns"`
-		Predicate string `db:"predicate"`
-	}
-	const indexesSQL = `SELECT ci.relname,i.indisunique,i.indisvalid,i.indisready,am.amname,COALESCE((SELECT string_agg(COALESCE(a.attname,'<expression>'),',' ORDER BY key.position) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS key(attnum,position) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=key.attnum),'') AS "columns",COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') AS "predicate" FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE ci.relnamespace=$1::regnamespace AND ct.relname='golem_queue' ORDER BY ci.relname`
-	if err := store.database.SelectContext(ctx, &rows, indexesSQL, `"`+string(store.namespace)+`"`); err != nil {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect queue indexes: %w", err)
-	}
-	definitions := postgresqlQueueIndexDefinitions()
-	required := map[string]bool{"golem_queue_pkey": true, "golem_queue_claim": true, "golem_queue_dedupe": true, "golem_queue_exclusive": true}
-	if store.history {
-		for _, object := range physical.QueueHistoryIndexes() {
-			required[string(object.Name)] = true
-		}
-	}
-	for _, row := range rows {
-		want, known := definitions[row.Name]
-		if !known {
-			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: index %q on golem_queue was not created by golem; drop it", row.Name)
-		}
-		delete(required, row.Name)
-		if row.Method != "btree" || row.Unique != want.unique || !row.Valid || !row.Ready || row.Columns != want.columns || row.Predicate != want.predicate {
-			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing %s index (method=%s unique=%t valid=%t ready=%t columns=%s predicate=%q) does not match golem's (method=btree unique=%t columns=%s predicate=%q); drop it so the queue can create its own", row.Name, row.Method, row.Unique, row.Valid, row.Ready, row.Columns, row.Predicate, want.unique, want.columns, want.predicate)
-		}
-	}
-	for name := range required {
-		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: golem index %q is absent from golem_queue; a relation of that name elsewhere in schema %q blocks its creation, so drop that relation and let the queue create its own", name, store.namespace)
-	}
-	return nil
 }
 
 func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (queueprovider.EnqueueResult, error) {
@@ -190,8 +142,8 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: read database time: %w", err)
 	}
 	if request.DedupeKey == "" {
-		result, err := executor.ExecContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8) ON CONFLICT DO NOTHING`,
-			request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now)
+		result, err := executor.ExecContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at","priority") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8,$9) ON CONFLICT DO NOTHING`,
+			request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now, request.Priority)
 		if err != nil {
 			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert job: %w", err)
 		}
@@ -205,8 +157,8 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 		return queueprovider.EnqueueResult{ID: request.ID, State: queueprovider.StatePending, Inserted: true}, nil
 	}
 	var stored queueprovider.EnqueueResult
-	err := executor.QueryRowContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=EXCLUDED."dedupe_key" RETURNING "id","status"`,
-		request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now).Scan(&stored.ID, &stored.State)
+	err := executor.QueryRowContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at","priority") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8,$9) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=EXCLUDED."dedupe_key" RETURNING "id","status"`,
+		request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now, request.Priority).Scan(&stored.ID, &stored.State)
 	if err != nil {
 		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert or coalesce job: %w", err)
 	}
@@ -339,6 +291,8 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	if options.Resource != nil {
 		discoveryLimit = queueprovider.MaximumClaimJobs
 	}
+	arguments = append(arguments, options.Priority)
+	typePredicate = `(` + typePredicate + `) AND job."priority"=$` + strconv.Itoa(len(arguments))
 	candidates, err := store.lockClaimCandidates(ctx, transaction, typePredicate, arguments, discoveryLimit)
 	if err != nil {
 		return nil, err
@@ -860,6 +814,7 @@ func (store *queueStore) fenced(ctx context.Context, executor queueprovider.Exec
 
 type postgresqlQueueRow struct {
 	ID                string         `db:"id"`
+	Priority          int            `db:"priority"`
 	Type              string         `db:"type"`
 	Payload           []byte         `db:"payload"`
 	Status            string         `db:"status"`
@@ -879,6 +834,7 @@ type postgresqlQueueRow struct {
 
 type postgresqlQueueSummaryRow struct {
 	ID                string         `db:"id"`
+	Priority          int            `db:"priority"`
 	Type              string         `db:"type"`
 	Status            string         `db:"status"`
 	AttemptCount      int64          `db:"attempt_count"`
@@ -892,7 +848,7 @@ type postgresqlQueueSummaryRow struct {
 
 func (row postgresqlQueueRow) record() queueprovider.Record {
 	return queueprovider.Record{
-		ID: row.ID, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
+		ID: row.ID, Priority: row.Priority, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
 		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 		AvailableAt: row.AvailableAt.UTC().Truncate(time.Microsecond), LeaseToken: row.LeaseToken.String,
 		LeaseUntil: postgresqlOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
@@ -904,7 +860,7 @@ func (row postgresqlQueueRow) record() queueprovider.Record {
 
 func (row postgresqlQueueSummaryRow) summary() queueprovider.Summary {
 	return queueprovider.Summary{
-		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
+		ID: row.ID, Priority: row.Priority, Type: row.Type, State: queueprovider.State(row.Status),
 		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 		AvailableAt: row.AvailableAt.UTC().Truncate(time.Microsecond), CancelRequested: row.CancelRequestedAt.Valid,
 		LastCode: row.LastCode.String, EnqueuedAt: row.EnqueuedAt.UTC().Truncate(time.Microsecond),

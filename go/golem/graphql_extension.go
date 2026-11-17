@@ -16,6 +16,41 @@ type GraphQLModel[M any] struct{ _ func() M }
 type GraphQLSchema struct{ _ graphqlSchemaMarker }
 type graphqlSchemaMarker struct{}
 
+// Output explicitly publishes a named Go struct as a GraphQL output type.
+// Registrations are interpreted statically before resolver signatures.
+// Scalar members are resolver-owned disclosures. Embedded Row members are
+// reloaded under caller authorization; ObjectRowGate can also gate their siblings.
+func Output[T any](_ *GraphQLSchema, _ string, _ ...GraphQLObjectOption) {}
+
+// Input explicitly publishes a named Go struct as a GraphQL input type.
+func Input[T any](_ *GraphQLSchema, _ string, _ ...GraphQLInputOption) {}
+
+// GraphQLInputOption is sealed to static input-object declarations.
+type GraphQLInputOption interface{ graphqlInputOption() }
+type graphqlInputOption struct{}
+
+func (graphqlInputOption) graphqlInputOption() {}
+
+// InputOneOf requires exactly one supplied, non-null member. Every member of
+// the registered input must be nullable, matching GraphQL's @oneOf contract.
+func InputOneOf() GraphQLInputOption { return graphqlInputOption{} }
+
+// GraphQLObjectOption is sealed to static output-field and row-gate declarations.
+type GraphQLObjectOption interface{ graphqlObjectOption() }
+type graphqlObjectOption struct{}
+
+func (graphqlObjectOption) graphqlObjectOption() {}
+
+// ObjectFieldMaxItems bounds an output list field by its Go field name.
+// Nested lists require one positive maximum per level, from outermost inward.
+func ObjectFieldMaxItems(_ string, _ uint32, _ ...uint32) GraphQLObjectOption {
+	return graphqlObjectOption{}
+}
+
+// ObjectRowGate omits an output object when the named Go Row field is absent
+// or unreadable by the caller, even if the client did not select that field.
+func ObjectRowGate(_ string) GraphQLObjectOption { return graphqlObjectOption{} }
+
 // GraphQLResultType is sealed to the constructors in this package. A schema
 // declaration therefore cannot smuggle an arbitrary named GraphQL type into
 // the compiler.
@@ -51,11 +86,16 @@ func GraphQLDateTime() GraphQLType[time.Time] { return GraphQLType[time.Time]{} 
 func GraphQLBytes() GraphQLType[[]byte]       { return GraphQLType[[]byte]{} }
 func GraphQLJSON() GraphQLType[JSON[any]]     { return GraphQLType[JSON[any]]{} }
 
-// GraphQLObject, GraphQLEnum, and GraphQLList form the closed composite output
+// GraphQLObject, GraphQLOutput, GraphQLEnum, and GraphQLList form the closed composite output
 // vocabulary. Registration and enum declarations are validated by the static
 // compiler before these become ContractIR.
 func GraphQLObject[M any]() GraphQLType[Row[M]] { return GraphQLType[Row[M]]{} }
-func GraphQLEnum[E ~string]() GraphQLType[E]    { return GraphQLType[E]{} }
+
+// GraphQLOutput references a Go struct explicitly registered with Output.
+// It uses the same DTO contract for computed fields and custom operations.
+// T may be a pointer to that struct; NonNull then rejects nil results.
+func GraphQLOutput[T any]() GraphQLType[T]   { return GraphQLType[T]{} }
+func GraphQLEnum[E ~string]() GraphQLType[E] { return GraphQLType[E]{} }
 func GraphQLList[T any](_ GraphQLType[T], _ uint32) GraphQLType[[]T] {
 	return GraphQLType[[]T]{}
 }

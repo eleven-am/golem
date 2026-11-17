@@ -990,9 +990,13 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	ledgerName := ""
 	outboxName := ""
 	deliveryName := ""
+	incarnation := false
 	var expectedRelations []string
 	for _, object := range expected.Objects {
 		switch object.Kind {
+		case physical.SystemDataIncarnation:
+			incarnation = true
+			expectedRelations = append(expectedRelations, string(object.Name))
 		case physical.SystemMigrationLedger:
 			ledgerName = string(object.Name)
 			expectedRelations = append(expectedRelations, ledgerName)
@@ -1088,6 +1092,11 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	}
 	if extraIndexes != 0 {
 		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: ledgerName, Table: ledgerName}, "postgresql migration ledger has %d unmanaged indexes", extraIndexes)
+	}
+	if incarnation {
+		if err := introspectDataIncarnation(ctx, q, expected.Namespace.Name); err != nil {
+			return physical.SystemSchema{}, err
+		}
 	}
 	if outboxName != "" {
 		if err := introspectOutbox(ctx, q, expected.Namespace.Name, outboxName); err != nil {

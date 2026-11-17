@@ -896,8 +896,18 @@ func (f *fixture) unsupportedRelation() {
 
 	f.trace.reset()
 	invalid := f.graphql(`query { relationGroupByPosts(by: [comments]) { count } }`)
-	if len(invalid.Errors) != 1 || fmt.Sprint(invalid.Errors[0].Extensions["code"]) != "GRAPHQL_VALIDATION_FAILED" {
+	if len(invalid.Errors) != 1 {
 		f.t.Fatalf("unsupported GraphQL relation response=%s", invalid.Raw)
+	}
+	// Known input enums use the actionable input diagnostic contract, while
+	// the unsupported dimension must still stop before analytics execution.
+	want := map[string]any{
+		"code": "BAD_USER_INPUT", "reason": "INVALID_VALUE",
+		"argument": "by[0]", "expectedType": "PostRelationGroupField!",
+		"allowedValues": []any{"authorHandle", "authorID", "published", "visibility"},
+	}
+	if !reflect.DeepEqual(invalid.Errors[0].Extensions, want) {
+		f.t.Fatalf("unsupported GraphQL relation response=%s; want extensions=%v", invalid.Raw, want)
 	}
 	for _, value := range f.trace.snapshot() {
 		if value.Kind == observe.KindAnalytics {

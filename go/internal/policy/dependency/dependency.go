@@ -77,6 +77,17 @@ func Empty(model ir.ModelID) (Tree, error) {
 // Collect merges one or more conditions rooted at the same model. Inputs are
 // traversed in caller order and are never mutated.
 func Collect(conditions ...ir.Condition) (Plan, error) {
+	return collect(true, conditions...)
+}
+
+// CollectReadable omits physical fact bodies. Event observers must route those
+// bodies through source-scoped fact observation, rather than a target-readable
+// dependency judge. Physical hydration and mutation images keep using Collect.
+func CollectReadable(conditions ...ir.Condition) (Plan, error) {
+	return collect(false, conditions...)
+}
+
+func collect(includeFacts bool, conditions ...ir.Condition) (Plan, error) {
 	if len(conditions) == 0 {
 		return Plan{}, fmt.Errorf("policy dependency: at least one condition is required")
 	}
@@ -85,8 +96,8 @@ func Collect(conditions ...ir.Condition) (Plan, error) {
 		return Plan{}, fmt.Errorf("policy dependency: zero root model")
 	}
 	collector := planCollector{
-		model: model,
-		tree:  Tree{model: model},
+		model: model, includeFacts: includeFacts,
+		tree: Tree{model: model},
 	}
 	for index, condition := range conditions {
 		if err := condition.Validate(); err != nil {
@@ -107,16 +118,23 @@ func Collect(conditions ...ir.Condition) (Plan, error) {
 }
 
 type planCollector struct {
-	model       ir.ModelID
-	requires    []ir.FieldID
-	requireSeen map[ir.FieldID]struct{}
-	tree        Tree
+	model        ir.ModelID
+	requires     []ir.FieldID
+	requireSeen  map[ir.FieldID]struct{}
+	tree         Tree
+	includeFacts bool
 }
 
 func (collector *planCollector) walk(condition ir.Condition, local bool) error {
 	switch condition.Kind() {
 	case ir.ConditionConstant:
 		return nil
+	case ir.ConditionFact:
+		if !collector.includeFacts {
+			return nil
+		}
+		_, body, _ := condition.Fact()
+		return collector.walk(body, local)
 	case ir.ConditionLogical:
 		_, children, _ := condition.Logical()
 		for _, child := range children {
@@ -138,7 +156,7 @@ func (collector *planCollector) walk(condition ir.Condition, local bool) error {
 		}
 		children := Tree{model: target}
 		if child != nil {
-			nested := planCollector{model: target, tree: Tree{model: target}}
+			nested := planCollector{model: target, tree: Tree{model: target}, includeFacts: collector.includeFacts}
 			if err := nested.walk(*child, false); err != nil {
 				return err
 			}

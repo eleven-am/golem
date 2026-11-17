@@ -312,14 +312,8 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	if query == "" {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query text is empty")
 	}
-	if take < 1 || take > MaximumResults {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, MaximumResults)
-	}
-	selected, ok := manager.index(model, name)
-	if !ok {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
-	}
-	if err := validateCandidates(selected, candidates); err != nil {
+	selected, err := manager.rankIndex(model, name, candidates, take)
+	if err != nil {
 		return nil, err
 	}
 	input, err := embedding.NewQueryInput("query", query)
@@ -343,6 +337,57 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	}
 	rankSpan.SetAggregateCount(int64(len(ranks)))
 	return ranks, nil
+}
+
+// QueryVectorOn ranks a prepared vector without calling an embedding provider.
+// The supplied queryer keeps ranking inside the caller's transaction snapshot.
+func (manager *Manager) QueryVectorOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name string, query embedding.QueryVector, candidates Candidates, take int) (result []Rank, resultErr error) {
+	if manager == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
+	}
+	if queryer == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query executor is not configured")
+	}
+	invalidContext := ctx == nil
+	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
+	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
+	if invalidContext {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic vector search requires a non-nil context")
+	}
+	selected, err := manager.rankIndex(model, name, candidates, take)
+	if err != nil {
+		return nil, err
+	}
+	if err := query.Validate(); err != nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query vector is invalid")
+	}
+	if query.Specification() != selected.Specification {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query vector does not match the index embedding specification")
+	}
+	vector, err := manager.vectorValue(query.Vector())
+	if err != nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query vector cannot be encoded for exact cosine distance")
+	}
+	ranks, err := manager.rankVectorOn(ctx, queryer, selected, vector, candidates, "", take)
+	if err != nil {
+		return nil, err
+	}
+	rankSpan.SetAggregateCount(int64(len(ranks)))
+	return ranks, nil
+}
+
+func (manager *Manager) rankIndex(model ir.ModelID, name string, candidates Candidates, take int) (Index, error) {
+	if take < 1 || take > MaximumResults {
+		return Index{}, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, MaximumResults)
+	}
+	selected, ok := manager.index(model, name)
+	if !ok {
+		return Index{}, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
+	}
+	if err := validateCandidates(selected, candidates); err != nil {
+		return Index{}, err
+	}
+	return selected, nil
 }
 
 func validateCandidates(index Index, candidates Candidates) error {
@@ -397,14 +442,8 @@ func (manager *Manager) QueryByKeyOn(ctx context.Context, queryer sqlx.QueryerCo
 	if sourceKey == "" {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic similarity source key is empty")
 	}
-	if take < 1 || take > MaximumResults {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, MaximumResults)
-	}
-	selected, ok := manager.index(model, name)
-	if !ok {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
-	}
-	if err := validateCandidates(selected, candidates); err != nil {
+	selected, err := manager.rankIndex(model, name, candidates, take)
+	if err != nil {
 		return nil, err
 	}
 	if err := validateCandidates(selected, source); err != nil {

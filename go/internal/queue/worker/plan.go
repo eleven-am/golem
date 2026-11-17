@@ -98,6 +98,9 @@ func (worker *Worker) resolvePlan(base *activePlan, request queue.Plan) (*active
 		concurrency: orInt(request.Concurrency, base.concurrency), claimBatch: orInt(request.ClaimBatch, base.claimBatch),
 		maxConcurrent: maps.Clone(base.maxConcurrent), capacities: maps.Clone(base.capacities), appliedAt: time.Now(),
 	}
+	if next.concurrency <= worker.limits.ReservedInteractive {
+		return nil, queue.Fail(queue.CodeConfigInvalid, "plan concurrency must exceed ReservedInteractive")
+	}
 	for name, limit := range request.MaxConcurrent {
 		if _, registered := base.maxConcurrent[name]; !registered {
 			return nil, queue.Fail(queue.CodeConfigInvalid, "plan names unregistered job type %q", name)

@@ -61,7 +61,7 @@ func (app *App[P, A]) failJob(callbacks map[string]JobFailed[P, A]) *queueworker
 	}
 	return &queueworker.FailHook{Has: has, Run: func(ctx context.Context, record queueprovider.Record, code string) (bool, error) {
 		callback := callbacks[record.Type]
-		meta := queue.Meta{ID: queue.JobID(record.ID), Attempt: int(record.AttemptCount), MaxAttempts: int(record.MaxAttempts), EnqueuedAt: record.EnqueuedAt}
+		meta := queue.Meta{ID: queue.JobID(record.ID), Priority: queue.Priority(record.Priority), Attempt: int(record.AttemptCount), MaxAttempts: int(record.MaxAttempts), EnqueuedAt: record.EnqueuedAt}
 		var changed bool
 		err := SystemTransaction(ctx, System[P, A]{app: app}, func(transaction *SystemTx[P, A]) error {
 			executor, err := transaction.system.executor.transactionFor(app.database)

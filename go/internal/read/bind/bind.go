@@ -56,6 +56,29 @@ func request(frozen golem.FrozenReadRequest, registry *schema.Registry, provider
 		return readir.Request{}, fail(CodeInput, model, golem.FieldID{}, "unknown read operation", nil)
 	}
 	input := readir.RequestInput{Operation: operation, Model: policyir.ModelID(model)}
+	if correlation, fields, present := frozen.RuntimeIdentityCorrelation(); present {
+		modelFact, _ := registry.Model(model)
+		key := modelFact.PrimaryKey()
+		if len(fields) == 0 || len(fields) != len(key) {
+			return readir.Request{}, fail(CodeInput, model, golem.FieldID{}, "hydration identity is not the complete primary key", nil)
+		}
+		boundFields := make([]policyir.FieldID, len(fields))
+		for index, field := range fields {
+			if field != key[index] {
+				return readir.Request{}, fail(CodeField, model, field, "hydration identity differs from the ordered primary key", nil)
+			}
+			boundFields[index] = policyir.FieldID(field)
+		}
+		condition, err := policybind.ExactPredicate(correlation, registry, providers)
+		if err != nil {
+			return readir.Request{}, fail(CodeInput, model, golem.FieldID{}, "hydration key values do not match the active schema", err)
+		}
+		hydration, err := readir.NewIdentityHydration(condition, boundFields)
+		if err != nil {
+			return readir.Request{}, fail(CodeInput, model, golem.FieldID{}, "hydration key correlation is invalid", err)
+		}
+		input.Hydration = &hydration
+	}
 	switch frozen.ProjectionMode() {
 	case golem.ProjectionDefault:
 		input.Projection = readir.ProjectionDefault

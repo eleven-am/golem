@@ -49,7 +49,7 @@ func (fixture *harness) enqueue(t *testing.T, pending queue.Pending) string {
 		t.Fatal(err)
 	}
 	stored, err := fixture.store.Enqueue(context.Background(), nil, queueprovider.EnqueueRequest{
-		ID: identity, Type: pending.TypeName(), Payload: pending.Payload(), MaxAttempts: pending.MaxAttempts(),
+		ID: identity, Priority: int(pending.Priority()), Type: pending.TypeName(), Payload: pending.Payload(), MaxAttempts: pending.MaxAttempts(),
 		Delay: pending.Delay(), DedupeKey: pending.DedupeKey(), ExclusiveKey: pending.ExclusiveKey(),
 	})
 	if err != nil {
@@ -1462,22 +1462,27 @@ func TestDispatchCarriesTheCompleteResourcePlan(t *testing.T) {
 	if _, err := worker.dispatch(context.Background(), context.Background(), nil, &handlers); err != nil {
 		t.Fatal(err)
 	}
-	if len(claims) != 2 {
-		t.Fatalf("claim groups=%#v", claims)
+	if len(claims) != 4 {
+		t.Fatalf("claim groups across both lanes=%#v", claims)
 	}
-	var pooled, unpooled *queueprovider.ClaimOptions
-	for index := range claims {
-		if claims[index].Resource == nil {
-			unpooled = &claims[index]
-		} else {
-			pooled = &claims[index]
+	for _, priority := range []int{0, 1} {
+		var pooled, unpooled *queueprovider.ClaimOptions
+		for index := range claims {
+			if claims[index].Priority != priority {
+				continue
+			}
+			if claims[index].Resource == nil {
+				unpooled = &claims[index]
+			} else {
+				pooled = &claims[index]
+			}
 		}
-	}
-	if unpooled == nil || len(unpooled.Types) != 1 || unpooled.Types[0] != "gate.unpooled" {
-		t.Fatalf("unpooled claim=%#v", unpooled)
-	}
-	if pooled == nil || pooled.Resource.Name != "gate.shared" || pooled.Resource.Concurrency != 3 || len(pooled.Types) != 2 || pooled.Types[0] != "gate.resource.one" || pooled.Types[1] != "gate.resource.two" || len(pooled.Resource.Costs) != 2 || pooled.Resource.Costs["gate.resource.one"] != 2 || pooled.Resource.Costs["gate.resource.two"] != 1 {
-		t.Fatalf("pooled claim=%#v", pooled)
+		if unpooled == nil || len(unpooled.Types) != 1 || unpooled.Types[0] != "gate.unpooled" {
+			t.Fatalf("lane %d unpooled claim=%#v", priority, unpooled)
+		}
+		if pooled == nil || pooled.Resource.Name != "gate.shared" || pooled.Resource.Concurrency != 3 || len(pooled.Types) != 2 || pooled.Types[0] != "gate.resource.one" || pooled.Types[1] != "gate.resource.two" || len(pooled.Resource.Costs) != 2 || pooled.Resource.Costs["gate.resource.one"] != 2 || pooled.Resource.Costs["gate.resource.two"] != 1 {
+			t.Fatalf("lane %d pooled claim=%#v", priority, pooled)
+		}
 	}
 }
 

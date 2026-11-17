@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
@@ -46,8 +46,8 @@ func refusalsForEntry(selector string) []refusal {
 		{"clock-malformed", readir.FindMany, filter("clock", map[string]any{"equals": "25:00:00"}), "Input where.clock.equals on Entry is not a valid Time", "where.clock.equals"},
 		{"instant-malformed", readir.FindMany, filter("instant", map[string]any{"equals": "yesterday"}), "Input where.instant.equals on Entry is not a valid DateTime", "where.instant.equals"},
 		{"payload-not-canonical", readir.FindMany, filter("payload", map[string]any{"equals": "not base64!"}), "Input where.payload.equals on Entry is not a canonical Bytes", "where.payload.equals"},
-		{"state-unknown", readir.FindMany, filter("state", map[string]any{"equals": "Nope"}), "Input where.state.equals on Entry is not a value of enum Kind", "where.state.equals"},
-		{"state-wrong-kind", readir.FindMany, filter("state", map[string]any{"equals": 5}), "Input where.state.equals on Entry must be of type Kind", "where.state.equals"},
+		{"state-unknown", readir.FindMany, filter("state", map[string]any{"equals": "Nope"}), "Input where.state.equals on Entry is not a value of enum Kind; allowed values: KindAlpha, KindOmega", "where.state.equals"},
+		{"state-wrong-kind", readir.FindMany, filter("state", map[string]any{"equals": 5}), "Input where.state.equals on Entry must be of type Kind; allowed values: KindAlpha, KindOmega", "where.state.equals"},
 		{"list-has-wrong-kind", readir.FindMany, filter("tags", map[string]any{"has": 5}), "Input where.tags.has on Entry must be of type String", "where.tags.has"},
 		{"list-element-wrong-kind", readir.FindMany, filter("tags", map[string]any{"hasEvery": []any{"a", 5}}), "Input where.tags.hasEvery[1] on Entry must be of type String", "where.tags.hasEvery[1]"},
 		{"list-too-long", readir.FindMany, filter("tags", map[string]any{"hasSome": []any{"a", "b", "c", "d"}}), "Input exceeds MaxListItems (3)", ""},
@@ -77,7 +77,7 @@ func refusalsForEntry(selector string) []refusal {
 		{"order-unknown-field", readir.FindMany, map[string]any{"orderBy": []any{map[string]any{"nope": "asc"}}}, "Input orderBy[0].nope on Entry is not available for this operation", "orderBy[0].nope"},
 		{"order-relation-field", readir.FindMany, map[string]any{"orderBy": []any{map[string]any{"owner": "asc"}}}, "Input orderBy[0].owner on Entry is not available for this operation", "orderBy[0].owner"},
 		{"order-entry-wrong-shape", readir.FindMany, map[string]any{"orderBy": []any{"text"}}, "Input orderBy[0] on Entry has the wrong kind of value", "orderBy[0]"},
-		{"order-not-a-list", readir.FindMany, map[string]any{"orderBy": "text"}, "Argument orderBy on Entry has the wrong kind of value", "orderBy"},
+		{"order-not-a-list", readir.FindMany, map[string]any{"orderBy": "text"}, "Argument orderBy on Entry must be a list of type [EntryOrderByInput!]; example: [{amount: asc}]", "orderBy"},
 		{"order-too-long", readir.FindMany, map[string]any{"orderBy": []any{map[string]any{"text": "asc"}, map[string]any{"flag": "asc"}, map[string]any{"small": "asc"}, map[string]any{"integer": "asc"}}}, "Input exceeds MaxListItems (3)", ""},
 		{"distinct-unknown", readir.FindMany, map[string]any{"distinct": []any{"nope"}}, "Input distinct[0] on Entry is not available for this operation", "distinct[0]"},
 		{"distinct-wrong-kind", readir.FindMany, map[string]any{"distinct": []any{5}}, "Input distinct[0] on Entry is not available for this operation", "distinct[0]"},
@@ -200,4 +200,23 @@ func mustCondition(t *testing.T, binder *Binder, model compilerir.ModelDeclIR) p
 		t.Fatal("request lost its predicate")
 	}
 	return where
+}
+
+func TestOrderExampleExcludesRowVersionField(t *testing.T) {
+	model := compilerir.ModelDeclIR{Fields: []compilerir.FieldIR{
+		{ID: "version", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: compilerir.RowVersionColumn}},
+		{ID: "id", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: "id"}},
+	}}
+	contract := compilerir.ModelContractIR{GraphQLName: "Article", Fields: []compilerir.FieldContractIR{
+		{FieldID: "version", GraphQLName: "_version"},
+		{FieldID: "id", GraphQLName: "id"},
+	}}
+	// _version sorts first and is readable on output, but is omitted from SDL's
+	// OrderByInput. Schema examples must therefore choose the next input field.
+	state := &inputState{}
+	_, err := state.orderBy(model, contract, map[string]any{"id": "asc"}, "orderBy")
+	var failure *compileerr.Error
+	if !errors.As(err, &failure) || failure.Example() != "[{id: asc}]" || failure.ExpectedType() != "[ArticleOrderByInput!]" {
+		t.Fatalf("row-version order example: %v", err)
+	}
 }

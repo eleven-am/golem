@@ -3,18 +3,20 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
+	"github.com/eleven-am/golem/go/internal/typedvalue"
 )
 
 // BindGeneratedComputed is the generated-code bridge from a statically checked
@@ -129,6 +131,10 @@ func generatedArguments[A any](arguments []ComputedArgument) (A, error) {
 		}
 		converted, err := coercePreparedValue(value, field.Type)
 		if err != nil {
+			var overflow *preparedScalarRangeError
+			if errors.As(err, &overflow) {
+				return result, golem.InputError(golem.ReasonInvalidValue, "graphqlArguments", name, "GraphQL argument "+name+" exceeds its numeric range", err)
+			}
 			return result, fmt.Errorf("GraphQL argument %s: %w", name, err)
 		}
 		target.Field(index).Set(converted)
@@ -144,11 +150,7 @@ func generatedArgumentName(field reflect.StructField) string {
 	if tag := field.Tag.Get("golem"); strings.HasPrefix(tag, "graphql=") {
 		return strings.TrimPrefix(tag, "graphql=")
 	}
-	runes := []rune(field.Name)
-	if len(runes) != 0 {
-		runes[0] = unicode.ToLower(runes[0])
-	}
-	return string(runes)
+	return graphqlcontract.LowerCamel(field.Name)
 }
 
 func eraseGeneratedRows[R any](value R) any {
@@ -186,21 +188,37 @@ func bindGeneratedCustomContract[M, C, A, R any](bundle golem.SchemaBundle, oper
 		return CustomBinding{}, err
 	}
 	var resultType compilerir.GraphQLTypeIR
+	var operationName string
 	found := false
 	for _, contract := range compilation.Contract.CustomOperations {
 		if string(contract.ExtensionID) == spec.ExtensionID && contract.Operation == compilerir.CustomOperationKind(operation) {
 			resultType, found = contract.Result, true
+			operationName = contract.Name
 			break
 		}
 	}
 	if !found {
 		return CustomBinding{}, fmt.Errorf("GraphQL custom result contract %s is absent", spec.ExtensionID)
 	}
+	leaf := resultType
+	for leaf.Kind == compilerir.GraphQLTypeList && leaf.Element != nil {
+		leaf = *leaf.Element
+	}
+	if leaf.Kind == compilerir.GraphQLTypeModel && !modelResult {
+		return CustomBinding{}, fmt.Errorf("custom model result lacks a generated descriptor witness")
+	}
 	decode := func(arguments []CustomArgument) (A, error) {
 		return generatedCustomArguments[A](arguments, conversions)
 	}
 	encode := func(value R) (any, error) {
-		return normalizeGeneratedCustomResult[M](compilation, resultType, any(value), modelResult)
+		if err := typedvalue.CheckListBounds(resultType, reflect.ValueOf(value), compilation.Contract.GraphQLTypes); err != nil {
+			label := "customQuery"
+			if operation == CustomMutation {
+				label = "customMutation"
+			}
+			return nil, typedvalue.ListItemsError(label, "custom "+string(operation)+" "+operationName, err)
+		}
+		return normalizeGeneratedResult[M](compilation, resultType, any(value), modelResult)
 	}
 	if operation == CustomQuery {
 		return BindCustomQuery(spec, decode, resolver, encode)
@@ -208,7 +226,7 @@ func bindGeneratedCustomContract[M, C, A, R any](bundle golem.SchemaBundle, oper
 	return BindCustomMutation(spec, decode, resolver, encode)
 }
 
-func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR, typ compilerir.GraphQLTypeIR, value any, modelResult bool) (any, error) {
+func normalizeGeneratedResult[M any](compilation compilerir.CompilationIR, typ compilerir.GraphQLTypeIR, value any, modelResult bool) (any, error) {
 	if value == nil {
 		if !typ.Nullable {
 			return nil, fmt.Errorf("non-null custom result is null")
@@ -223,7 +241,7 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 			}
 			return nil, nil
 		}
-		if !typ.Nullable {
+		if !typ.Nullable && typ.Kind != compilerir.GraphQLTypeObject {
 			return nil, fmt.Errorf("non-null custom result unexpectedly uses a pointer")
 		}
 		value = reflected.Elem().Interface()
@@ -235,7 +253,7 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 		}
 		result := make([]any, reflected.Len())
 		for index := range result {
-			item, err := normalizeGeneratedCustomResult[M](compilation, *typ.Element, reflected.Index(index).Interface(), modelResult)
+			item, err := normalizeGeneratedResult[M](compilation, *typ.Element, reflected.Index(index).Interface(), modelResult)
 			if err != nil {
 				return nil, fmt.Errorf("custom list item %d: %w", index, err)
 			}
@@ -245,7 +263,19 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 	}
 	if typ.Kind == compilerir.GraphQLTypeModel {
 		if !modelResult {
-			return nil, fmt.Errorf("custom model result lacks a generated descriptor witness")
+			// DTO struct identity and field types were checked statically. Erase
+			// only the sealed Row witness; supplied cells are never response data.
+			erased, ok := golem.RuntimeEraseRows(value)
+			row, rowOK := erased.(golem.RuntimeModelRow)
+			if !ok || !rowOK {
+				return nil, fmt.Errorf("embedded model %s has value %T", typ.Name, value)
+			}
+			for _, contract := range compilation.Contract.Models {
+				if contract.Exposed && contract.GraphQLName == typ.Name && string(contract.ModelID) == fmt.Sprintf("%x", row.ModelID()) {
+					return row, nil
+				}
+			}
+			return nil, fmt.Errorf("embedded row is not the declared model %s", typ.Name)
 		}
 		if semantic, ok := value.(golem.SemanticResult[M]); ok {
 			row, err := golem.RuntimeSemanticRowFromResult(semantic)
@@ -276,6 +306,30 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 			return nil, fmt.Errorf("custom enum %s has an undeclared wire value", typ.Name)
 		}
 		return name, nil
+	}
+	if typ.Kind == compilerir.GraphQLTypeObject {
+		for _, definition := range compilation.Contract.GraphQLTypes {
+			if definition.Name != typ.Name || definition.Kind != typ.Kind {
+				continue
+			}
+			if reflected.Kind() != reflect.Struct || reflected.Type().PkgPath() != definition.Go.PackagePath || reflected.Type().Name() != definition.Go.Name {
+				return nil, fmt.Errorf("custom object %s has value %T, expected %s.%s", typ.Name, value, definition.Go.PackagePath, definition.Go.Name)
+			}
+			result := make(map[string]any, len(definition.Fields))
+			for _, field := range definition.Fields {
+				item := reflected.FieldByName(field.GoName)
+				if !item.IsValid() || !item.CanInterface() {
+					return nil, fmt.Errorf("custom object %s field %s is unavailable", typ.Name, field.GoName)
+				}
+				normalized, err := normalizeGeneratedResult[M](compilation, field.Type, item.Interface(), modelResult)
+				if err != nil {
+					return nil, fmt.Errorf("custom object %s.%s: %w", typ.Name, field.Name, err)
+				}
+				result[field.Name] = normalized
+			}
+			return result, nil
+		}
+		return nil, fmt.Errorf("custom object definition %s is absent", typ.Name)
 	}
 	if typ.Kind != compilerir.GraphQLTypeScalar {
 		return nil, fmt.Errorf("custom result type %s is unsupported", typ.Kind)

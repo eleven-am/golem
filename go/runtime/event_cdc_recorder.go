@@ -40,7 +40,7 @@ func (app *App[P, A]) cdcOutboxRecorder() (*cdcOutboxRecorder, error) {
 	if app.provider != policyir.ProviderSQLite && app.provider != policyir.ProviderPostgreSQL {
 		return nil, fmt.Errorf("P7_CDC_RECORD_CONFIG: provider is unsupported")
 	}
-	return &cdcOutboxRecorder{registry: app.registry, history: app.eventSchemas, database: app.database, provider: app.provider, namespace: string(namespace), limits: app.mutationLimits, scan: app.scanDeleteFact}, nil
+	return &cdcOutboxRecorder{registry: app.registry, history: app.eventSchemas, database: app.database, provider: app.provider, namespace: string(namespace), limits: app.mutationLimits, scan: app.scanOutboxFact}, nil
 }
 
 func (recorder *cdcOutboxRecorder) RecordCDC(ctx context.Context, causation golem.CausationID, changes []eventcdc.Change, build func([]eventcdc.Stamp) ([]mutationfact.OutboxRow, error)) error {
@@ -185,7 +185,7 @@ func (recorder *cdcOutboxRecorder) stored(ctx context.Context, queryer sqlx.Quer
 	if recorder.provider == policyir.ProviderPostgreSQL {
 		mark = "$1"
 	}
-	query := `SELECT 0 AS "golem_check","event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","before_identity","after_identity","causation_id","transaction_ordinal","metadata","delete_snapshot","recorded_at" FROM "` + recorder.namespace + `"."_golem_outbox" WHERE "causation_id" = ` + mark + ` ORDER BY "transaction_ordinal"`
+	query := `SELECT 0 AS "golem_check",` + runtimeOutboxFactColumns + ` FROM "` + recorder.namespace + `"."_golem_outbox" WHERE "causation_id" = ` + mark + ` ORDER BY "transaction_ordinal"`
 	result, err := queryer.QueryxContext(ctx, query, causation)
 	if err != nil {
 		return nil, fmt.Errorf("P7_CDC_RECORD: read back: %w", err)

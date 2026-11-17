@@ -11,6 +11,7 @@ import (
 const (
 	conditionDomain            = "golem:policy-condition:v1\x00"
 	policyDomain               = "golem:policy:v1\x00"
+	policyFactsDomain          = "golem:policy:facts:v1\x00"
 	conditionFingerprintDomain = "golem:policy-condition-fingerprint:v1\x00"
 	policyFingerprintDomain    = "golem:policy-fingerprint:v1\x00"
 )
@@ -217,16 +218,55 @@ func CanonicalPolicy(policy Policy) ([]byte, error) {
 	if policy.model == (ModelID{}) {
 		return nil, fmt.Errorf("policy IR: zero policy model")
 	}
-	validated, err := NewPolicy(policy.model, policy.rules)
+	validated, err := NewPolicyWithFacts(policy.model, policy.rules, policy.facts, policy.factScope)
 	if err != nil {
 		return nil, err
 	}
 	encoder := canonicalEncoder{}
-	encoder.raw([]byte(policyDomain))
+	templateFacts := false
+	for _, fact := range validated.facts {
+		templateFacts = templateFacts || fact.binding != nil
+	}
+	if len(validated.facts) == 0 {
+		encoder.raw([]byte(policyDomain))
+	} else {
+		if templateFacts {
+			encoder.raw([]byte("golem:policy:facts:templates:v1\x00"))
+		} else if validated.factScope.binding != nil {
+			encoder.raw([]byte("golem:policy:facts:scope-template:v1\x00"))
+		} else {
+			encoder.raw([]byte(policyFactsDomain))
+		}
+	}
 	encoder.id16(validated.model)
 	encoder.count(len(validated.rules))
 	for _, rule := range validated.rules {
 		encoder.rule(rule)
+	}
+	if len(validated.facts) != 0 {
+		encoder.condition(validated.factScope.condition)
+		if binding := validated.factScope.binding; binding != nil {
+			encoder.id16(binding.TemplateID)
+			encoder.raw(binding.Template[:])
+			encoder.raw(binding.Arguments[:])
+		}
+		encoder.count(len(validated.facts))
+		for _, fact := range validated.facts {
+			encoder.id16(fact.id)
+			encoder.text(fact.name)
+			encoder.condition(fact.body)
+			if templateFacts {
+				if fact.binding == nil {
+					encoder.u8(0)
+				} else {
+					encoder.u8(1)
+					encoder.id16(fact.binding.TemplateID)
+					encoder.id16(fact.binding.ScopeTemplateID)
+					encoder.raw(fact.binding.Template[:])
+					encoder.raw(fact.binding.Arguments[:])
+				}
+			}
+		}
 	}
 	if encoder.err != nil {
 		return nil, encoder.err
@@ -483,6 +523,30 @@ func (e *canonicalEncoder) own(condition conditionNode) int {
 		split := len(e.buffer)
 		e.requirements(node.requirements)
 		return split
+	case *factReferenceNode:
+		e.id16(node.model)
+		e.id16(node.fact)
+	case *factNode:
+		e.id16(node.model)
+		e.id16(node.fact)
+		scopeFingerprint, err := FactScopeFingerprint(node.scope)
+		if err != nil {
+			e.err = err
+			return len(e.buffer)
+		}
+		e.raw(scopeFingerprint[:])
+		// A resolved fact retains its actor-bound body identity without
+		// serializing the body at every reference. Nested shared definitions
+		// would otherwise make canonicalization expand an authored DAG into
+		// an exponentially large tree.
+		fingerprint, err := ConditionFingerprint(node.body)
+		if err != nil {
+			e.err = err
+			return len(e.buffer)
+		}
+		fingerprint = boundFactBodyFingerprint(fingerprint, node.binding)
+		e.raw(fingerprint[:])
+		e.requirements(node.requirementSet())
 	default:
 		e.fail("unknown condition variant")
 	}

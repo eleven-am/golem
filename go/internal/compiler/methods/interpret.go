@@ -18,6 +18,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	"github.com/eleven-am/golem/go/internal/policy/scopecontract"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -49,6 +50,10 @@ type interpreter struct {
 	semanticIndexes map[string]bool
 	fullTextIndexes map[string]bool
 	semanticNodes   []*ast.CallExpr
+	objectTypes     map[string]ir.GraphQLTypeIR
+	scopeTemplates  []scopecontract.Declaration
+	factTemplates   []scopecontract.FactDeclaration
+	scopeIndex      *scopeIndex
 }
 
 type handleBinding struct {
@@ -87,7 +92,24 @@ func interpret(ctx context.Context, config Config) (result Result) {
 			}
 		}()
 	}
+	// Named transport registrations are shared by schema roots and model
+	// computed declarations, regardless of source or model traversal order.
+	objectTypes := make(map[string]ir.GraphQLTypeIR)
+	if !typeErrored {
+		custom, definitions, customDiagnostics := interpretGraphQLSchema(config, loaded)
+		result.GraphQLCustom = append(result.GraphQLCustom, custom...)
+		result.GraphQLTypes = definitions
+		result.Diagnostics = append(result.Diagnostics, customDiagnostics...)
+		for _, definition := range definitions {
+			if definition.Page {
+				continue
+			}
+			key := string(definition.Kind) + "\x00" + definition.Go.PackagePath + "\x00" + definition.Go.Name
+			objectTypes[key] = ir.GraphQLTypeIR{Kind: definition.Kind, Name: definition.Name}
+		}
+	}
 	models := append([]ir.ModelDeclIR(nil), config.Compilation.Model.Models...)
+	scopes := &scopeIndex{model: config.Compilation.Model, manifest: loaded.overlay.Manifest}
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	for _, model := range models {
 		pkg := loaded.packages[model.Go.PackagePath]
@@ -100,7 +122,7 @@ func interpret(ctx context.Context, config Config) (result Result) {
 		handles, handleDiagnostics := buildHandles(pkg, loaded.overlay.Manifest, model.Go.PackagePath)
 		result.Diagnostics = append(result.Diagnostics, handleDiagnostics...)
 		entry := &interpreter{
-			config: config, pkg: pkg, model: model,
+			config: config, pkg: pkg, model: model, objectTypes: objectTypes, scopeIndex: scopes,
 			engine: schemaexpr.New(model, config.Registry), vocab: vocab, handles: handles,
 			advanced: keyindex.AdvancedModelDeclarations{ModelID: model.ID}, semanticIndexes: map[string]bool{}, fullTextIndexes: map[string]bool{},
 		}
@@ -123,12 +145,11 @@ func interpret(ctx context.Context, config Config) (result Result) {
 		}
 		result.GraphQLComputed = append(result.GraphQLComputed, entry.computed...)
 		result.Extensions = append(result.Extensions, entry.extensions...)
+		result.ScopeTemplates = append(result.ScopeTemplates, entry.scopeTemplates...)
+		result.FactTemplates = append(result.FactTemplates, entry.factTemplates...)
 		result.Diagnostics = append(result.Diagnostics, entry.diagnostics...)
 	}
 	if !typeErrored {
-		custom, customDiagnostics := interpretGraphQLSchema(config, loaded)
-		result.GraphQLCustom = append(result.GraphQLCustom, custom...)
-		result.Diagnostics = append(result.Diagnostics, customDiagnostics...)
 		operations, operationDiagnostics := interpretOperations(config, loaded)
 		result.TxOperations = append(result.TxOperations, operations...)
 		result.Diagnostics = append(result.Diagnostics, operationDiagnostics...)
@@ -186,7 +207,13 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "FullTextIndex", "FullTextField", "TextFolding", "TextPrefix", "TextRanking", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLWithoutIndexSearch", "GraphQLHookOwned", "Subscriptions", "DeleteSnapshot", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "MaxItems", "TxOperation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	if function, ok := scope.Lookup("ScopeTemplate").(*types.Func); ok {
+		result.functions[function] = "ScopeTemplate"
+	}
+	if function, ok := scope.Lookup("FactTemplate").(*types.Func); ok {
+		result.functions[function] = "FactTemplate"
+	}
+	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "FullTextIndex", "FullTextField", "TextFolding", "TextPrefix", "TextRanking", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLWithoutIndexSearch", "GraphQLHookOwned", "Subscriptions", "DeleteSnapshot", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "MaxItems", "PageQuery", "PageLimits", "PageRevision", "InvalidateRows", "InvalidateFacts", "Output", "Input", "InputOneOf", "ObjectFieldMaxItems", "ObjectRowGate", "TxOperation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLOutput", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}

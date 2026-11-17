@@ -262,7 +262,7 @@ func SystemSnapshot(request readir.Request, registry *schema.Registry, limits Li
 	for index, field := range result.fields {
 		planned[field.id] = index
 	}
-	if err := hydrateDependencies(&result, tree, registry, nil, limits, true, true, 0, planned); err != nil {
+	if err := hydrateDependencies(&result, tree, registry, nil, limits, physicalDependencies, true, 0, planned); err != nil {
 		return Plan{}, err
 	}
 	if len(result.fields)+len(result.hydrations) > limits.MaxSelected {
@@ -326,12 +326,30 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	if depth > limits.MaxRelationDepth {
 		return Plan{}, failLimit(golem.LimitDepth, limits.MaxRelationDepth, request.ModelID(), "relation depth limit exceeded")
 	}
+	if where, ok := request.Where(); ok {
+		if err := validateCallerCondition(where); err != nil {
+			return Plan{}, err
+		}
+	}
 	effectiveMaxTake := modelRowCap(registry, request.ModelID(), configuredRowCap)
 	if take, ok := request.Take(); ok && effectiveMaxTake > 0 && (take > effectiveMaxTake || take < -effectiveMaxTake) {
 		return Plan{}, failLimit(golem.LimitTake, effectiveMaxTake, request.ModelID(), "take exceeds the model maximum")
 	}
 
 	model := request.ModelID()
+	hydration, identityLookup := request.IdentityHydration()
+	if identityLookup {
+		modelFact, found := registry.Model(golem.ModelID(model))
+		fields := hydration.Fields()
+		if !found || len(fields) != len(modelFact.PrimaryKey()) {
+			return Plan{}, fail(CodeInput, model, policyir.FieldID{}, "hydration identity is not the active primary key", nil)
+		}
+		for index, primary := range modelFact.PrimaryKey() {
+			if fields[index] != policyir.FieldID(primary) {
+				return Plan{}, fail(CodeInput, model, fields[index], "hydration identity differs from the ordered primary key", nil)
+			}
+		}
+	}
 	var policy policyir.Policy
 	var row policyir.Condition
 	var rawRow policyir.Condition
@@ -387,7 +405,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	}
 
 	orders := request.OrderBy()
-	if request.Operation() != readir.Count && !request.Unordered() {
+	if request.Operation() != readir.Count && !request.Unordered() && !identityLookup {
 		if modelFact, ok := registry.Model(golem.ModelID(model)); ok {
 			seenOrder := make(map[policyir.FieldID]bool, len(orders))
 			for _, order := range orders {
@@ -605,13 +623,23 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	for _, order := range result.orders {
 		injectScalarDependencies(&result, registry, []policyir.FieldID{order.FieldID()}, planned)
 	}
+	if identityLookup {
+		// These cells are used only to associate already-authorized rows with
+		// sealed candidate identities. They are never promoted to public fields.
+		injectScalarDependencies(&result, registry, hydration.Fields(), planned)
+	}
 	injectScalarDependencies(&result, registry, result.distinct, planned)
 	if len(maskConditions) != 0 {
+		var authority dependencyAuthority
+		maskConditions, authority, err = result.prepareMasks(maskConditions)
+		if err != nil {
+			return Plan{}, err
+		}
 		dependencies, dependencyErr := dependency.Collect(maskConditions...)
 		if dependencyErr != nil {
 			return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "field-mask dependencies could not be derived", dependencyErr)
 		}
-		if hydrationErr := hydrateDependencies(&result, dependencies.Dependencies(), registry, policies, limits, system, false, depth, planned); hydrationErr != nil {
+		if hydrationErr := hydrateDependencies(&result, dependencies.Dependencies(), registry, policies, limits, authority, false, depth, planned); hydrationErr != nil {
 			return Plan{}, hydrationErr
 		}
 	}
@@ -621,13 +649,18 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 		}
 		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only fields exceed the selected field limit")
 	}
+	if identityLookup {
+		// Do this after all ordinary row, caller filter, and selected-field
+		// checks. Correlation cannot discharge a caller field-read obligation.
+		return WithAdditionalWhere(result, hydration.Condition())
+	}
 	return result, nil
 }
 
 // hydrateDependencies adds the exact private record graph required by mask
 // evaluation. Public relation plans are never reused here: their caller-owned
 // where/skip/take/distinct shape must not influence authorization.
-func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system, toOneOnly bool, depth int, planned map[policyir.FieldID]int) error {
+func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, authority dependencyAuthority, toOneOnly bool, depth int, planned map[policyir.FieldID]int) error {
 	if tree.ModelID() != plan.model {
 		return fail(CodePolicy, plan.model, policyir.FieldID{}, "field-mask dependency root does not match the read model", nil)
 	}
@@ -662,7 +695,7 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 			if endpoint.Cardinality() == compilerir.RelationMany {
 				childCap = limits.MaxRelationFanout
 			}
-			child, err := dependencyReadPlan(entry.Children(), registry, policies, limits, system, toOneOnly, depth+1, childCap)
+			child, err := dependencyReadPlan(entry.Children(), registry, policies, limits, authority, toOneOnly, depth+1, childCap)
 			if err != nil {
 				return err
 			}
@@ -680,14 +713,14 @@ func hydrateDependencies(plan *Plan, tree dependency.Tree, registry *schema.Regi
 	return nil
 }
 
-func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, system, toOneOnly bool, depth, configuredRowCap int) (Plan, error) {
+func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policies PolicySet, limits Limits, authority dependencyAuthority, toOneOnly bool, depth, configuredRowCap int) (Plan, error) {
 	model := tree.ModelID()
 	if model == (policyir.ModelID{}) || depth > limits.MaxRelationDepth {
 		return Plan{}, failReason(CodeLimit, golem.ReasonPolicyInvalid, model, policyir.FieldID{}, "policy-only relation depth limit exceeded")
 	}
 	var row policyir.Condition
 	var err error
-	if system {
+	if authority == physicalDependencies {
 		row, err = policyir.NewConstant(model, true)
 	} else {
 		_, ok := policies.Policy(model)
@@ -703,7 +736,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 	if err != nil {
 		return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target predicate could not be normalized", err)
 	}
-	result := Plan{operation: readir.FindMany, model: model, where: row, anchor: row, system: system, limits: limits}
+	result := Plan{operation: readir.FindMany, model: model, where: row, anchor: row, system: authority == physicalDependencies, limits: limits}
 	effectiveRowCap := modelRowCap(registry, model, configuredRowCap)
 	if effectiveRowCap > 0 {
 		fetch := effectiveRowCap + 1
@@ -711,7 +744,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		result.resultLimit = effectiveRowCap
 	}
 	planned := make(map[policyir.FieldID]int)
-	if err := hydrateDependencies(&result, tree, registry, policies, limits, system, toOneOnly, depth, planned); err != nil {
+	if err := hydrateDependencies(&result, tree, registry, policies, limits, authority, toOneOnly, depth, planned); err != nil {
 		return Plan{}, err
 	}
 	modelFact, ok := registry.Model(golem.ModelID(model))

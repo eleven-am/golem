@@ -163,7 +163,10 @@ func TestNonVersionedRegistryEmissionBytesRemainFrozenAcrossConcurrencyBranch(t 
 		t.Fatal(err)
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(result.Source))
-	const want = "5655b1143946f9b918281e60a03f738267944b95795b58b7b710729742d80e52"
+	// This non-paged baseline includes the common transactional PromoteJob API.
+	// Removing only those two wrappers reproduces the preceding frozen digest;
+	// page declarations must leave this fixture's generated surface unchanged.
+	const want = "60f84518d465d9f0f370ee84c9d6399d47782059208fcd5855ee5e863345ea0c"
 	if digest != want {
 		t.Fatalf("non-versioned registry source digest=%s; want %s", digest, want)
 	}

@@ -95,7 +95,7 @@ FROM generate_series(0,$1-1) AS i`
 }
 
 func postgresqlClaimProbe(store *queueStore, limit int) (string, []any) {
-	return postgresqlClaimDiscovery(store.table(), `job."type" IN ($1,$2)`, []any{"type0", "type1"}, nil, limit)
+	return postgresqlClaimDiscovery(store.table(), `(job."type" IN ($1,$2)) AND job."priority"=$3`, []any{"type0", "type1", 0}, nil, limit)
 }
 
 func TestPostgreSQLClaimDiscoveryStopsAtItsLimit(t *testing.T) {

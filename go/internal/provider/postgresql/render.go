@@ -72,6 +72,8 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.System.Namespace.Name)))
 		for _, object := range normalized.System.Objects {
 			switch {
+			case physical.IsDataIncarnationSystemObjectV1(object):
+				statements = append(statements, renderDataIncarnation(normalized.System.Namespace.Name, object.Name))
 			case object.Kind == physical.SystemMigrationLedger && object.Version == 1:
 				statements = append(statements, renderLedger(normalized.System.Namespace.Name, object.Name))
 			case object.Kind == physical.SystemMigrationLock && object.Version == 1:

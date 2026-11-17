@@ -13,6 +13,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
@@ -27,27 +28,28 @@ import (
 // transaction-bound operation can never silently fall back to another App or
 // to the App's connection pool.
 type executionBinding struct {
-	database        *sqlx.DB
-	executor        sqlx.QueryerContext
-	transaction     *sqlx.Tx
-	active          atomic.Bool
-	scoped          bool
-	nextScope       atomic.Uint64
-	invalidation    atomic.Uint64
-	stateMu         sync.Mutex
-	state           *mutationState
-	stateErr        error
-	mutation        executionMutationConfig
-	observation     *observeexec.Span
-	observer        observe.Observer
-	commitMu        sync.Mutex
-	commitActions   []func()
-	operationWrites *operationWriteLog
-	serving         atomic.Bool
-	calls           usageGate
-	locks           *rowlock.Ledger
-	releaseMu       sync.Mutex
-	releases        []func()
+	database            *sqlx.DB
+	executor            sqlx.QueryerContext
+	transaction         *sqlx.Tx
+	historySerializable bool
+	active              atomic.Bool
+	scoped              bool
+	nextScope           atomic.Uint64
+	invalidation        atomic.Uint64
+	stateMu             sync.Mutex
+	state               *mutationState
+	stateErr            error
+	mutation            executionMutationConfig
+	observation         *observeexec.Span
+	observer            observe.Observer
+	commitMu            sync.Mutex
+	commitActions       []func()
+	operationWrites     *operationWriteLog
+	serving             atomic.Bool
+	calls               usageGate
+	locks               *rowlock.Ledger
+	releaseMu           sync.Mutex
+	releases            []func()
 }
 
 func (binding *executionBinding) releaseAfterTransaction(release func()) {
@@ -90,6 +92,8 @@ func (binding *executionBinding) notifyQueue() {
 type executionMutationConfig struct {
 	enabled          bool
 	provider         policyir.Provider
+	registry         *schema.Registry
+	eventSchemas     *eventSchemaHistory
 	limits           normalizedMutationLimits
 	afterCommitError func(context.Context, golem.AfterCommitFailure)
 	invalidate       func()
@@ -282,6 +286,7 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 	namespace, _ := app.registry.PhysicalSystemNamespace(publicProvider)
 	return executionMutationConfig{
 		enabled: true, provider: app.provider, limits: app.mutationLimits,
+		registry: app.registry, eventSchemas: app.eventSchemas,
 		afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution,
 		outboxNamespace: string(namespace), flushSemantic: app.flushSemanticMarks,
 		queueWake: app.queueWorker.Wake, eventWake: app.wakeEventPublisher, eventObserver: app.eventObserver,
@@ -337,7 +342,7 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 	if ctx == nil || callback == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
 	}
-	isolation, attempts, err := golem.RuntimeTransactionOptions(options)
+	isolation, attempts, err := golem.RuntimeTransactionOptionsWithDefault(options, mutationTransactionDefaultIsolation(caller.app.provider, caller.app.registry))
 	if err != nil {
 		return err
 	}
@@ -348,14 +353,18 @@ func callerTransactionAttempt[P, A any](ctx context.Context, caller *Caller[P, A
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	plan, err := planMutationTransaction(caller.app.provider, caller.app.registry, isolation)
+	if err != nil {
+		return err
+	}
 	ctx, observation := beginObservation(ctx, caller.app, golem.ModelID{}, observe.KindTransaction, observe.OperationCallerTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(caller.app.observer)
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
-	transaction, err := caller.app.database.BeginTxx(ctx, transactionBeginOptions(caller.app.provider, isolation))
+	binding, err := beginMutationTransaction(ctx, caller.app.database, plan)
 	if err != nil {
 		return transactionBeginError("caller", err)
 	}
-	binding := transactionExecution(caller.app.database, transaction)
+	transaction := binding.transaction
 	binding.observation = observation
 	binding.observer = deferredObserver
 	binding.operationWrites = &operationWriteLog{}
@@ -384,7 +393,7 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	if ctx == nil || callback == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
 	}
-	isolation, attempts, err := golem.RuntimeTransactionOptions(options)
+	isolation, attempts, err := golem.RuntimeTransactionOptionsWithDefault(options, mutationTransactionDefaultIsolation(system.app.provider, system.app.registry))
 	if err != nil {
 		return err
 	}
@@ -395,14 +404,18 @@ func systemTransactionAttempt[P, A any](ctx context.Context, system System[P, A]
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	plan, err := planMutationTransaction(system.app.provider, system.app.registry, isolation)
+	if err != nil {
+		return err
+	}
 	ctx, observation := beginObservation(ctx, system.app, golem.ModelID{}, observe.KindTransaction, observe.OperationSystemTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(system.app.observer)
 	defer finishObservationOrPanic(observation, deferredObserver, &err)
-	transaction, err := system.app.database.BeginTxx(ctx, transactionBeginOptions(system.app.provider, isolation))
+	binding, err := beginMutationTransaction(ctx, system.app.database, plan)
 	if err != nil {
 		return transactionBeginError("system", err)
 	}
-	binding := transactionExecution(system.app.database, transaction)
+	transaction := binding.transaction
 	binding.observation = observation
 	binding.observer = deferredObserver
 	if err := binding.enableMutation(mutationConfig(system.app, system.executor)); err != nil {
@@ -543,6 +556,16 @@ func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, bind
 	state, err := binding.mutationState()
 	if err != nil {
 		return err
+	}
+	switch mutationHistoryWriterVersion {
+	case mutationfact.FormatVersion:
+		// The reader release continues ordinary V3 automatic writing.
+	case mutationfact.HistoryFactVersion:
+		if err := finalizeMutationHistory(ctx, binding); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("P5_POLICY_HISTORY: automatic writer format is unsupported")
 	}
 	if err := state.flush(ctx, executor, binding.mutation); err != nil {
 		return err

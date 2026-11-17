@@ -104,14 +104,15 @@ func RuntimeBuildValidatedEvent(registry EventFactoryRegistry, input ValidatedEv
 }
 
 type callerEventSubscription[P any] struct {
-	context        context.Context
-	principal      P
-	model          golem.ModelID
-	readRequest    golem.FrozenReadRequest
-	originalWhere  *policyir.Condition
-	metadata       golem.EventModelMetadata
-	entitySelected bool
-	judge          *eventJudgeSpec
+	context         context.Context
+	principal       P
+	model           golem.ModelID
+	readRequest     golem.FrozenReadRequest
+	originalWhere   *policyir.Condition
+	metadata        golem.EventModelMetadata
+	entitySelected  bool
+	judge           *eventJudgeSpec
+	factObservation *policyir.Fingerprint
 }
 
 type callerEventStream[E any] struct{ stream *subscription.Stream[any] }
@@ -455,7 +456,7 @@ func (app *App[P, A]) eventHub(model golem.ModelID) (*subscription.ModelHub[any]
 		},
 		EvaluateState: func(ctx context.Context, notice events.Notice, _ subscription.SubscriberKey, retained any, shared any) (subscription.Evaluation[any], error) {
 			if member, isDependency := retained.(*eventDependencyMember); isDependency && member != nil {
-				return app.evaluateDependency(member, shared)
+				return app.evaluateDependency(ctx, member, shared)
 			}
 			state, ok := retained.(*callerEventSubscription[P])
 			if !ok || state == nil {

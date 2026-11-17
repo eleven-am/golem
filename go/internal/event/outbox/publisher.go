@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
-	eventcodec "github.com/eleven-am/golem/go/internal/event/codec"
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
@@ -65,12 +63,6 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.ShutdownGrace == 0 {
 		limits.ShutdownGrace = 15 * time.Second
 	}
-	if limits.MaxEncodedBytes == 0 {
-		limits.MaxEncodedBytes = eventcodec.DefaultMaxEncodedBytes
-	}
-	if limits.MaxBatchBytes == 0 {
-		limits.MaxBatchBytes = events.DefaultLimits().MaxEncodedBatchBytes
-	}
 	if limits.RetentionAge == 0 {
 		limits.RetentionAge = events.DefaultLimits().RetentionAge
 	}
@@ -98,12 +90,11 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.ShutdownGrace <= 0 || limits.ShutdownGrace > 2*time.Minute || limits.ShutdownGrace%time.Microsecond != 0 {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: shutdown grace is invalid")
 	}
-	if limits.MaxEncodedBytes < 1 || limits.MaxEncodedBytes > eventcodec.HardMaxEncodedBytes {
-		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: encoded event bytes are invalid")
+	validation, validationErr := (ValidationLimits{MaxEncodedBytes: limits.MaxEncodedBytes, MaxBatchBytes: limits.MaxBatchBytes}).normalized()
+	if validationErr != nil {
+		return Limits{}, validationErr
 	}
-	if limits.MaxBatchBytes < limits.MaxEncodedBytes || limits.MaxBatchBytes > events.MaximumLimits().MaxEncodedBatchBytes {
-		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: encoded batch bytes are invalid")
-	}
+	limits.MaxEncodedBytes, limits.MaxBatchBytes = validation.MaxEncodedBytes, validation.MaxBatchBytes
 	if limits.RetentionAge < time.Hour || limits.RetentionAge > events.MaximumLimits().RetentionAge || limits.RetentionAge%time.Microsecond != 0 {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention age is invalid")
 	}
@@ -138,9 +129,7 @@ type Publisher struct {
 	running bool
 }
 
-type activeEventSchemaCompatibility interface {
-	CanDeliverEventSchema(golem.ModelID, golem.EventSchemaDigest) bool
-}
+type activeEventSchemaCompatibility = ActiveEventSchemaCompatibility
 
 func NewPublisher(coordinator eventprovider.Coordinator, resolver mutationfact.HistoricalSchemaResolver, transport PublisherTransport, limits Limits) (*Publisher, error) {
 	return NewPublisherObserved(coordinator, resolver, transport, limits, nil)
@@ -335,8 +324,7 @@ func (publisher *Publisher) runClaimed(ctx context.Context, claimedAt time.Time,
 }
 
 func (publisher *Publisher) publishLease(ctx context.Context, claimedAt time.Time, lease eventprovider.Lease) error {
-	causation, err := parseUUID[golem.CausationID](lease.Delivery.CausationID)
-	if err != nil || len(lease.Facts) == 0 {
+	if _, err := validateCausationIdentity(lease.Delivery.CausationID, lease.Facts); err != nil {
 		return publisher.blockInvalid(ctx, lease, "fact-invalid")
 	}
 	if publisher.hooks.AfterClaim != nil {
@@ -344,30 +332,13 @@ func (publisher *Publisher) publishLease(ctx context.Context, claimedAt time.Tim
 			return err
 		}
 	}
-	notices := make([]eventvalue.Notice, len(lease.Facts))
-	for index, row := range lease.Facts {
-		if row.CausationID != lease.Delivery.CausationID || row.TransactionOrdinal != int64(index+1) {
-			return publisher.blockInvalid(ctx, lease, "fact-order-invalid")
-		}
-		envelope, encodeErr := eventcodec.EncodeStoredRow(codecFactRow(row), publisher.resolver, eventcodec.Limits{MaxEncodedBytes: publisher.limits.MaxEncodedBytes})
-		if encodeErr != nil {
-			return publisher.blockInvalid(ctx, lease, classifyFactFailure(encodeErr))
-		}
-		if !publisher.compatibility.CanDeliverEventSchema(envelope.ModelID(), envelope.ResolvedEventSchemaDigest()) {
-			return publisher.blockInvalid(ctx, lease, "event-schema-incompatible")
-		}
-		notice, noticeErr := eventvalue.NewRoutedNotice(envelope.EventID(), envelope.GenerationDigest(), envelope.ResolvedEventSchemaDigest(), envelope.ModelID(), envelope.Action(), envelope.CausationID(), envelope.TransactionOrdinal(), envelope.Encoded())
-		if noticeErr != nil {
-			return publisher.blockInvalid(ctx, lease, "event-invalid")
-		}
-		notices[index] = notice
-	}
-	batch, err := eventvalue.NewEventBatchBounded(causation, notices, publisher.limits.MaxBatchBytes)
+	batch, err := ValidateDeliveryCausation(lease.Delivery.CausationID, lease.Facts, publisher.resolver, publisher.compatibility, ValidationLimits{MaxEncodedBytes: publisher.limits.MaxEncodedBytes, MaxBatchBytes: publisher.limits.MaxBatchBytes})
 	if err != nil {
-		if errors.Is(err, eventvalue.ErrBatchTooLarge) {
-			return publisher.blockInvalid(ctx, lease, "batch-too-large")
+		var invalid *ValidationError
+		if errors.As(err, &invalid) {
+			return publisher.blockInvalid(ctx, lease, invalid.Code)
 		}
-		return publisher.blockInvalid(ctx, lease, "fact-order-invalid")
+		return err
 	}
 	if publisher.hooks.BeforePublish != nil {
 		if err := publisher.hooks.BeforePublish(batch); err != nil {
@@ -421,17 +392,6 @@ func (publisher *Publisher) publishLease(ctx context.Context, claimedAt time.Tim
 		}
 	}
 	return nil
-}
-
-func codecFactRow(row eventprovider.FactRow) mutationfact.OutboxRow {
-	return mutationfact.OutboxRow{
-		EventID: row.EventID, FactVersion: row.FactVersion, CodecIdentity: row.CodecIdentity,
-		GenerationFingerprint: row.GenerationFingerprint, ModelID: row.ModelID, Action: row.Action,
-		BeforeIdentity: append([]byte(nil), row.BeforeIdentity...), AfterIdentity: append([]byte(nil), row.AfterIdentity...),
-		CausationID: row.CausationID, TransactionOrdinal: row.TransactionOrdinal,
-		Metadata: append([]byte(nil), row.Metadata...), DeleteSnapshot: append([]byte(nil), row.DeleteSnapshot...),
-		RecordedAt: row.RecordedAt,
-	}
 }
 
 func (publisher *Publisher) publishWithRenewal(ctx context.Context, claimedAt time.Time, lease eventprovider.Lease, batch eventvalue.EventBatch) (error, bool) {
@@ -521,18 +481,6 @@ func (publisher *Publisher) releaseLease(lease eventprovider.Lease) {
 	_, _ = publisher.coordinator.Release(ctx, lease.Delivery.CausationID, lease.Delivery.LeaseToken)
 }
 
-func classifyFactFailure(err error) string {
-	var unavailable *mutationfact.SchemaUnavailableError
-	if errors.As(err, &unavailable) {
-		return "schema-unavailable"
-	}
-	var retired *mutationfact.FormatRetiredError
-	if errors.As(err, &retired) {
-		return "format-retired"
-	}
-	return "fact-invalid"
-}
-
 func retryDelay(causation string, attempt int64, base, maximum time.Duration) time.Duration {
 	exponent := attempt - 1
 	if exponent < 0 {
@@ -576,20 +524,6 @@ func waitContext(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func parseUUID[T ~[16]byte](value string) (T, error) {
-	var result T
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return result, fmt.Errorf("invalid UUID")
-	}
-	compact := value[:8] + value[9:13] + value[14:18] + value[19:23] + value[24:]
-	decoded, err := hex.DecodeString(compact)
-	if err != nil || len(decoded) != len(result) || hex.EncodeToString(decoded) != compact {
-		return result, fmt.Errorf("invalid UUID")
-	}
-	copy(result[:], decoded)
-	return result, nil
 }
 
 // Operator exposes only causation-specific state recovery and bounded

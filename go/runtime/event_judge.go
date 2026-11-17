@@ -40,6 +40,9 @@ func (evaluator *deleteEvaluator) truthAt(condition policyir.Condition, positive
 		return deleteUnknown
 	}
 	switch condition.Kind() {
+	case policyir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return evaluator.truthAt(body, positive)
 	case policyir.ConditionConstant:
 		value, ok := condition.Constant()
 		if !ok {
@@ -159,6 +162,9 @@ var judgeProvenKinds = map[policyir.ValueKind]bool{
 
 func judgeKindsProven(condition policyir.Condition) bool {
 	switch condition.Kind() {
+	case policyir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return judgeKindsProven(body)
 	case policyir.ConditionConstant:
 		return true
 	case policyir.ConditionLogical:

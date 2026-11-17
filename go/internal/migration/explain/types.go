@@ -61,6 +61,7 @@ const (
 	WarningStrongLockPossible        Warning = "STRONG_LOCK_POSSIBLE"
 	WarningManualReview              Warning = "MANUAL_REVIEW"
 	WarningReviewedBackfill          Warning = "REVIEWED_BACKFILL"
+	WarningDataCorrection            Warning = "OFFLINE_DATA_CORRECTION"
 	WarningAutocommitBoundary        Warning = "AUTOCOMMIT_BOUNDARY"
 	WarningZeroDowntimeNotGuaranteed Warning = "ZERO_DOWNTIME_NOT_GUARANTEED"
 )

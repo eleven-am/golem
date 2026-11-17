@@ -334,11 +334,15 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 		if requirement != mutationsql.PostgreSQLTransaction {
 			return nil, fmt.Errorf("PostgreSQL upsert has the wrong transaction requirement")
 		}
-		transaction, err := backend.database.BeginTxx(ctx, nil)
+		plan, err := planMutationTransaction(backend.provider, backend.registry, mutationTransactionDefaultIsolation(backend.provider, backend.registry))
 		if err != nil {
 			return nil, err
 		}
-		binding := transactionExecution(backend.database, transaction)
+		binding, err := beginMutationTransaction(ctx, backend.database, plan)
+		if err != nil {
+			return nil, err
+		}
+		transaction := binding.transaction
 		if err := binding.enableMutation(backend.mutation); err != nil {
 			_ = transaction.Rollback()
 			binding.close()

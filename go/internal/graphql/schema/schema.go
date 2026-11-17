@@ -48,6 +48,9 @@ func assemble(compilation ir.CompilationIR) (string, error) {
 	if compilation.Contract.GraphQLABIVersion == 0 {
 		return "", fmt.Errorf("GraphQL ContractIR is not normalized")
 	}
+	if err := ir.ValidateGraphQLTypeDefinitions(compilation.Contract); err != nil {
+		return "", err
+	}
 	models := make(map[ir.ModelID]ir.ModelDeclIR, len(compilation.Model.Models))
 	for _, model := range compilation.Model.Models {
 		models[model.ID] = model
@@ -93,6 +96,31 @@ func assemble(compilation ir.CompilationIR) (string, error) {
 	sections = append(sections, prelude())
 	for _, enum := range sortedEnums(compilation.Contract.Enums) {
 		sections = append(sections, renderEnum(enum))
+	}
+	definitions := append([]ir.GraphQLTypeDefinitionIR(nil), compilation.Contract.GraphQLTypes...)
+	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
+	for _, definition := range definitions {
+		kind := "type"
+		if definition.Kind == ir.GraphQLTypeInputObject {
+			kind = "input"
+		}
+		var section strings.Builder
+		fmt.Fprintf(&section, "%s %s", kind, definition.Name)
+		if definition.OneOf {
+			section.WriteString(" @oneOf")
+		}
+		section.WriteString(" {\n")
+		fields := append([]ir.GraphQLObjectFieldIR(nil), definition.Fields...)
+		sort.Slice(fields, func(i, j int) bool { return fields[i].Name < fields[j].Name })
+		for _, field := range fields {
+			typeName, err := graphQLTypeSDL(field.Type)
+			if err != nil {
+				return "", fmt.Errorf("GraphQL field %s.%s: %w", definition.Name, field.Name, err)
+			}
+			fmt.Fprintf(&section, "  %s: %s\n", field.Name, typeName)
+		}
+		section.WriteString("}")
+		sections = append(sections, section.String())
 	}
 	for _, view := range views {
 		section, err := renderModel(view, models, contractByModel, enumByID)
@@ -634,11 +662,22 @@ func renderRoots(views []modelView, compilation ir.CompilationIR) (string, strin
 		return operations[i].ExtensionID < operations[j].ExtensionID
 	})
 	for _, operation := range operations {
+		if operation.Invalidation != nil {
+			arguments, err := renderGraphQLArguments(operation.InvalidationArguments(), 0)
+			if err != nil {
+				return "", "", "", fmt.Errorf("custom invalidation %s: %w", operation.Name, err)
+			}
+			fmt.Fprintf(&subscription, "  %s%s: Boolean!\n", operation.Invalidation.SubscriptionField, arguments)
+			subscriptionCount++
+		}
 		result, err := graphQLTypeSDL(operation.Result)
 		if err != nil {
 			return "", "", "", fmt.Errorf("custom %s %s result: %w", operation.Operation, operation.Name, err)
 		}
 		takeDefault, _ := graphqlextension.SearchTakeDefault(compilation, operation)
+		if operation.Pagination != nil {
+			takeDefault = operation.Pagination.DefaultTake
+		}
 		arguments, err := renderGraphQLArguments(operation.Arguments, takeDefault)
 		if err != nil {
 			return "", "", "", fmt.Errorf("custom %s %s: %w", operation.Operation, operation.Name, err)
@@ -741,7 +780,7 @@ func renderGraphQLArguments(arguments []ir.GraphQLArgumentContractIR, takeDefaul
 func graphQLTypeSDL(value ir.GraphQLTypeIR) (string, error) {
 	var base string
 	switch value.Kind {
-	case ir.GraphQLTypeScalar, ir.GraphQLTypeEnum, ir.GraphQLTypeModel:
+	case ir.GraphQLTypeScalar, ir.GraphQLTypeEnum, ir.GraphQLTypeModel, ir.GraphQLTypeObject, ir.GraphQLTypeInputObject:
 		base = value.Name
 	case ir.GraphQLTypePredicate:
 		base = value.Name + "WhereInput"

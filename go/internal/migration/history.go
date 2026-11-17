@@ -289,6 +289,11 @@ func validateManifestPath(value string) error {
 }
 
 func validateEntrySemantics(entry ManifestEntry) error {
+	if IsDataCorrection(entry) {
+		if _, err := ReviewedEntryPlan(entry); err != nil {
+			return err
+		}
+	}
 	ordered, err := Order(Plan{Operations: entry.Operations})
 	if err != nil {
 		return fmt.Errorf("invalid operation inventory: %w", err)
@@ -410,6 +415,12 @@ func validateEntrySemantics(entry ManifestEntry) error {
 			owner, resolved := BackfillOwner(entry.AfterSnapshot, ir.FieldID(operation.ObjectID))
 			if !resolved || companion.Postcondition != BackfillPostcondition(owner, ir.FieldID(operation.ObjectID)) {
 				return fmt.Errorf("backfill companion for %s does not carry the generated no-NULL postcondition", companion.OperationID)
+			}
+		}
+		if operation.Kind == CorrectDataColumn {
+			owner, resolved := BackfillOwner(entry.AfterSnapshot, ir.FieldID(operation.ObjectID))
+			if !resolved || companion.Postcondition != DataCorrectionPostcondition(owner, ir.FieldID(operation.ObjectID)) {
+				return fmt.Errorf("data correction companion for %s lacks its generated postcondition", companion.OperationID)
 			}
 		}
 		manual[companion.OperationID] = true

@@ -9,9 +9,9 @@ import (
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 )
 
-// policyExpander closes every relation hop over the target model's read
-// constraint. An authored condition is never allowed to observe target rows
-// which the same caller could not read directly.
+// policyExpander closes ordinary relation hops over the target model's read
+// constraint. Named policy facts retain their explicit physical observation
+// boundary and are never admitted as caller predicates.
 //
 // active is deliberately path-local. A relation-free policy can be re-entered
 // (a common self-relation case), while a relation-bearing re-entry is rejected
@@ -55,6 +55,9 @@ func CallerReach(policies PolicySet, model policyir.ModelID, where *policyir.Con
 	}
 	if where.ModelID() != model {
 		return policyir.Condition{}, nil, fail(CodePolicy, model, policyir.FieldID{}, "caller predicate is rooted at a different model", nil)
+	}
+	if err := validateCallerCondition(*where); err != nil {
+		return policyir.Condition{}, nil, err
 	}
 	expanded, err := expander.condition(*where, 0)
 	if err != nil {
@@ -156,6 +159,11 @@ func (expander *policyExpander) reach(model policyir.ModelID, depth int) classif
 
 func (expander *policyExpander) condition(condition policyir.Condition, depth int) (policyir.Condition, error) {
 	switch condition.Kind() {
+	case policyir.ConditionFact:
+		if err := expander.factDepth(condition, depth); err != nil {
+			return policyir.Condition{}, err
+		}
+		return condition, nil
 	case policyir.ConditionConstant, policyir.ConditionScalar, policyir.ConditionList, policyir.ConditionJSON:
 		return condition, nil
 	case policyir.ConditionLogical:
@@ -245,6 +253,58 @@ func (expander *policyExpander) condition(condition policyir.Condition, depth in
 	default:
 		return policyir.Condition{}, fail(CodePolicy, condition.ModelID(), policyir.FieldID{}, "unknown policy condition kind", nil)
 	}
+}
+
+func validateCallerCondition(condition policyir.Condition) error {
+	if policyir.HasFacts(condition) {
+		return fail(CodeInput, condition.ModelID(), policyir.FieldID{}, "policy facts cannot be used in caller expressions", nil)
+	}
+	return nil
+}
+
+// Physical facts skip target read-policy expansion, while still consuming the
+// same relation-depth budget. A shared subtree need only be checked at its
+// deepest occurrence; no target policy is requested during this traversal.
+func (expander *policyExpander) factDepth(condition policyir.Condition, depth int) error {
+	if err := policyir.CheckFactExpansion(condition); err != nil {
+		return fail(CodeLimit, condition.ModelID(), policyir.FieldID{}, "policy fact expansion limit exceeded", err)
+	}
+	type frame struct {
+		condition policyir.Condition
+		depth     int
+	}
+	pending := []frame{{condition: condition, depth: depth}}
+	seen := make(map[policyir.Condition]int)
+	for len(pending) != 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if previous, ok := seen[current.condition]; ok && previous >= current.depth {
+			continue
+		}
+		seen[current.condition] = current.depth
+		switch current.condition.Kind() {
+		case policyir.ConditionFact:
+			_, body, _ := current.condition.Fact()
+			pending = append(pending, frame{condition: body, depth: current.depth})
+		case policyir.ConditionLogical:
+			_, children, _ := current.condition.Logical()
+			for _, child := range children {
+				pending = append(pending, frame{condition: child, depth: current.depth})
+			}
+		case policyir.ConditionRelation:
+			field, _, _, _, child, _ := current.condition.Relation()
+			if current.depth >= expander.maximum {
+				return failReason(CodeLimit, golem.ReasonPolicyInvalid, current.condition.ModelID(), field, "policy fact relation depth limit exceeded")
+			}
+			if child != nil {
+				pending = append(pending, frame{condition: *child, depth: current.depth + 1})
+			}
+		case policyir.ConditionConstant, policyir.ConditionScalar, policyir.ConditionList, policyir.ConditionJSON:
+		default:
+			return fail(CodePolicy, current.condition.ModelID(), policyir.FieldID{}, "policy fact contains an unresolved condition", nil)
+		}
+	}
+	return nil
 }
 
 func conditionHasRelation(condition policyir.Condition) bool {

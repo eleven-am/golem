@@ -587,19 +587,6 @@ func assertRecursiveComments(t testing.TB, fixture recursiveMutationFixture) {
 	assertRecursiveFacts(t, fixture, 2)
 }
 
-func nestedAcceptanceTable[P, A any](app *App[P, A], model golem.ModelID) string {
-	provider := golem.SQLite
-	if app.provider == policyir.ProviderPostgreSQL {
-		provider = golem.PostgreSQL
-	}
-	physicalModel, _ := app.registry.PhysicalModel(provider, model)
-	if provider == golem.SQLite {
-		return `"` + string(physicalModel.Name()) + `"`
-	}
-	namespace, _ := app.registry.PhysicalNamespace(provider)
-	return `"` + string(namespace) + `"."` + string(physicalModel.Name()) + `"`
-}
-
 func nestedAcceptanceOutbox[P, A any](app *App[P, A]) string {
 	if app.provider != policyir.ProviderPostgreSQL {
 		return `"_golem_outbox"`

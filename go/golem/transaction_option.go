@@ -59,7 +59,17 @@ func RetryConflicts(attempts int) TransactionOption {
 }
 
 func RuntimeTransactionOptions(options []TransactionOption) (IsolationLevel, int, error) {
-	settings := transactionSettings{isolation: ReadCommitted, attempts: 1}
+	return RuntimeTransactionOptionsWithDefault(options, ReadCommitted)
+}
+
+// RuntimeTransactionOptionsWithDefault preserves an explicitly authored
+// isolation option while allowing the runtime's transaction owner to select
+// the isolation used when that option is omitted.
+func RuntimeTransactionOptionsWithDefault(options []TransactionOption, defaultIsolation IsolationLevel) (IsolationLevel, int, error) {
+	if defaultIsolation != ReadCommitted && defaultIsolation != Serializable {
+		return "", 0, fmt.Errorf("P4_TRANSACTION_OPTION: default isolation level %q is not supported", string(defaultIsolation))
+	}
+	settings := transactionSettings{isolation: defaultIsolation, attempts: 1}
 	for index, option := range options {
 		if option == nil {
 			return "", 0, fmt.Errorf("P4_TRANSACTION_OPTION: option %d is nil", index)

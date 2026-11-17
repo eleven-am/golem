@@ -122,7 +122,7 @@ func adaptReviewed(entry migration.ManifestEntry, files map[string][]byte) (prov
 	if entry.ID == "" || entry.ChainHash == "" || migration.ChainHash(entry) != entry.ChainHash {
 		return providerInput{}, unavailable()
 	}
-	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
+	plan, err := migration.ReviewedEntryPlan(entry)
 	if err != nil || !entryMatchesPlan(entry, plan) || migration.ValidatePlan(plan, entry.Approvals) != nil {
 		return providerInput{}, unavailable()
 	}
@@ -147,7 +147,7 @@ func entryMatchesPlan(entry migration.ManifestEntry, plan migration.Plan) bool {
 }
 
 func planMatchesSnapshots(plan migration.Plan, before, after physical.PhysicalSchema) bool {
-	rebuilt, err := migration.DiffReviewed(before, after)
+	rebuilt, err := migration.ReviewedEntryPlan(migration.ManifestEntry{BeforeSnapshot: before, AfterSnapshot: after, BeforePhysical: plan.BeforeFingerprint, AfterPhysical: plan.AfterFingerprint, Operations: plan.Operations, Phases: plan.Phases})
 	return err == nil && plan.Provider == rebuilt.Provider && plan.Initial == rebuilt.Initial &&
 		plan.BeforeFingerprint == rebuilt.BeforeFingerprint && plan.AfterFingerprint == rebuilt.AfterFingerprint &&
 		reflect.DeepEqual(plan.Operations, rebuilt.Operations) && reflect.DeepEqual(plan.Phases, rebuilt.Phases)
@@ -208,6 +208,13 @@ func validateReviewedCompanions(entry migration.ManifestEntry, plan migration.Pl
 			field := ir.FieldID(operation.ObjectID)
 			owner, ownerExists := migration.BackfillOwner(entry.AfterSnapshot, field)
 			if !ownerExists || migration.BackfillPostcondition(owner, field) != companion.Postcondition {
+				return nil, false
+			}
+		}
+		if operation.Kind == migration.CorrectDataColumn {
+			field := ir.FieldID(operation.ObjectID)
+			owner, exists := migration.BackfillOwner(entry.AfterSnapshot, field)
+			if !exists || migration.DataCorrectionPostcondition(owner, field) != companion.Postcondition {
 				return nil, false
 			}
 		}
@@ -435,7 +442,7 @@ func operationFacts(plan migration.Plan, operation migration.Operation, before, 
 		}
 		_ = left
 		_ = right
-	case migration.AddColumn, migration.RenameColumn, migration.AlterColumnType, migration.AlterColumnNullability, migration.SetColumnDefault, migration.DropColumnDefault, migration.DropColumn, migration.BackfillColumn, migration.InitializeConcurrencyColumn:
+	case migration.AddColumn, migration.RenameColumn, migration.AlterColumnType, migration.AlterColumnNullability, migration.SetColumnDefault, migration.DropColumnDefault, migration.DropColumn, migration.BackfillColumn, migration.CorrectDataColumn, migration.InitializeConcurrencyColumn:
 		left, beforePresent := before.columns[ir.FieldID(id)]
 		right, afterPresent := after.columns[ir.FieldID(id)]
 		if !beforePresent && !afterPresent {

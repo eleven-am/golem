@@ -9,10 +9,6 @@ import (
 	"github.com/eleven-am/golem/go/queue"
 )
 
-type queueGatePayload struct {
-	Title string `json:"title"`
-}
-
 func openQueueFixture(t *testing.T) (transactionFixture, queue.Type[queueGatePayload]) {
 	t.Helper()
 	registry := queue.NewRegistry()
@@ -24,15 +20,6 @@ func openQueueFixture(t *testing.T) (transactionFixture, queue.Type[queueGatePay
 		t.Fatal(err)
 	}
 	return openTransactionFixtureWith(t, &QueueConfig{Registry: registry, Limits: queue.DefaultLimits()}), jobType
-}
-
-func newQueueGatePending(t *testing.T, jobType queue.Type[queueGatePayload]) queue.Pending {
-	t.Helper()
-	pending, err := jobType.New(queueGatePayload{Title: "draft"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pending
 }
 
 // TestTransactionalEnqueueJoinsTheCallerTransaction proves the job row commits

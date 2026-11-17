@@ -3,18 +3,16 @@
 package scalar
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"math"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
+	"github.com/eleven-am/golem/go/internal/typedvalue"
 )
 
 func invalid(detail compileerr.Detail, name string) error {
@@ -166,64 +164,12 @@ func Float(input any, bits int) (float64, error) {
 	return value, nil
 }
 
-type JSONLimits struct{ MaxBytes, MaxDepth, MaxNodes int }
+// JSONLimits and JSON share the bounded typed-value decoder with native
+// operation arguments; this adapter remains the GraphQL scalar entry point.
+type JSONLimits = typedvalue.JSONLimits
 
 func JSON(encoded []byte, limits JSONLimits) (any, error) {
-	if limits.MaxBytes <= 0 {
-		limits.MaxBytes = 512 << 10
-	}
-	if limits.MaxDepth <= 0 {
-		limits.MaxDepth = 32
-	}
-	if limits.MaxNodes <= 0 {
-		limits.MaxNodes = 32_768
-	}
-	if len(encoded) > limits.MaxBytes {
-		return nil, compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONBytes, compileerr.Max(limits.MaxBytes))
-	}
-	if !utf8.Valid(encoded) {
-		return nil, invalid(compileerr.ValueMalformed, "JSON")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, invalid(compileerr.ValueMalformed, "JSON")
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, invalid(compileerr.ValueMalformed, "JSON")
-	}
-	nodes := 0
-	var walk func(any, int) error
-	walk = func(value any, depth int) error {
-		if depth > limits.MaxDepth {
-			return compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONDepth, compileerr.Max(limits.MaxDepth))
-		}
-		nodes++
-		if nodes > limits.MaxNodes {
-			return compileerr.New(compileerr.KindInputLimit, compileerr.LimitJSONNodes, compileerr.Max(limits.MaxNodes))
-		}
-		switch item := value.(type) {
-		case []any:
-			for _, child := range item {
-				if err := walk(child, depth+1); err != nil {
-					return err
-				}
-			}
-		case map[string]any:
-			for _, child := range item {
-				if err := walk(child, depth+1); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := walk(value, 1); err != nil {
-		return nil, err
-	}
-	return value, nil
+	return typedvalue.JSON(encoded, limits)
 }
 
 func SerializeBigInt(value int64) string          { return strconv.FormatInt(value, 10) }

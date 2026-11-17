@@ -252,7 +252,35 @@ func NewListValue(values []Value) (Value, error) {
 	return Value{kind: ValueScalarList, list: copy}, nil
 }
 
-func (value Value) Kind() ValueKind    { return value.kind }
+func (value Value) Kind() ValueKind { return value.kind }
+
+// ScalarCanonicalSize measures the exact scalar encoding without copying a
+// potentially large string or byte payload. Historical image capture uses it
+// to enforce its allocation budget before owning another projected row.
+func (value Value) ScalarCanonicalSize() (int, error) {
+	switch value.kind {
+	case ValueBool:
+		return 2, nil
+	case ValueInt16, ValueInt32, ValueInt64, ValueFloat64, ValueTime:
+		return 9, nil
+	case ValueFloat32, ValueDate:
+		return 5, nil
+	case ValueDecimal:
+		return 10, nil
+	case ValueString:
+		return 5 + len(value.text), nil
+	case ValueBytes:
+		return 5 + len(value.bytes), nil
+	case ValueUUID:
+		return 17, nil
+	case ValueDateTime:
+		return 13, nil
+	case ValueEnum:
+		return 33, nil
+	default:
+		return 0, fmt.Errorf("policy IR: historical capture requires a closed scalar value")
+	}
+}
 func (value Value) Bool() (bool, bool) { return value.boolean, value.kind == ValueBool }
 func (value Value) Signed() (int64, bool) {
 	return value.signed, value.kind == ValueInt16 || value.kind == ValueInt32 || value.kind == ValueInt64

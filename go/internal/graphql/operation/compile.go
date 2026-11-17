@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlanalytics "github.com/eleven-am/golem/go/internal/graphql/analytics"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
-	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
 	graphqlmutation "github.com/eleven-am/golem/go/internal/graphql/mutation"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
+	graphqlcustom "github.com/eleven-am/golem/go/internal/operationargs"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -40,12 +40,19 @@ type ReadRoot struct {
 }
 
 type Result struct {
-	Reads     []ReadRoot
-	Analytics []graphqlanalytics.Root
-	Mutations []MutationRoot
-	Custom    []CustomRoot
-	Event     *EventRoot
-	Order     []RootRef
+	Reads        []ReadRoot
+	Analytics    []graphqlanalytics.Root
+	Mutations    []MutationRoot
+	Custom       []CustomRoot
+	Event        *EventRoot
+	Invalidation *InvalidationRoot
+	Order        []RootRef
+}
+
+type InvalidationRoot struct {
+	ResponseName string
+	OperationID  compilerir.ExtensionID
+	Arguments    map[string]any
 }
 
 type EventRoot struct {
@@ -98,6 +105,7 @@ type RootRef struct {
 }
 
 type CustomRoot struct {
+	Pagination   *compilerir.CustomPaginationIR
 	ResponseName string
 	Name         string
 	Kind         compilerir.CustomOperationKind
@@ -134,6 +142,7 @@ type Compiler struct {
 	custom        *graphqlcustom.Registry
 	analytics     *graphqlanalytics.Compiler
 	subscriptions map[string]compilerir.ModelID
+	invalidations map[string]compilerir.ExtensionID
 }
 
 type rootBinding struct {
@@ -147,6 +156,9 @@ type mutationRootBinding struct {
 }
 
 func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error) {
+	if err := compilerir.ValidateGraphQLInvalidations(compilation.Contract); err != nil {
+		return nil, err
+	}
 	binder, err := graphqlbind.New(compilation, limits.Bind)
 	if err != nil {
 		return nil, err
@@ -178,7 +190,7 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 	if err != nil {
 		return nil, err
 	}
-	compiler := &Compiler{compilation: compilation, binder: binder, mutation: mutationBinder, custom: customRegistry, analytics: analyticsCompiler, limits: limits, queries: map[string]rootBinding{}, mutations: map[string]mutationRootBinding{}, subscriptions: map[string]compilerir.ModelID{}}
+	compiler := &Compiler{compilation: compilation, binder: binder, mutation: mutationBinder, custom: customRegistry, analytics: analyticsCompiler, limits: limits, queries: map[string]rootBinding{}, mutations: map[string]mutationRootBinding{}, subscriptions: map[string]compilerir.ModelID{}, invalidations: map[string]compilerir.ExtensionID{}}
 	for _, contract := range compilation.Contract.Models {
 		if !contract.Exposed {
 			continue
@@ -226,6 +238,19 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 				}
 			}
 		}
+	}
+	for _, operation := range compilation.Contract.CustomOperations {
+		if operation.Invalidation == nil {
+			continue
+		}
+		name := operation.Invalidation.SubscriptionField
+		if _, duplicate := compiler.subscriptions[name]; duplicate {
+			return nil, fmt.Errorf("invalidation subscription root %q collides with an event root", name)
+		}
+		if _, duplicate := compiler.invalidations[name]; duplicate {
+			return nil, fmt.Errorf("invalidation subscription root %q is duplicated", name)
+		}
+		compiler.invalidations[name] = operation.ExtensionID
 	}
 	return compiler, nil
 }
@@ -277,6 +302,41 @@ func (c *Compiler) compileSubscription(document *ast.QueryDocument, definition *
 		return Result{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeSingleRoot)
 	}
 	root := fields[0]
+	if operation, present := c.invalidations[root.field.Name]; present {
+		if len(root.selections) != 0 {
+			return Result{}, compileerr.Root(compileerr.Invariantf("operation invalidation is a Boolean subscription without selections"), root.responseName)
+		}
+		arguments, err := values(root.field, variables)
+		if err != nil {
+			return Result{}, compileerr.Root(err, root.responseName)
+		}
+		contract, present := c.custom.Contract(operation)
+		if !present {
+			return Result{}, compileerr.Root(compileerr.Invariantf("invalidation operation contract is unavailable"), root.responseName)
+		}
+		// Use the ordinary custom-input coercion owner for literals, enums and
+		// input objects. Page traversal inputs are not subscription arguments.
+		input := contract
+		input.Arguments = contract.InvalidationArguments()
+		arguments, err = c.bindCustomArguments(input, arguments)
+		if err != nil {
+			return Result{}, compileerr.Root(err, root.responseName)
+		}
+		prepared, err := c.custom.PrepareInvalidation(operation, arguments)
+		if err != nil {
+			return Result{}, compileerr.Root(err, root.responseName)
+		}
+		owned := map[string]any{}
+		for _, argument := range prepared.Arguments() {
+			if contract.Pagination != nil && (argument.Name() == "take" || argument.Name() == "after") {
+				continue
+			}
+			if argument.Present() {
+				owned[argument.Name()] = argument.Value()
+			}
+		}
+		return Result{Invalidation: &InvalidationRoot{ResponseName: root.responseName, OperationID: operation, Arguments: owned}}, nil
+	}
 	modelID, ok := c.subscriptions[root.field.Name]
 	if !ok {
 		return Result{}, compileerr.Root(compileerr.Invariantf("subscription root %q is not generated", root.field.Name), root.responseName)
@@ -644,6 +704,9 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 	if err != nil {
 		return CustomRoot{}, err
 	}
+	if err := c.bindPageTake(contract, arguments); err != nil {
+		return CustomRoot{}, err
+	}
 	semantic, err := c.bindSemanticSearchTake(contract, arguments, root.field.Arguments.ForName("take") != nil)
 	if err != nil {
 		return CustomRoot{}, err
@@ -654,15 +717,31 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 	}
 	result := prepared.ResultType()
 	modelName := customResultModelName(result)
-	isObject := modelName != ""
+	objectName := customResultObjectName(result)
+	isObject := modelName != "" || objectName != ""
 	if isObject && len(root.selections) == 0 {
 		return CustomRoot{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeNeedsSelection, compileerr.Path(root.field.Name))
 	}
 	if !isObject && len(root.selections) != 0 {
 		return CustomRoot{}, compileerr.New(compileerr.KindSelectionShape, compileerr.ShapeForbidsSelection, compileerr.Path(root.field.Name))
 	}
-	compiled := CustomRoot{ResponseName: root.responseName, Name: root.field.Name, Kind: kind, Arguments: arguments, Result: result}
-	if isObject {
+	compiled := CustomRoot{ResponseName: root.responseName, Name: root.field.Name, Kind: kind, Arguments: arguments, Result: result, Pagination: contract.Pagination}
+	if objectName != "" {
+		selected, err := selectset.CompileObject(selectset.Request{
+			Compilation: c.compilation, Selections: root.selections, Fragments: fragments, Variables: variables,
+			MaxDepth: c.limits.Depth, MaxFields: c.limits.Fields, MaxAliases: c.limits.Aliases, MaxListItems: c.limits.ListItems,
+			Child: func(target compilerir.ModelID, field *ast.Field, selections []readir.Selection) (readir.Request, error) {
+				return c.binder.Child(target, field, selections, variables)
+			},
+			Count: func(target compilerir.ModelID, field *ast.Field) (readir.Request, error) {
+				return c.binder.Count(target, field, variables)
+			},
+		}, objectName)
+		if err != nil {
+			return CustomRoot{}, err
+		}
+		compiled.Slots = selectset.StableSlots(selected.Slots)
+	} else if modelName != "" {
 		modelID, ok := c.modelIDByGraphQLName(modelName)
 		if !ok {
 			return CustomRoot{}, compileerr.Invariantf("custom result model %s is absent", modelName)
@@ -910,13 +989,9 @@ func included(directives ast.DirectiveList, variables map[string]any) (bool, err
 }
 
 func values(field *ast.Field, variables map[string]any) (map[string]any, error) {
-	result := make(map[string]any, len(field.Arguments))
-	for _, argument := range field.Arguments {
-		value, err := argument.Value.Value(variables)
-		if err != nil {
-			return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name), compileerr.Model(field.Name))
-		}
-		result[argument.Name] = value
+	result, err := selectset.ArgumentValues(field.Arguments, variables)
+	if err != nil {
+		return nil, compileerr.On(err, field.Name)
 	}
 	return result, nil
 }
@@ -930,22 +1005,13 @@ func eventFieldShape(field, model string) error {
 }
 
 func sameArguments(left, right ast.ArgumentList, variables map[string]any) bool {
-	leftValues := map[string]any{}
-	for _, argument := range left {
-		value, err := argument.Value.Value(variables)
-		if err != nil {
-			return false
-		}
-		leftValues[argument.Name] = value
-	}
-	if len(leftValues) != len(right) {
+	leftValues, err := selectset.ArgumentValues(left, variables)
+	if err != nil {
 		return false
 	}
-	for _, argument := range right {
-		value, err := argument.Value.Value(variables)
-		if err != nil || fmt.Sprintf("%#v", leftValues[argument.Name]) != fmt.Sprintf("%#v", value) {
-			return false
-		}
+	rightValues, err := selectset.ArgumentValues(right, variables)
+	if err != nil {
+		return false
 	}
-	return true
+	return fmt.Sprintf("%#v", leftValues) == fmt.Sprintf("%#v", rightValues)
 }

@@ -1,18 +1,26 @@
 import { type GolemError, GolemContractMismatchError, GolemDeadlineRequiredError, GolemProtocolError, GolemProtocolMismatchError, GolemUnauthenticatedError, GolemError as GolemErrorClass, CODE_CONTRACT_MISMATCH, CODE_DEADLINE_REQUIRED, CODE_PROTOCOL_MISMATCH, errorsOf, type GraphQLResponseBody, type GraphQLErrorShape } from './errors.js'
+import { manifestVersion, requiredCapabilities } from './manifest.js'
 
 export const PROTOCOL_VERSION = 1
 
 export interface GolemBlock {
   readonly protocol: number
+  readonly dataIncarnation?: string
   readonly contract: string
+  readonly manifestVersion?: number
+  readonly capabilities?: ReadonlyArray<string>
 }
 
 export interface ContractManifest {
   readonly contract: string
+  readonly formatVersion?: number
+  readonly requiredCapabilities?: ReadonlyArray<string>
 }
 
 export function golemBlock(manifest: ContractManifest): GolemBlock {
-  return { protocol: PROTOCOL_VERSION, contract: manifest.contract }
+  const version = manifestVersion(manifest)
+  const capabilities = requiredCapabilities(manifest)
+  return { protocol: PROTOCOL_VERSION, contract: manifest.contract, ...(version !== 1 ? { manifestVersion: version } : {}), ...(capabilities.length > 0 ? { capabilities: [...capabilities] } : {}) }
 }
 
 export const CloseCode = {
@@ -51,6 +59,16 @@ function refusalShape(message: string, code: string): GraphQLErrorShape {
 export function handshakeRefusal(reason: string): CloseDisposition & { readonly action: 'fatal' } {
   const detail = reason.startsWith(REFUSAL_PREFIX) ? reason.slice(REFUSAL_PREFIX.length) : reason
   switch (detail) {
+    case 'incarnation':
+      return { action: 'fatal', status: 'protocol-mismatch', error: new GolemErrorClass(refusalShape('the server refused this data incarnation; fresh discovery is required', 'GOLEM_DATA_INCARNATION_MISMATCH'), false) }
+    case 'capability':
+      return { action: 'fatal', status: 'protocol-mismatch', error: new GolemProtocolMismatchError(refusalShape('the server requires an operation invalidation capability this client did not advertise', CODE_PROTOCOL_MISMATCH)) }
+    case 'manifest':
+      return {
+        action: 'fatal',
+        status: 'protocol-mismatch',
+        error: new GolemProtocolMismatchError(refusalShape('the server refused this client manifest format; regenerate with a matching Golem client', CODE_PROTOCOL_MISMATCH)),
+      }
     case 'protocol':
       return {
         action: 'fatal',

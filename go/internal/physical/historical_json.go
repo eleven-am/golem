@@ -39,6 +39,8 @@ func MarshalHistoricalSnapshotJSON(schema PhysicalSchema) ([]byte, error) {
 
 func historicalStructFieldProjection(schema PhysicalSchema) (map[string][]string, error) {
 	switch {
+	case schema.Version == DataIncarnationFormatVersion && schema.CanonicalVersion == DataIncarnationFormatVersion:
+		return dataIncarnationV4StructFields, nil
 	case schema.Version == 1 && schema.CanonicalVersion == 1:
 		return historicalV1StructFields, nil
 	case schema.Version == 2 && schema.CanonicalVersion == 2:

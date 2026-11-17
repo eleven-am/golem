@@ -390,6 +390,9 @@ err := caller.Transaction(ctx, func(tx *notes.CallerTx[Principal]) error {
 - The operation runs on the transaction you pass, so its writes commit or roll
   back with everything else in it. An error the operation returns does not roll
   anything back by itself; return it from the callback to do that.
+- `golem.ActorFrom` receives the actor snapshot of the transaction's caller.
+  Passing a context carrying another actor does not replace that snapshot.
+  Cancellation and deadlines still follow the context you pass to `Run`.
 - The grant is visible only while the operation runs, and only through the
   transaction handle the operation receives. The outer `tx` never gains it.
 - Writes made inside the operation keep their grant until the transaction
@@ -648,6 +651,13 @@ Code that breaks the contract is frozen at its first result for that actor.
   actor may be a copy the default key cannot vouch for, so golem caches only
   when you also set `Config.PolicyCacheKey`, a `func(Actor) (string, bool)`
   that returns a key, or `false` to skip the cache for that actor.
+  Your key must distinguish every policy input: account, active profile,
+  tenant, roles and grants, or revisions that change whenever those values
+  change. A principal ID alone is insufficient when two profiles or grant
+  revisions can authorize different rows. `SnapshotActor` must copy mutable
+  grant slices and maps; retaining the resolver's storage lets later changes
+  alter an existing caller. Existing callers retain their actor snapshot;
+  resolve a new caller to apply changed grants.
 - **Bounds.** `Config.PolicyCache` takes `MaxActors` (1,024 by default), an
   optional `TTL` (none by default) and `Disabled`. Least recently used entries
   are evicted first.
@@ -1089,6 +1099,124 @@ The author sees their published note and their draft. An anonymous caller sees
 only the published one — not because the program filtered, but because the
 policy predicate was compiled into the query. The draft filter finds one row.
 
+### SQLite copies and backups
+
+For the existing offline file-copy procedure, stop every reader and writer,
+close the verified provider handle, call `sqlite.CheckpointForBackup(ctx, db)`,
+then copy the database. Do not copy a live database file or its journal
+separately.
+
+**Unreleased — Snapshot Work A (copy only).** The development API is
+`sqlite.Snapshot(ctx, db, expectedBundle, destination) error`, where `db` is an
+open verified `*provider.Database` from local `sqlite.Open` and
+`expectedBundle` is the expected generated `golem.SchemaBundle` with its exact
+reviewed migration history. Both network-filesystem profiles are refused.
+This is not a NAS support or online latency guarantee.
+
+Snapshot borrows one source connection for the incremental native copy and
+releases it before verification. Other work may wait for pool capacity or
+SQLite locks; copy and verification cost depend on database size. SQLite
+normalizes only the owned private clone to DELETE journal mode, then checks
+integrity, foreign keys, the physical schema and the exact reviewed ledger.
+Verification uses an RW handle with `query_only` enabled: physical read-only
+opening skips CHECK validation in the supported engine, whereas this handle
+checks constraints and refuses ordinary SQL writes. The source profile, rows,
+versions, pending facts and delivery records are not rewritten.
+
+The destination must be new in an existing trusted local directory. Its main
+name and `-wal`, `-shm` and `-journal` names must all be unused, including empty
+files, symlinks and directories. Snapshot checks before copying and again
+before no-overwrite publication; these checks are not atomic with sidecar
+creation. The caller must exclude concurrent writers to that namespace.
+Existing destination objects are never removed. Pre-publication cancellation
+cleans private staging. Use `provider.CodeOf(err)` to distinguish
+`provider.CodeMaintenance` from `provider.CodeSnapshotPublished`: the latter
+means the destination exists but final synchronization or cleanup failed, so
+do not retry as though nothing was published.
+
+Snapshot does not restore or replace a database, rotate client identity, or
+reconcile copied jobs and events. It starts no workers or publishers. Opening
+the copy for application use remains an explicit operation; safely restoring
+it or running copied background work requires a separate operational contract.
+For a schema using the unreleased durable data identity below, verification
+also requires the copied singleton to be valid and preserves its exact value.
+A copy therefore shares its source identity. Snapshot never manufactures a
+missing identity and does not establish a fresh identity for a restored copy.
+
+### Offline SQLite restore (unreleased)
+
+`sqlite.PrepareRestore` creates a private local copy for reviewed migrations
+and explicit application reconciliation. Stop the old fleet first and prevent
+restart: traffic, workers, publishers, CDC adapters, other readers and writers,
+and processes that may still finish external work must all be stopped. A
+worker's shutdown grace returning, or one database handle closing, does not
+establish that condition. The deployment owns process shutdown, archive
+extraction and application assets. Restore owns the SQLite staging and
+publication sequence. This development API has no NAS support guarantee.
+
+Pass immutable standalone archive and destination file paths, an explicit
+`ArchiveBundle`, an explicit `TargetBundle`, and one of these modes:
+
+- `sqlite.RestoreResumeAtLeastOnce` readies work leased by the old fleet while
+  preserving attempts, cancellation/finalization intent and pending backoff.
+  External effects that completed before the archive recorded completion may
+  run again. Existing blocked or retired events remain operator decisions.
+- `sqlite.RestoreAbandonAndResync` cancels archived unfinished jobs and retires
+  archived undelivered events, including legacy groups without delivery rows.
+  Jobs and immutable facts remain stored. Reconcile domain status and external
+  effects explicitly; clients start from fresh reads after identity discovery.
+
+Preparation verifies the archive's catalog, exact reviewed ledger, integrity,
+foreign keys, supported fact codecs and complete causation groups before
+exposing the copy. Work reconciliation runs once during preparation, so new
+jobs and facts deliberately created by application reconciliation survive.
+Ordinary row versions and counters are never reset. Unsupported queue layouts
+require an explicit queue storage upgrade on the extracted offline copy first.
+Preparation and publication also validate stored queue envelopes, including
+payload bounds and lease/resource consistency. Application reconciliation owns
+decoding job payloads with the registered job codec and reconciling their
+domain meaning; storage validation alone does not establish either.
+
+Use `restore.StagePath()` for existing reviewed migration commands. Use
+`restore.Database()` with the generated application for domain reconciliation
+and required derived-state rebuilds. Close the initial staging handle before
+opening it separately for migration, and close every staging handle and
+operation before publication. Archive and target bundles may differ; the
+archive bundle is registered automatically for historical fact decoding.
+`HistoricalEventBundles` supplies any other retained producer generations and
+must not duplicate the archive or target bundle.
+
+`restore.Publish(ctx)` verifies the target schema and ledger, queue storage and
+retained evidence, and checks that every pending group can be delivered under
+the target event schema. It then rotates the existing valid durable identity
+with provider-owned randomness, closes and synchronizes the private image,
+and publishes it atomically in the owned local destination namespace. The
+target must have reviewed durable identity storage; publication never repairs
+a missing or malformed singleton. An existing destination must be closed and
+checkpointed through SQLite, without sidecars. Separate namespace checks do
+not replace the caller's exclusion of concurrent destination writers.
+
+Before publication, failure preserves the destination and `restore.Close()`
+discards private staging. After publication, synchronization or cleanup failure
+returns `provider.CodeRestorePublished` and the new identity. Keep serving
+stopped and inspect the destination; do not assume that result rolled back.
+On successful publication, open a fresh provider handle and generated app and
+pass normal startup verification before enabling workers, publishers or traffic.
+Do not reuse an app that retained the archive's old identity. Existing client
+discovery resets cached rows, merge state and continuation chains.
+
+A killed restore process can leave a private staging directory. Start a new
+restore session rather than admitting or publishing that orphan automatically.
+Local process-interruption tests cover both new and replacement destinations,
+immediately before publication and after publication but before directory sync.
+They establish visible atomic publication, not power-loss durability. SQLite
+page-capacity exhaustion and cancellation after actual incremental backup
+progress are also covered locally. The cancellation tests exercise public
+snapshot and restore preparation, require staging cleanup and unchanged source
+evidence, and successfully retry; snapshot also reuses its sole source
+connection. Physical filesystem ENOSPC and NAS failure behavior still require
+their own rehearsal.
+
 ## GraphQL
 
 ### Introspection
@@ -1215,6 +1343,38 @@ cancels one, both committing or rolling back with the transaction. Cancel only a
 job ID you read, in the same transaction, from a row the caller's policy allowed,
 never an ID taken from arguments. See [the queue](QUEUE.md#inspecting-and-operating).
 
+**Unreleased P10 — bounded maintenance application reference.** For a removal
+that exceeds one transaction's limits, see [bounded removal](QUEUE.md#application-reference-bounded-removal-unreleased-p10).
+The generated reference commits logical removal with a task and first job,
+then uses 32-leaf pages, transactional progress/successors and a shared root
+compare-and-write fence for every caller/System ingest or reparent. Its
+`IntoTx` functions belong to the application, not the Golem API. The existing
+1,000-row/1 MiB limits remain in force; progress visibility and retained task
+identity are explicit application decisions. Local acceptance verifies ordinary
+cleanup on both providers and semantic rollback/convergence on SQLite and
+PostgreSQL with pgvector. NAS latency remains unmeasured.
+
+**Unreleased P11 — queue priority and promotion.** The development version
+adds `queue.WithPriority(queue.PriorityInteractive)`; the default remains
+`queue.PriorityNormal`. Generated caller/system transactions expose
+`tx.PromoteJob(ctx, jobID, queue.PriorityInteractive)`, with
+`queue.ReadyNow()` as an explicit option to remove remaining delay. Promotion
+is monotonic and changes pending jobs only. Authorize the business action and
+read its stored job ID through the caller in the same transaction;
+`PromoteJob` does not authorize ownership of an arbitrary job ID. Dedupe never
+implicitly promotes existing work, and retries preserve its lane.
+
+The scheduling bound belongs to one continuously running worker: three
+Interactive admissions then a Normal opportunity when capacity permits.
+`queue.Limits.ReservedInteractive` reserves local slots only (default `0`,
+strictly below `Concurrency`); it never preempts handlers or bypasses shared
+resource caps. These APIs and new public struct fields require the matching
+development library/CLI and regeneration; prefer keyed literals. Existing
+queue storage requires an explicit offline upgrade after stopping all
+producers and workers. See [priority and promotion](QUEUE.md#priority-and-promotion-unreleased-p11)
+and [storage inspection and upgrade](QUEUE.md#explicit-storage-upgrade-unreleased-p11)
+for exact commands, supported shapes and the limits of old-worker refusal.
+
 #### What a custom operation returns
 
 A custom query, a custom mutation or a computed field may return model rows
@@ -1297,9 +1457,10 @@ has no maximum (`P5_GRAPHQL_LIST_MAX_REQUIRED`), when `MaxItems` gives a
 different number of values than the result has list levels
 (`P5_GRAPHQL_LIST_MAX_ARITY`), when a value is 0 (`P5_GRAPHQL_LIST_MAX_ZERO`),
 when it is not a constant (`P5_GRAPHQL_LIST_MAX_CONSTANT`), or when the result is
-not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). A custom operation fails when an option
-is anything other than a direct `golem.MaxItems` call (`P5_CUSTOM_OPTION`) or
-when it declares `MaxItems` more than once (`P5_CUSTOM_OPTION_DUPLICATE`). `[]byte` is a `Bytes` scalar, not a
+not a list (`P5_GRAPHQL_LIST_MAX_SCALAR`). Custom options must be direct supported
+declarations: `golem.MaxItems`, or the query-only invalidation declarations
+described below. Unsupported options fail with `P5_CUSTOM_OPTION`; declaring
+`MaxItems` more than once fails with `P5_CUSTOM_OPTION_DUPLICATE`. `[]byte` is a `Bytes` scalar, not a
 list.
 
 The maximum is the most the resolver may return. It is not a page size and is
@@ -1358,6 +1519,212 @@ rows, err := notes.Query(ctx, caller, notes.SearchInvites, notes.SearchArgs{ /* 
 the resolver as it does over GraphQL, and calls the resolver with `caller`. It
 adds no grants and no transaction. Calling a query resolver directly skips the
 actor. `Query` is generated only for a schema that declares a custom query.
+
+### Durable data identity (unreleased)
+
+This development API requires matching CLI and library builds and regenerated
+application code and client manifests. Opt in explicitly in `DefineSchema`:
+
+```go
+golem.WithDataIncarnation(schema)
+```
+
+The opted schema uses Physical 4 and a provider-owned durable identity. Create
+and apply a reviewed initial migration, or a reviewed additive migration from
+Physical 3, through Golem's migration runner. The runner derives initialization
+from the sealed migration operation, generates the identity with Go's
+`crypto/rand` and writes it with a bound INSERT in the migration transaction.
+Executing the rendered SQL alone cannot initialize it. Startup checks the exact
+reviewed ledger, physical catalog and singleton; it does not repair missing or
+malformed identity data. Unopted schemas retain Physical 3, and their existing
+history and generated request bytes remain unchanged.
+
+The generated `application.DataIncarnation()` getter exposes a read-only opaque
+`golem.DataIncarnation`. Its canonical wire form is 32 lowercase hexadecimal
+characters with a nonzero value; applications supply no constructor or config
+value. Reopening the same database preserves the identity. Independently
+initializing a new database generates a different identity. Continuation tokens
+bind the identity admitted by the application at startup.
+
+Opted GraphQL contracts require manifest 3 and `data-incarnation-v1`, alongside
+`operation-invalidation-v1` when declared. Every business HTTP request,
+WebSocket initialization and subscribe payload must carry the exact admitted
+identity. The current protocol discovers it through the same HTTP JSON endpoint
+using the static protocol/contract/manifest/capability handshake and a nonce.
+Discovery accepts no query, variables, operation name or identity field, even
+when null or empty. It authenticates the principal through the generated
+authentication path without beginning a caller or building business policies.
+The response echoes the nonce and static metadata with `data: null` and the
+identity; discovery and its refusals use `Cache-Control: no-store`. Discovery
+over SSE is refused. Ordinary responses and acknowledgements carry identity
+only for comparison; clients never adopt identity from them.
+
+Call `await client.ready()` on a `GolemClient` or `GolemTransport` before
+starting mutations. Reads initialize automatically. When discovery finds a
+different identity, the client clears cached queries and owned React mutation
+results before admitting new work. An already sent mutation that loses its
+identity boundary has an unknown outcome and is never replayed automatically;
+explicit server commit errors retain their commit evidence. Per-call mutation
+callbacks detach from the new UI after a reset, while the returned promise and
+hook-global commit reconciliation retain responsibility for the sent work.
+
+The [offline restore workflow](#offline-sqlite-restore-unreleased) establishes a
+fresh identity in a verified private copy after caller-owned fleet shutdown.
+This prerequisite does not fence old running processes or implement data-only
+corrections. It provides no NAS support guarantee.
+
+### Custom continuation pages
+
+`golem.PageQuery` declares a custom read whose resolver accepts
+`golem.PageRequest[Args]` and returns `(golem.PageBatch[Item], error)`.
+Declare both `golem.PageLimits(defaultTake, maxTake, maxCandidates)` and
+`golem.PageRevision(revision)`. The generated GraphQL result contains `items`
+and nullable `next`; the root adds `take` and `after` arguments. The page item
+can be a registered output object or a model row. Page declarations are
+separate from ordinary custom queries and cannot carry `Within` grants.
+Page declarations require `golem.WithDataIncarnation(schema)` and the matching
+unreleased migration, regeneration and client setup described above.
+
+The request exposes admitted `Arguments()`, `Take()`, `CandidateLimit()`,
+cumulative `Consumed()`, private `State()` and the chain's absolute `Expires()`.
+Return `golem.PageItems(items, consumed, nextState)`: `consumed` is the number
+of traversal candidates examined on this request, including denied or deleted
+rows. It must cover the returned items and stay within the candidate budget.
+A nil checkpoint ends traversal. A nonnil checkpoint must be nonempty,
+different from the previous checkpoint and accompanied by positive
+consumption. An empty or short item list can still have a continuation; only
+`next: null` ends the chain. No total count of denied candidates is exposed.
+
+The resolver owns a stable traversal contract. Use an immutable keyset with a
+defined population boundary, or retain an immutable ranked snapshot through
+the chain deadline. Include a deterministic tie breaker and validate the
+checkpoint against that ordering. A random seed alone does not freeze a
+changing ranked population. Increasing a counter or changing opaque bytes
+does not prove that a resolver advanced its application ordering.
+
+A schema with pages requires the generated application's `Config.Pages`, a
+`runtime.PageConfig[Actor]`. The new field extends `runtime.Config`; use keyed
+configuration literals when upgrading. Supply a deployment-owned AES-256 keyring, the
+active key ID, an explicit whole-second `MaxAge` from one second through
+24 hours, and a `Scope` callback. The callback receives
+the admitted actor and must identify its durable account, tenant, selected
+profile and authorization revision. A process-local policy-cache key is not
+a durable scope. Every serving instance shares the keyring. Retain retiring
+decrypt keys through the maximum token lifetime and rotate before 2^32 token
+encryptions across instances sharing a key. There is no startup-generated key
+or default expiry. `PageConfig.Incarnation` has been removed: the runtime uses
+the provider identity admitted at startup. Stop old instances before using the
+[offline restore workflow](#offline-sqlite-restore-unreleased), then open fresh
+instances against the newly published identity.
+
+Tokens bind the contract, operation, page revision, data incarnation, actor
+scope and canonical arguments, including effective `take`. `after` is excluded
+from the argument binding. A request authenticates these before calling the
+resolver, then reauthorizes returned rows and selected fields. Tokens are
+retryable and do not confer data access. The chain deadline is fixed on its
+first request. Hydration or output encoding errors issue no continuation.
+The protocol ceilings are 1,000 returned items, 10,000 consumed candidates per
+request, a 2 KiB private checkpoint and an 8 KiB token; declarations can be
+tighter. The runtime read limit also bounds admitted `take`.
+
+On the client, `staticContinuationQueryOptions` and React's
+`useGolemStaticContinuationQuery` use opaque `string | null` page parameters.
+Select one page root directly and leave `after` to the client. These static
+APIs preserve authored model field selections and require no event stream.
+Discard the whole accumulated chain after expiry, an authentication/profile
+change or an application invalidation. `staticInfiniteQueryOptions` and
+`useGolemStaticInfiniteQuery` retain the separate generated-list cursor API.
+
+### Declared operation invalidation
+
+Add `golem.InvalidateRows[M](name, binder, field, ...)` or
+`golem.InvalidateFacts[M](name, scopeTemplate, binder, factName, ...)` directly
+to a `golem.Query` or `golem.PageQuery` declaration. Mutations cannot declare
+these dependencies. This supports scalar results, output objects and model
+rows; the observed source need not occur in the response. It does not authorize
+arbitrary scalar values computed by the resolver: those remain application
+output whose sensitivity the resolver must enforce.
+
+Each binder is a named, non-generic free function in the schema package. Its
+exact signature is `func(context.Context, Actor, Args) (golem.Predicate[M], error)`
+for readable rows, or `func(context.Context, Actor, Args) (golem.BoundFactScope[M], error)`
+for facts. `Actor` is the schema actor by value and `Args` is the resolver's
+ordinary argument type. A page binder receives `Args`, not `PageRequest[Args]`;
+its subscription excludes the compiler-owned `take` and `after`. An ordinary
+query's application arguments named `take` or `after` retain their meaning.
+Binders run with a freshly admitted actor at opening and revalidation, including
+event evaluation. Their predicates narrow caller authority and grant no access.
+
+Readable dependencies watch stored scalar fields, with row authorization,
+watched-field masks and before-read hook filters applied. The source must enable
+`golem.Subscriptions`. Public primary-key access is not required. Declared
+before-image coverage must include every watched field and every local scalar
+used by the row policy, binder/hook filter or watched-field mask. Use
+`golem.DeleteSnapshot[M](fields...)` inside `golem.Subscriptions[M](...)` when
+the default coverage is insufficient; it omits unbounded text fields. Include
+all required fields in an explicit declaration; primary-key fields are added
+automatically. Missing coverage refuses subscription admission with
+`P7_INVALIDATION_COVERAGE`; it must not silently miss a row leaving the filter.
+Capture is declared independently of which subscribers happen to be connected.
+Readable operation invalidation currently refuses admission when CDC adapters
+are configured: they cannot certify complete before images. A retained update
+or delete with missing or partial evidence ends the stream with
+`GOLEM_SUBSCRIPTION_SOURCE_CLOSED`, without attributing dependency activity.
+The client clears stale results and recovers with its normal stream backoff.
+
+Ordinary relations in a readable source's row policy, binder filter, or watched-field
+mask currently fail admission with `P7_INVALIDATION_COVERAGE`. The runtime does
+not infer an old source audience from a currently readable related row: deletes
+and reparenting can change that audience. Declare a separate related source
+whose binder and ordinary authority are local, or use genuine registered fact
+authority with certified historical capture. This restriction does not change
+ordinary query execution; general historical routing for ordinary relation
+invalidation remains unsupported.
+
+Fact dependencies use registered fact names on the declared source and scope
+template. The returned bound scope must match the active policy's template,
+template fingerprint, arguments and predicate exactly. The policy must bind
+each requested fact. That authority can observe a hidden fact owner without
+granting `CanRead` on its row. It uses certified historical capture, including
+owner activity and scope loss. The default writer remains V3; fact invalidation
+requires the certified V4 historical writer and is refused when that contract
+is unavailable. An invalidation declaration does not activate V4. Named facts
+used by readable row rules or field masks keep this same historical authority;
+they are not converted into ordinary related-row streams.
+
+An operation declares at most 32 dependencies, each with 1–64 distinct scalar
+fields or fact names. Dependency names are unique within the operation,
+nonempty constants with at most 256 bytes. Ordinary arguments use canonical
+scalars, enums, lists and registered inputs; JSON and model-derived predicate,
+unique and mutation inputs are rejected recursively. Canonical argument work
+is limited to 128 KiB, 16,384 nodes and depth 32. Runtime planning also caps the
+combined member streams at 64 and observation paths at 256; existing subscription
+and read-planning limits still apply, so declaration limits do not guarantee
+admission.
+
+Generation adds a Boolean subscription named `<queryName>Changes` with ordinary
+query arguments. It sends acknowledgement and terminal control signals, never
+Boolean data, rows or IDs. Authorized activity ends it with
+`GOLEM_SUBSCRIPTION_RESYNC` / `DEPENDENCY_CHANGED`. The client subscribes again,
+waits for acknowledgement, then refetches. Live continuation pages discard the
+entire accumulated chain and restart at `after: null`. Use `queryOptions` /
+`useGolemQuery` for declared ordinary queries, and `continuationQueryOptions` /
+`useGolemContinuationQuery` for declared pages. Static query and continuation
+APIs open no subscriptions and remain available when observation is unsupported.
+They still enforce ordinary query authorization and continuation checks.
+
+Opted schemas emit manifest format 3 with the required capability
+`operation-invalidation-v1`. The server checks it for **all HTTP requests and
+WebSocket initialization against that schema**, including static queries and
+mutations. Older clients are rejected globally, rather than substituting
+returned-model streams. Upgrade the client and regenerate its manifest together
+with the server. Schemas without durable data identity or invalidation retain
+their previous capability requirements and request bytes. Page schemas require
+durable data identity and therefore also require `data-incarnation-v1`.
+Generated servers supply the exact
+active `graphql.Config.Bundle`; manual wrappers must preserve that bundle so
+the server can validate its fingerprint and capability requirements. The new
+field extends `graphql.Config`; use keyed configuration literals when upgrading.
 
 ### Partial commits are never reported as clean failures
 
@@ -1986,6 +2353,19 @@ It exports `golemClientManifest` (`as const`) and its type
   mutation's row is not). A client sets a single-row slot to `null` only when it
   is `nullable`.
 
+Unreleased: mutation roots can additionally carry `mutationScope`, which tells
+the client which caches may need refreshing after its own write. The closed
+choices are `{ kind: "models", models: ["Invite", "Team"] }`, with nonempty,
+sorted public model names, and `{ kind: "unscoped" }`. Generated roots use a
+conservative relation closure that includes nested writes, cascades and
+set-null effects. A reachable hook, private model or unknown target makes the
+scope unscoped. Custom mutations are always unscoped because their return type
+does not bound their writes: an operation returning one `Invite` may also
+create a `Team`. The root's existing `models` still describes its response and
+read dependencies. An absent scope also means unscoped. This optional hint is
+additive across manifest formats and requires no new server capability or live
+connection; ordinary HTTP operations remain supported.
+
 The file is absent in kernel mode (`WithoutGraphQL`), which has no GraphQL layer.
 
 To use it from a front end, see [REACT.md](./REACT.md) and the
@@ -2129,10 +2509,104 @@ derives constraint names from both) and making a column optional.
   cannot reorder columns in place, so a new field is always appended
   physically and a reorder changes no DDL. Physical column order is not part
   of PostgreSQL drift checking; the set of columns and their definitions is.
-- A required field with no default cannot be added while SQLite is a
+- In the released version, a required field with no default cannot be added while SQLite is a
   provider: declare a default or make the field optional. Only when
   PostgreSQL is the schema's sole provider can one required field per
   migration be added with a reviewed backfill.
+
+**Unreleased — SQLite required-column backfills.** The development version
+extends the existing `migration new` → `migration backfill attach` →
+`migration apply` workflow to a schema whose sole provider is SQLite. It
+stages one new column as nullable, fills it from the reviewed SQL companion,
+checks that no NULLs remain, and rebuilds the table with the required column.
+These steps and the migration ledger commit together; failure rolls them all
+back. Existing primary keys, row versions, the version counter, foreign keys,
+indexes and managed full-text search survive the rebuild.
+
+Stop application writers, background workers and live streams before applying
+this offline migration. The SQLite companion must be one parameter-free
+`UPDATE` that writes only the new column and returns no rows. It may read
+reviewed application tables and call functions SQLite marks innocuous.
+Transaction control, schema changes, PRAGMAs, attached databases, system
+metadata access and writes to existing columns are refused. A target used by a
+semantic index is refused because this workflow does not perform semantic
+invalidation. It does not run application hooks or emit ordinary mutation
+events. These execution restrictions describe the new SQLite path; they do
+not change PostgreSQL's existing companion execution contract.
+
+Only one required column and one provider are supported per reviewed
+backfill. Multi-provider companion publication remains unsupported. Data-only
+corrections use the separate workflow below; neither workflow is an online
+backfill or a historical Go callback.
+
+**Unreleased — PostgreSQL reviewed backfill execution.** Companions remain
+one parameter-free, preparable statement. Golem executes that statement in
+PostgreSQL's atomic procedural context, preserving the outer migration
+transaction as the sole commit owner. Direct transaction commands and nested
+`DO`/`CALL` transaction endings cannot commit staged changes. Utilities that
+require execution outside a transaction, such as `VACUUM` and
+`CREATE INDEX CONCURRENTLY`, are refused. Installed trusted PL/pgSQL and its
+`USAGE` privilege are required; the executor does not create functions or
+elevate privileges. Failure rolls back transactional schema/data changes,
+the ledger update, and any change to the admitted durable data identity.
+The companion remains operator-reviewed SQL: this boundary does not make
+sequence changes or external effects from privileged functions rollbackable.
+This backfill execution rule is separate from reviewed data corrections below
+and the offline SQLite restore workflow described above.
+
+**Unreleased — reviewed data-only corrections.** A schema whose sole declared
+provider is SQLite or PostgreSQL can append a correction without changing its
+model or physical schema. First enable reviewed durable data identity with
+`golem.WithDataIncarnation`; the correction refuses older physical profiles.
+Use `golem migration data new --name correct_title --field Note.Title --file
+correction.sql --schema ./notes`. The first run reports the exact operation ID
+requiring `--approve`; review the companion and rerun with that ID. The command
+seals a separate immutable entry and checksummed SQL companion. Existing
+`migration plan --migration <id>`, `generate`, and `migration apply` consume that
+same reviewed history. Ordinary `migration new` still refuses unchanged schemas.
+
+Stop the application fleet and prevent restart before applying: readers,
+writers, live streams, queue workers, publishers and CDC adapters. The deployment
+owns that exclusion; migration locks serialize migrations. Regenerate the app
+for the new reviewed head, retain the previous event bundle when historical
+facts require it, and open a fresh provider and app after applying. The schema
+and contract can stay identical while the generation changes. Never resume an
+app that retained the previous data identity.
+Retained historical bundles permit decoding; they do not grant current
+hidden-fact scope authority across generations. Such evidence fails closed
+through the existing subscription recovery boundary.
+
+Each correction updates one existing stored scalar field. Identity, unique and
+foreign-key fields, version fields, and sources of generated keys are refused.
+Semantic inputs, including generated dependencies, are refused until explicit
+semantic invalidation is supported. Other fields' semantic state remains intact.
+The companion is bounded at 1 MiB, parameter-free, and ends with one newline.
+Its values must use the field's canonical provider representation; application
+reconciliation owns domain invariants beyond the reviewed storage contract.
+SQLite permits one restricted `UPDATE`, reviewed table reads and innocuous
+functions. PostgreSQL requires a schema-qualified target and accepts a closed
+`UPDATE` grammar: same-table columns,
+literal values, scalar arithmetic/comparisons, Boolean expressions, `CASE`, and
+an optional `WHERE`. It rejects functions, casts, subqueries, CTEs, comments,
+multiple assignments and utilities; accepted expressions are rendered by Golem.
+There is no fallback to executing arbitrary PostgreSQL correction SQL.
+Unmanaged target triggers, rules and policies are refused even if allowlisted
+for ordinary startup; only verified provider-owned full-text behavior may run.
+
+Only rows whose stored value actually changes receive new row versions and
+optimistic-concurrency versions. Unchanged and unmatched rows retain theirs.
+The source must be ahead of retained row versions, and exhausted or invalid
+version state refuses the correction. SQLite rebuilds managed full-text search
+in the migration transaction; PostgreSQL retains its provider-owned generated
+projection. Keys, foreign keys, queue records and immutable facts remain stored.
+No application hooks or ordinary request events run.
+
+Corrections, row-version writes, a fresh data identity and the terminal ledger
+entry commit together. Failure rolls back their transactional changes;
+PostgreSQL sequence draws can leave gaps after a later rollback, as with normal
+mutations. Never reset that sequence as a repair. Successful no-op corrections
+still establish a fresh identity; retrying an already applied entry does not
+execute it or rotate identity again. NAS duration remains unmeasured.
 
 ### Adding row versions to an existing database
 
@@ -2161,6 +2635,17 @@ returns 0. On PostgreSQL, qualify both tables with the system namespace. A
 bundle generated by an older golem is refused in `HistoricalEventBundles` when
 its contract format is no longer supported; the release notes of the release
 that drops a format give the exact drain steps.
+
+**Unreleased retained-reader window:** the development version verifies
+v0.8.8 Contract7 metadata through a frozen historical reader for event bundles
+and offline archives. Active apps still require current Contract8 documents
+and regeneration. The tested SQLite archive path retains V3 facts and explicitly
+upgrades a recognized old queue on an extracted copy before restore; see the
+[prior-release acceptance](../../go/compatibility/README.md). Contract formats
+1–6 and fact codecs V1/V2 remain retired. This historical reader does not make
+old generated app code an active current build, or grant current hidden-fact
+scope authority to an old generation. Automatic writers still produce V3;
+the current dual reader accepts V3/V4 without activating V4 deployment writers.
 
 The stored event format itself is versioned. go/v0.8.1 reads only the current
 format, which stores the row version with every fact; facts written by go/v0.8.0
@@ -2234,6 +2719,7 @@ as `FORBIDDEN: mutation is not authorized`, is still possible.
 | `nested_depth` | `MutationLimits.MaxNestedDepth` | 5 |
 | `statement_parameters` | `MaxStatementParameters` on `MutationLimits` and `ReadLimits` | 999 |
 | `statement_size` | `ReadLimits.MaxStatementBytes` | 1 MiB |
+| `scalar_set_bytes` | encoded bytes of one compact scalar `In`/`NotIn` parameter; a fixed ceiling at the same scale as the SQL statement-size ceiling | 1 MiB |
 | `statement_aliases` | `ReadLimits.MaxStatementAliases` | 2,048 |
 | `selected_fields` | `ReadLimits.MaxSelectedFields` | 256 |
 | `depth` | `ReadLimits.MaxRelationDepth` | 5 |
@@ -2241,6 +2727,24 @@ as `FORBIDDEN: mutation is not authorized`, is still possible.
 | `fanout` | `ReadLimits.MaxRelationFanout` | none |
 | `transaction_ordinal` | the number of events one transaction can number | 2³² − 1 |
 | `list_items` | the `golem.MaxItems` or `golem.GraphQLList` maximum a custom operation or computed field declares for its list result | declared |
+| `hydrated_rows` | `GraphQLConfig.Limits.MaxHydratedRows`: identities requested when reloading custom or computed model results across one operation, or one subscription response | 1,000; ceiling 10,000 |
+| `result_bytes` | `GraphQLConfig.Limits.MaxResultBytes`: canonical JSON bytes of the rendered `data` value in one response | 16 MiB; also the ceiling |
+
+Hydration counts identities after deduplication within each model/projection
+group, including missing and denied rows. Distinct projections and separate
+result groups consume their own allowance. Chunk retries do not count twice.
+The budget resets for each request or subscription response; mutation roots
+share it even when a preceding write commits. Exceeding it after a successful
+write returns `COMMITTED_RESULT_UNAVAILABLE` with `committed: true`,
+`reason: LIMIT_EXCEEDED` and `limit: hydrated_rows`.
+
+The result byte limit counts aliases, object/list syntax and escaped string
+bytes after GraphQL null propagation. It applies to HTTP, WebSocket, SSE and
+direct server execution. An oversized result omits `data`; errors and protocol
+envelopes remain available to explain the refusal. If writes have confirmed
+commits, the error is `COMMITTED_RESULT_UNAVAILABLE` with `committed: true`,
+`reason: LIMIT_EXCEEDED` and `limit: result_bytes`. This is a rendered-result
+limit: resolver work and writes may already have completed when it is reached.
 
 The mutation defaults are also ceilings: you may lower them, never raise them.
 A limit that only the fields or relation hops your policy needs would exceed is
@@ -2356,6 +2860,14 @@ error also carries the operation's cost:
 {"message": "GraphQL query complexity 22 exceeds MaxComplexity (20)",
  "extensions": {"code": "QUERY_LIMIT_EXCEEDED", "limit": "MaxComplexity", "max": 20, "cost": 22}}
 ```
+
+Input node and depth limits cover both the raw variable object and the
+operation's combined argument shape, each measured with one enclosing object.
+Inline values, schema and variable defaults, and every use of a repeated
+variable count toward the argument budget. Singleton values promoted to lists
+count the resulting list containers too. These checks run before a resolver
+or caller operation executes, using the same limits across HTTP, WebSocket,
+SSE and direct server execution.
 
 A list field multiplies the cost of what it selects by the number of items it
 can return:

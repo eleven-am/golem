@@ -13,13 +13,16 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/operator"
+	"github.com/eleven-am/golem/go/internal/policy/resolve"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 const (
-	publicFrozenVersion = uint16(2)
-	maximumBindDepth    = 256
-	listCapability      = compilerir.CapabilityID("scalar-list:json-array:v1")
+	publicFrozenVersion         = uint16(2)
+	publicFactFrozenVersion     = uint16(3)
+	publicTemplateFrozenVersion = uint16(4)
+	maximumBindDepth            = 256
+	listCapability              = compilerir.CapabilityID("scalar-list:json-array:v1")
 )
 
 type binder struct {
@@ -28,32 +31,32 @@ type binder struct {
 	rule      uint32
 	hasRule   bool
 	exact     bool
+	facts     bool
 }
 
 // Predicate binds one frozen public predicate against the exact provider set
 // declared by registry. It validates construction and shape only. Runtime
 // activation remains behind operator.RequireAgreement.
 func Predicate(frozen golem.FrozenPredicate, registry *schema.Registry, providers ir.ProviderSet) (ir.Condition, error) {
-	value, err := newBinder(registry, providers)
-	if err != nil {
-		return ir.Condition{}, err
-	}
-	condition, err := value.predicate(frozen.View(), "predicate")
-	if err != nil {
-		return ir.Condition{}, err
-	}
-	return condition, nil
+	return callerPredicate(frozen, registry, providers, false)
 }
 
 func ExactPredicate(frozen golem.FrozenPredicate, registry *schema.Registry, providers ir.ProviderSet) (ir.Condition, error) {
+	return callerPredicate(frozen, registry, providers, true)
+}
+
+func callerPredicate(frozen golem.FrozenPredicate, registry *schema.Registry, providers ir.ProviderSet, exact bool) (ir.Condition, error) {
 	value, err := newBinder(registry, providers)
 	if err != nil {
 		return ir.Condition{}, err
 	}
-	value.exact = true
+	value.exact = exact
 	condition, err := value.predicate(frozen.View(), "predicate")
 	if err != nil {
 		return ir.Condition{}, err
+	}
+	if ir.HasFacts(condition) {
+		return ir.Condition{}, value.failure(CodeCondition, "predicate", "policy facts cannot be used in caller expressions")
 	}
 	return condition, nil
 }
@@ -66,9 +69,10 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 		return ir.Policy{}, err
 	}
 	view := frozen.View()
-	if view.Version() != publicFrozenVersion {
+	if view.Version() != publicFrozenVersion && view.Version() != publicFactFrozenVersion && view.Version() != publicTemplateFrozenVersion {
 		return ir.Policy{}, value.failure(CodeVersion, "policy", "unsupported frozen policy version %d", view.Version())
 	}
+	value.facts = true
 	if len(view.CanonicalBytes()) == 0 {
 		return ir.Policy{}, value.failure(CodeVersion, "policy", "frozen policy has no canonical evidence")
 	}
@@ -151,12 +155,71 @@ func Policy(frozen golem.FrozenPolicy, registry *schema.Registry, providers ir.P
 		rules[index] = built
 	}
 	value.hasRule = false
-	bound, err := ir.NewPolicy(model, rules)
+	definitions := view.Facts()
+	facts := make([]ir.FactDefinition, len(definitions))
+	for index, definition := range definitions {
+		body, bindErr := value.predicate(definition.Body(), fmt.Sprintf("policy.facts[%d]", index))
+		if bindErr != nil {
+			return ir.Policy{}, bindErr
+		}
+		if binding, present := definition.TemplateBinding(); present {
+			facts[index], err = value.factTemplate(model, definition.Name(), body, binding)
+		} else {
+			facts[index], err = ir.NewFactDefinition(model, definition.Name(), body)
+		}
+		if err != nil {
+			return ir.Policy{}, value.wrap(CodeCondition, "policy.facts", model, ir.FieldID{}, ir.RelationID{}, 0, err)
+		}
+	}
+	var scope ir.FactScope
+	if scopeView, present := view.FactScope(); present {
+		condition, bindErr := value.predicate(scopeView, "policy.factScope")
+		if bindErr != nil {
+			return ir.Policy{}, bindErr
+		}
+		if binding, present := view.FactScopeBinding(); present {
+			scope, err = value.scopeTemplate(model, condition, binding)
+		} else {
+			scope, err = ir.NewFactScope(condition)
+		}
+		if err != nil {
+			return ir.Policy{}, value.wrap(CodeCondition, "policy.factScope", model, ir.FieldID{}, ir.RelationID{}, 0, err)
+		}
+	}
+	_, hasScopeBinding := view.FactScopeBinding()
+	if (len(facts) != 0) != (view.Version() == publicFactFrozenVersion || view.Version() == publicTemplateFrozenVersion) || hasScopeBinding != (view.Version() == publicTemplateFrozenVersion) {
+		return ir.Policy{}, value.failure(CodeVersion, "policy", "frozen version and fact inventory disagree")
+	}
+	bound, err := ir.NewPolicyWithFacts(model, rules, facts, scope)
 	if err != nil {
 		return ir.Policy{}, value.wrap(CodeInternal, "policy", model, ir.FieldID{}, ir.RelationID{}, 0, err)
 	}
 	if version, owned := logical.RowVersion(); owned {
 		bound = bound.WithRowVersion(fieldID(version))
+	}
+	if len(facts) == 0 {
+		return bound, nil
+	}
+	// Validate resolved definitions as well as used rule expressions. An unused
+	// definition cannot hide an invalid operator or an excessive expansion.
+	questions := make([]ir.Condition, 0, len(facts)+len(rules))
+	for _, definition := range facts {
+		reference, _ := ir.NewFactReference(model, definition.ID())
+		questions = append(questions, reference)
+	}
+	for _, rule := range rules {
+		if condition, present := rule.Condition(); present {
+			questions = append(questions, condition)
+		}
+	}
+	for _, question := range questions {
+		condition, resolveErr := resolve.Condition(bound, question)
+		if resolveErr == nil {
+			resolveErr = operator.ValidateCondition(condition, providers)
+		}
+		if resolveErr != nil {
+			return ir.Policy{}, value.wrap(CodeCondition, "policy", model, ir.FieldID{}, ir.RelationID{}, 0, resolveErr)
+		}
 	}
 	return bound, nil
 }
@@ -199,7 +262,7 @@ func (b *binder) predicate(view golem.FrozenPredicateView, path string) (ir.Cond
 	if view == nil {
 		return ir.Condition{}, b.failure(CodeCondition, path, "nil frozen predicate view")
 	}
-	if view.Version() != publicFrozenVersion {
+	if view.Version() != publicFrozenVersion && view.Version() != publicFactFrozenVersion {
 		return ir.Condition{}, b.failure(CodeVersion, path, "unsupported frozen predicate version %d", view.Version())
 	}
 	if len(view.CanonicalBytes()) == 0 {
@@ -215,6 +278,9 @@ func (b *binder) predicate(view golem.FrozenPredicateView, path string) (ir.Cond
 	}
 	if condition.ModelID() != model {
 		return ir.Condition{}, b.failureFor(CodeModel, path+".root", condition.ModelID(), ir.FieldID{}, ir.RelationID{}, 0, "bound root model mismatch")
+	}
+	if ir.HasFacts(condition) {
+		return condition, nil
 	}
 	if err := operator.ValidateCondition(condition, b.providers); err != nil {
 		return ir.Condition{}, b.wrap(CodeOperator, path+".root", model, ir.FieldID{}, ir.RelationID{}, 0, err)
@@ -234,6 +300,22 @@ func (b *binder) condition(view golem.FrozenConditionView, model ir.ModelID, pat
 	}
 
 	switch view.Kind() {
+	case golem.FrozenConditionFactReference:
+		if !b.facts {
+			return ir.Condition{}, b.failure(CodeCondition, path, "policy facts cannot be used in caller expressions")
+		}
+		name, present := view.FactName()
+		if !present || view.Operator() != golem.FrozenOperatorNone || view.Mode() != 0 || hasField(view) || hasRelation(view) || len(view.Children()) != 0 || view.Operand() == nil || view.Operand().Kind() != golem.FrozenOperandNone {
+			return ir.Condition{}, b.failure(CodeCondition, path, "malformed policy fact reference")
+		}
+		if err := requireNoPath(view.Path()); err != nil {
+			return ir.Condition{}, err
+		}
+		id, err := ir.FactIdentity(model, name)
+		if err != nil {
+			return ir.Condition{}, err
+		}
+		return ir.NewFactReference(model, id)
 	case golem.FrozenConditionConstant:
 		return b.constant(view, model, path)
 	case golem.FrozenConditionLogical:

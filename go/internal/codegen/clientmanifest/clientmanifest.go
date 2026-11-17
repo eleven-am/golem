@@ -26,21 +26,32 @@ const (
 	ShapeUpdateMany = "updateMany"
 	ShapeDeleteMany = "deleteMany"
 	ShapeValue      = "value"
+	ShapeObject     = "object"
 )
 
 type Manifest struct {
-	Contract string           `json:"contract"`
-	Models   map[string]Model `json:"models"`
-	Roots    map[string]Root  `json:"roots"`
+	FormatVersion        int                       `json:"formatVersion,omitempty"`
+	RequiredCapabilities []string                  `json:"requiredCapabilities,omitempty"`
+	Contract             string                    `json:"contract"`
+	Models               map[string]Model          `json:"models"`
+	Roots                map[string]Root           `json:"roots"`
+	Types                map[string]TypeDefinition `json:"types,omitempty"`
+}
+
+type TypeDefinition struct {
+	Kind   ir.GraphQLTypeKind          `json:"kind"`
+	Fields map[string]ir.GraphQLTypeIR `json:"fields"`
+	OneOf  bool                        `json:"oneOf,omitempty"`
 }
 
 type Model struct {
-	PrimaryKey     []string            `json:"primaryKey"`
-	CursorSelector string              `json:"cursorSelector"`
-	UniqueInput    *string             `json:"uniqueInput"`
-	Events         *string             `json:"events"`
-	Relations      map[string]Relation `json:"relations"`
-	Computed       map[string][]string `json:"computed"`
+	PrimaryKey      []string                    `json:"primaryKey"`
+	CursorSelector  string                      `json:"cursorSelector"`
+	UniqueInput     *string                     `json:"uniqueInput"`
+	Events          *string                     `json:"events"`
+	Relations       map[string]Relation         `json:"relations"`
+	Computed        map[string][]string         `json:"computed"`
+	ComputedResults map[string]ir.GraphQLTypeIR `json:"computedResults,omitempty"`
 }
 
 type Relation struct {
@@ -50,15 +61,32 @@ type Relation struct {
 	Inverse  *string `json:"inverse"`
 }
 
+type Pagination struct {
+	Kind          string `json:"kind"`
+	TakeArgument  string `json:"takeArgument"`
+	AfterArgument string `json:"afterArgument"`
+	ItemsField    string `json:"itemsField"`
+	NextField     string `json:"nextField"`
+}
+
+type Invalidation struct {
+	Kind              string `json:"kind"`
+	SubscriptionField string `json:"subscriptionField"`
+}
+
 type Root struct {
-	Kind     string   `json:"kind"`
-	Models   []string `json:"models"`
-	Shape    string   `json:"shape"`
-	Nullable bool     `json:"nullable"`
+	MutationScope *MutationScope    `json:"mutationScope,omitempty"`
+	Invalidation  *Invalidation     `json:"invalidation,omitempty"`
+	Pagination    *Pagination       `json:"pagination,omitempty"`
+	Kind          string            `json:"kind"`
+	Models        []string          `json:"models"`
+	Shape         string            `json:"shape"`
+	Nullable      bool              `json:"nullable"`
+	Result        *ir.GraphQLTypeIR `json:"result,omitempty"`
 }
 
 type generatedRoot struct {
-	owner  string
+	owner  ir.ModelID
 	shape  string
 	models []string
 }
@@ -79,6 +107,14 @@ func Emit(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) ([]
 }
 
 func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (Manifest, error) {
+	if err := ir.ValidateGraphQLInvalidations(compilation.Contract); err != nil {
+		return Manifest{}, fmt.Errorf("client manifest: %w", err)
+	}
+	if len(compilation.Contract.GraphQLTypes) != 0 {
+		if err := ir.ValidateGraphQLTypeDefinitions(compilation.Contract); err != nil {
+			return Manifest{}, fmt.Errorf("client manifest: %w", err)
+		}
+	}
 	models := make(map[ir.ModelID]ir.ModelDeclIR, len(compilation.Model.Models))
 	for _, model := range compilation.Model.Models {
 		models[model.ID] = model
@@ -96,7 +132,22 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 		return Manifest{}, fmt.Errorf("client manifest: parse generated schema: %w", err)
 	}
 	result := Manifest{Contract: string(contract), Models: map[string]Model{}, Roots: map[string]Root{}}
+	result.RequiredCapabilities = compilation.Contract.RequiredClientCapabilities()
+	if version := compilation.Contract.RequiredClientManifestVersion(); version != ir.BaseClientManifestVersion {
+		result.FormatVersion, result.Types = version, map[string]TypeDefinition{}
+		for _, definition := range compilation.Contract.GraphQLTypes {
+			if schema.Types[definition.Name] == nil {
+				continue
+			}
+			fields := make(map[string]ir.GraphQLTypeIR, len(definition.Fields))
+			for _, field := range definition.Fields {
+				fields[field.Name] = field.Type
+			}
+			result.Types[definition.Name] = TypeDefinition{Kind: definition.Kind, Fields: fields, OneOf: definition.OneOf}
+		}
+	}
 	generatedRoots := map[string]generatedRoot{}
+	mutationScopes := generatedMutationScopes(compilation, models, contracts, relations)
 	for _, modelContract := range compilation.Contract.Models {
 		if !modelContract.Exposed {
 			continue
@@ -105,7 +156,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 		if !ok {
 			return Manifest{}, fmt.Errorf("client manifest: contract references unknown model %s", modelContract.ModelID)
 		}
-		entry, err := buildModel(model, modelContract, models, contracts, relations, schema)
+		entry, err := buildModel(model, modelContract, models, contracts, relations, schema, compilation.Contract.GraphQLTypes)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -115,22 +166,41 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 			if name == modelContract.Roots.RelationGroupBy {
 				reached = append(reached, relationGroupModels(modelContract, relations, contracts)...)
 			}
-			generatedRoots[name] = generatedRoot{owner: modelContract.GraphQLName, shape: shape, models: reached}
+			generatedRoots[name] = generatedRoot{owner: modelContract.ModelID, shape: shape, models: reached}
 		}
 	}
 	opaqueRoots := map[string]Root{}
 	for _, operation := range compilation.Contract.CustomOperations {
-		opaqueRoots[operation.Name] = Root{Kind: RootOpaque, Models: resultModels(operation.Result), Shape: resultShape(operation.Result)}
+		root := Root{Kind: RootOpaque, Models: resultModels(operation.Result, compilation.Contract.GraphQLTypes), Shape: resultShape(operation.Result)}
+		if operation.Invalidation != nil {
+			root.Invalidation = &Invalidation{Kind: "operation", SubscriptionField: operation.Invalidation.SubscriptionField}
+		}
+		if operation.Pagination != nil {
+			root.Pagination = &Pagination{Kind: "continuation", TakeArgument: "take", AfterArgument: "after", ItemsField: "items", NextField: "next"}
+		}
+		if root.Shape == ShapeObject {
+			value := operation.Result
+			root.Result = &value
+		}
+		opaqueRoots[operation.Name] = root
 	}
 	for _, name := range sdlRoots(schema) {
 		nullable := !rootType(schema, name).NonNull
 		if held, ok := opaqueRoots[name]; ok {
 			held.Nullable = nullable
+			if schema.Mutation != nil && schema.Mutation.Fields.ForName(name) != nil {
+				held.MutationScope = &MutationScope{Kind: MutationScopeUnscoped}
+			}
 			result.Roots[name] = held
 			continue
 		}
 		if owner, ok := generatedRoots[name]; ok {
-			result.Roots[name] = Root{Kind: RootGenerated, Models: owner.models, Shape: owner.shape, Nullable: nullable}
+			root := Root{Kind: RootGenerated, Models: owner.models, Shape: owner.shape, Nullable: nullable}
+			if schema.Mutation != nil && schema.Mutation.Fields.ForName(name) != nil {
+				scope := mutationScopes[owner.owner]
+				root.MutationScope = &scope
+			}
+			result.Roots[name] = root
 			continue
 		}
 		return Manifest{}, fmt.Errorf("client manifest: schema root %q is neither generated nor custom", name)
@@ -138,7 +208,7 @@ func Build(compilation ir.CompilationIR, contract ir.Fingerprint, sdl string) (M
 	return result, nil
 }
 
-func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR, schema *ast.Schema) (Model, error) {
+func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR, schema *ast.Schema, definitions []ir.GraphQLTypeDefinitionIR) (Model, error) {
 	names := make(map[ir.FieldID]ir.FieldContractIR, len(contract.Fields))
 	for _, field := range contract.Fields {
 		names[field.FieldID] = field
@@ -207,7 +277,13 @@ func buildModel(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir
 		}
 	}
 	for _, computed := range contract.Computed {
-		entry.Computed[computed.Name] = resultModels(computed.Result)
+		entry.Computed[computed.Name] = resultModels(computed.Result, definitions)
+		if resultShape(computed.Result) == ShapeObject {
+			if entry.ComputedResults == nil {
+				entry.ComputedResults = make(map[string]ir.GraphQLTypeIR)
+			}
+			entry.ComputedResults[computed.Name] = computed.Result
+		}
 	}
 	return entry, nil
 }
@@ -277,16 +353,40 @@ func resultShape(value ir.GraphQLTypeIR) string {
 	case value.Kind == ir.GraphQLTypeList && value.Element != nil && value.Element.Kind == ir.GraphQLTypeModel:
 		return ShapeRows
 	}
+	for value.Kind == ir.GraphQLTypeList && value.Element != nil {
+		value = *value.Element
+	}
+	if value.Kind == ir.GraphQLTypeObject {
+		return ShapeObject
+	}
 	return ShapeValue
 }
 
-func resultModels(value ir.GraphQLTypeIR) []string {
+func resultModels(value ir.GraphQLTypeIR, definitions []ir.GraphQLTypeDefinitionIR) []string {
 	seen := map[string]bool{}
-	for current := &value; current != nil; current = current.Element {
+	visited := map[string]bool{}
+	var visit func(ir.GraphQLTypeIR)
+	visit = func(current ir.GraphQLTypeIR) {
+		if current.Element != nil {
+			visit(*current.Element)
+		}
 		if current.Kind == ir.GraphQLTypeModel {
 			seen[current.Name] = true
 		}
+		if current.Kind != ir.GraphQLTypeObject || visited[current.Name] {
+			return
+		}
+		visited[current.Name] = true
+		for _, definition := range definitions {
+			if definition.Name == current.Name {
+				for _, field := range definition.Fields {
+					visit(field.Type)
+				}
+				break
+			}
+		}
 	}
+	visit(value)
 	result := make([]string, 0, len(seen))
 	for name := range seen {
 		result = append(result, name)

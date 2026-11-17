@@ -61,7 +61,7 @@ func BackfillPostcondition(model ir.ModelID, field ir.FieldID) Digest {
 // backfills carry the operator's checked-in SQL through that seam rather than
 // through an application callback ABI.
 func RequiresManualCompanion(operation Operation) bool {
-	return operation.Kind == ManualStep || operation.Kind == BackfillColumn
+	return operation.Kind == ManualStep || operation.Kind == BackfillColumn || operation.Kind == CorrectDataColumn
 }
 
 // BackfillOwner resolves the stable model that owns a backfilled field in a

@@ -240,7 +240,7 @@ func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Exec
 		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodeStoreFailure, "job identity: %v", err)
 	}
 	stored, err := app.queueStore.Enqueue(ctx, executor, queueprovider.EnqueueRequest{
-		ID: identity, Type: pending.TypeName(), Payload: payload,
+		ID: identity, Priority: int(pending.Priority()), Type: pending.TypeName(), Payload: payload,
 		MaxAttempts: pending.MaxAttempts(), Delay: pending.Delay().Truncate(time.Microsecond),
 		DedupeKey: pending.DedupeKey(), ExclusiveKey: pending.ExclusiveKey(),
 	})

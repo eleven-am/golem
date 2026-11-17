@@ -103,11 +103,11 @@ func mergeOperationPolicy(base FrozenPolicy, operation frozenOperationRules) (Fr
 		merged.position = uint32(len(rules))
 		rules = append(rules, merged)
 	}
-	canonical, err := encodeFrozenPolicy(base.model, rules)
+	canonical, err := encodeFrozenFactPolicy(base.model, rules, base.scope, base.facts, base.scopeBinding)
 	if err != nil {
 		return FrozenPolicy{}, err
 	}
-	return FrozenPolicy{model: base.model, rules: rules, canonical: canonical}, nil
+	return FrozenPolicy{model: base.model, rules: rules, canonical: canonical, scope: base.scope, facts: base.facts, scopeBinding: base.scopeBinding}, nil
 }
 
 // GeneratedOperation is one generated custom mutation registration: the
@@ -156,6 +156,9 @@ func GeneratedApplicationOperations[A any](bindings ApplicationBindings[A], oper
 		}
 		if operation.kind != generatedCustomMutation && operation.kind != generatedTxOperation {
 			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: operation %d has no operation kind", index)
+		}
+		if _, page := bindings.pages[operation.reference.entry]; page {
+			return ApplicationBindings[A]{}, fmt.Errorf("generated page query cannot also be a mutation or transaction operation")
 		}
 		if _, duplicate := table[operation.reference.entry]; duplicate {
 			return ApplicationBindings[A]{}, fmt.Errorf("generated operations: resolver %s is registered twice", operation.reference.name)
@@ -219,7 +222,7 @@ func (set GeneratedPolicySet) OperationPolicies(operation OperationID) []FrozenP
 	source := set.operations[operation]
 	result := make([]FrozenPolicy, len(source))
 	for index, policy := range source {
-		result[index] = FrozenPolicy{model: policy.model, rules: make([]frozenRule, len(policy.rules)), canonical: append([]byte(nil), policy.canonical...)}
+		result[index] = FrozenPolicy{model: policy.model, rules: make([]frozenRule, len(policy.rules)), canonical: append([]byte(nil), policy.canonical...), scope: policy.scope, scopeBinding: policy.scopeBinding, facts: append([]frozenFact(nil), policy.facts...)}
 		for ruleIndex, rule := range policy.rules {
 			result[index].rules[ruleIndex] = cloneFrozenRule(rule)
 		}

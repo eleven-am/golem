@@ -35,7 +35,7 @@ func withModelFormat(bundle golem.SchemaBundle, version uint32) golem.SchemaBund
 }
 
 func TestDecodeActiveRejectsOlderContractFormatWithRegenerate(t *testing.T) {
-	const want = "generated contract format 6 predates this golem (format 7): regenerate with golem generate"
+	const want = "generated contract format 6 predates this golem (format 8): regenerate with golem generate"
 	bundle := v073facts.SchemaBundle()
 	if bundle.Contract().FormatVersion() != 6 {
 		t.Fatalf("frozen v0.7.3 bundle has contract format %d", bundle.Contract().FormatVersion())
@@ -49,7 +49,7 @@ func TestDecodeActiveRejectsOlderContractFormatWithRegenerate(t *testing.T) {
 func TestDecodeActiveRejectsNewerContractFormatWithUpgrade(t *testing.T) {
 	bundle := withContractFormat(schematest.NewSubscribedIndexed(t).Bundle, uint32(compilerir.ContractFormatVersion)+1)
 	_, err := schema.DecodeActive(bundle)
-	requireDocumentFailure(t, err, "contract.formatVersion", "generated contract format 8 is newer than this golem (format 7): upgrade golem")
+	requireDocumentFailure(t, err, "contract.formatVersion", "generated contract format 9 is newer than this golem (format 8): upgrade golem")
 }
 
 func TestDecodeActiveRejectsOlderAndNewerModelFormat(t *testing.T) {
@@ -74,4 +74,18 @@ func TestDecodeActiveAcceptsTheCurrentBundle(t *testing.T) {
 func TestNewHistoricalRejectsContractV6WithDrainInstruction(t *testing.T) {
 	_, err := schema.NewHistorical(v073facts.SchemaBundle())
 	requireDocumentFailure(t, err, "contract.formatVersion", "historical contract format 6 is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles")
+}
+
+func TestDecodeActiveRejectsRetainedContractV7WithRegenerate(t *testing.T) {
+	// Active admission rejects the old outer version before decoding its bytes.
+	// Historical admission must independently reject this relabelled V8 payload.
+	bundle := withContractFormat(schematest.NewSubscribedIndexed(t).Bundle, 7)
+	const want = "generated contract format 7 predates this golem (format 8): regenerate with golem generate"
+	_, err := schema.DecodeActive(bundle)
+	requireDocumentFailure(t, err, "contract.formatVersion", want)
+	_, err = schema.New(bundle)
+	requireDocumentFailure(t, err, "contract.formatVersion", want)
+	if _, err := schema.NewHistorical(bundle); err == nil {
+		t.Fatal("historical registry accepted current bytes relabelled as contract7")
+	}
 }

@@ -183,7 +183,7 @@ func TestHistoricalV3DecoderMatrixIsClosed(t *testing.T) {
 	}
 
 	future := append([]byte(nil), v3...)
-	future[1+len(canonicalMagic)] = 4
+	future[1+len(canonicalMagic)] = byte(DataIncarnationFormatVersion + 1)
 	for name, decode := range map[string]func([]byte) (PhysicalSchema, error){
 		"active":   CanonicalDecode,
 		"v3-only":  CanonicalDecodeHistoricalV3,

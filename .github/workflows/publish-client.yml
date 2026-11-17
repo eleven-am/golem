@@ -11,6 +11,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-client
+  cancel-in-progress: false
+
 defaults:
   run:
     working-directory: client

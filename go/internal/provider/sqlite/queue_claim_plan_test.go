@@ -120,7 +120,7 @@ func openClaimStore(tb testing.TB, admitted bool) (*queueStore, *sqlx.DB) {
 }
 
 func sqliteClaimProbe(now int64, limit int) (string, []any) {
-	return sqliteClaimDiscovery(`job."type" IN (?,?)`, []any{"type0", "type1"}, now, limit)
+	return sqliteClaimDiscovery(`(job."type" IN (?,?)) AND job."priority"=?`, []any{"type0", "type1", 0}, now, limit)
 }
 
 func TestSQLiteClaimDiscoveryWalksTheClaimIndexInOrder(t *testing.T) {
@@ -140,8 +140,8 @@ func TestSQLiteClaimDiscoveryWalksTheClaimIndexInOrder(t *testing.T) {
 			if sqliteSortsTableRows(steps, "job") {
 				t.Fatalf("admitted=%v analyzed=%v: claim discovery sorts every claimable row before its LIMIT:\n%s", admitted, analyzed, plan)
 			}
-			if !strings.Contains(plan, "SEARCH job USING INDEX golem_queue_claim (status=? AND available_at<?)") {
-				t.Fatalf("admitted=%v analyzed=%v: claim discovery does not seek golem_queue_claim by status and time:\n%s", admitted, analyzed, plan)
+			if !strings.Contains(plan, "SEARCH job USING INDEX golem_queue_claim (status=? AND priority=? AND available_at<?)") {
+				t.Fatalf("admitted=%v analyzed=%v: claim discovery does not seek golem_queue_claim by status, priority, and time:\n%s", admitted, analyzed, plan)
 			}
 		}
 	}

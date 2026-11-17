@@ -37,7 +37,7 @@ func TestGeneratedServersHaveBoundForEveryUndefaultedList(t *testing.T) {
 	}{
 		{"hookvalues", hookvalues.GolemGeneratedSchemaBundle(), nil},
 		{"p5social", p5social.GolemGeneratedSchemaBundle(), []string{"Query.groupByPosts", "Query.relationGroupByPosts"}},
-		{"p5extensions", p5extensions.GolemGeneratedSchemaBundle(), []string{"Query.searchUsers"}},
+		{"p5extensions", p5extensions.GolemGeneratedSchemaBundle(), []string{"Query.searchUsers", "User.counterSteps"}},
 		{"p6metrics", p6metrics.GolemGeneratedSchemaBundle(), []string{"Query.groupByMetrics"}},
 		{"p10operations", p10operations.GolemGeneratedSchemaBundle(), []string{"Mutation.submitCappedInvites", "Mutation.submitInvites", "Query.cappedInvites", "Query.groupedInvites", "Query.searchInvites", "Query.searchTeams", "Team.openInvites", "Team.selfTeams"}},
 	} {
@@ -55,10 +55,15 @@ func TestGeneratedServersHaveBoundForEveryUndefaultedList(t *testing.T) {
 				t.Fatal(err)
 			}
 			var keys []string
+			if fixture.name == "p5extensions" && bounds["User.counterSteps"].Maximum != 3 {
+				t.Fatal("counterSteps must retain its declared scalar-list maximum")
+			}
+			maxima := make(map[string]int, len(bounds))
 			for key, bound := range bounds {
+				maxima[key] = bound.Maximum
 				keys = append(keys, key)
-				if bound < 1 {
-					t.Fatalf("%s has bound %d", key, bound)
+				if bound.Maximum < 1 {
+					t.Fatalf("%s has bound %d", key, bound.Maximum)
 				}
 			}
 			sort.Strings(keys)
@@ -72,7 +77,7 @@ func TestGeneratedServersHaveBoundForEveryUndefaultedList(t *testing.T) {
 			if _, err := publicgraphql.NewServer(string(sdl), publicgraphql.Config[int]{
 				PrincipalFromContext: func(context.Context) (int, bool) { return 0, false },
 				ReportInternalError:  func(context.Context, error) {},
-			}, generatedBoundsExecutor{bounds: bounds}); err != nil {
+			}, generatedBoundsExecutor{bounds: maxima}); err != nil {
 				t.Fatalf("server refused the generated bounds: %v", err)
 			}
 		})

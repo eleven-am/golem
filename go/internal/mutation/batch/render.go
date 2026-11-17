@@ -194,16 +194,35 @@ func (context renderContext) compile(condition policyir.Condition, offset int) (
 
 func (context renderContext) completeColumns() ([]string, []ResultColumn, error) {
 	model, _ := context.registry.Model(golem.ModelID(context.modelID()))
-	var fields []string
-	var columns []ResultColumn
+	var persisted []golem.FieldID
 	for _, publicID := range model.Fields() {
 		fieldID := policyir.FieldID(publicID)
-		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
+		_, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		if !ok { // relation field
 			continue
 		}
+		persisted = append(persisted, publicID)
+	}
+	return context.projectColumns(persisted, true)
+}
+
+// projectColumns owns private scalar image aliases and exact provider decode
+// projections, shared by complete mutation rows and bounded policy evidence.
+func (context renderContext) projectColumns(ids []golem.FieldID, qualified bool) ([]string, []ResultColumn, error) {
+	var fields []string
+	var columns []ResultColumn
+	for _, publicID := range ids {
+		fieldID := policyir.FieldID(publicID)
+		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
+		if !ok {
+			return nil, nil, fail(CodeSchema, context.modelID(), fieldID, "image field has no physical scalar descriptor", nil)
+		}
 		alias := "golem_f_" + hex.EncodeToString(fieldID[:])
-		fields = append(fields, policysql.ProjectColumn(context.provider, field.Type, context.qualified(field.Column))+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
+		expression := context.dialect.Quote(field.Column)
+		if qualified {
+			expression = context.qualified(field.Column)
+		}
+		fields = append(fields, policysql.ProjectColumn(context.provider, field.Type, expression)+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
 		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
 	}
 	if len(fields) == 0 {

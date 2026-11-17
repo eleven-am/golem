@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/eleven-am/golem/go/observe"
@@ -43,10 +45,12 @@ var (
 type Code string
 
 const (
-	CodeConfig      Code = "PROVIDER_CONFIG"
-	CodeOpen        Code = "PROVIDER_OPEN"
-	CodeClose       Code = "PROVIDER_CLOSE"
-	CodeMaintenance Code = "PROVIDER_MAINTENANCE"
+	CodeConfig            Code = "PROVIDER_CONFIG"
+	CodeOpen              Code = "PROVIDER_OPEN"
+	CodeClose             Code = "PROVIDER_CLOSE"
+	CodeMaintenance       Code = "PROVIDER_MAINTENANCE"
+	CodeSnapshotPublished Code = "PROVIDER_SNAPSHOT_PUBLISHED"
+	CodeRestorePublished  Code = "PROVIDER_RESTORE_PUBLISHED"
 )
 
 type providerError struct {
@@ -85,7 +89,7 @@ func CodeOf(err error) (Code, bool) {
 	if !errors.As(err, &classified) {
 		return "", false
 	}
-	return classified.code, classified.code == CodeConfig || classified.code == CodeOpen || classified.code == CodeClose || classified.code == CodeMaintenance
+	return classified.code, classified.code == CodeConfig || classified.code == CodeOpen || classified.code == CodeClose || classified.code == CodeMaintenance || classified.code == CodeSnapshotPublished || classified.code == CodeRestorePublished
 }
 
 type Version struct {
@@ -407,6 +411,39 @@ func CheckpointSQLiteForBackup(ctx context.Context, database *Database) error {
 	}
 	if err := internalsqlite.New().CheckpointForBackupWithDurability(ctx, database.state.sqliteDataSourceName, database.state.sqliteDurability); err != nil {
 		return failure(CodeMaintenance, "sqlite backup checkpoint failed")
+	}
+	return nil
+}
+
+// SnapshotSQLite admits the sealed source and exact generated expectation.
+// It never reopens the source by a caller-supplied path or enables maintenance
+// for a network-filesystem profile whose latency/support is not yet proved.
+func SnapshotSQLite(ctx context.Context, database *Database, expected golem.SchemaBundle, destination string) error {
+	if ctx == nil || database == nil || database.state == nil || database.state.provider != golem.SQLite || database.state.testOnly || database.state.isClosed() || database.state.database == nil || database.state.sqliteDurability != internalsqlite.DurabilityWAL {
+		return failure(CodeMaintenance, "sqlite snapshot requires an open verified local SQLite provider handle")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := policyschema.New(expected); err != nil {
+		return failure(CodeMaintenance, "sqlite snapshot expected generated schema is invalid")
+	}
+	physical, err := migration.BundlePhysicalSchema(expected, golem.SQLite)
+	if err != nil {
+		return failure(CodeMaintenance, "sqlite snapshot expected physical schema is invalid")
+	}
+	manifest, err := migration.PrepareReviewedStartup(expected, golem.SQLite, physical)
+	if err != nil {
+		return failure(CodeMaintenance, "sqlite snapshot expected reviewed migration state is invalid")
+	}
+	if err := internalsqlite.New().Snapshot(ctx, database.state.database, physical, manifest, destination); err != nil {
+		if errors.Is(err, internalsqlite.ErrSnapshotPublished) {
+			return failure(CodeSnapshotPublished, "sqlite snapshot destination was published but finalization failed")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return failure(CodeMaintenance, "sqlite snapshot failed before publication")
 	}
 	return nil
 }

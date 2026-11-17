@@ -32,6 +32,7 @@ type IncrementalPlan struct {
 type incrementalStep struct {
 	statement     string
 	backfill      migration.OperationID
+	correction    migration.OperationID
 	postcondition *generatedPostcondition
 }
 
@@ -68,6 +69,8 @@ func (plan IncrementalPlan) SQL() string {
 	var builder strings.Builder
 	for _, step := range plan.steps {
 		switch {
+		case step.correction != "":
+			builder.WriteString("-- golem reviewed data correction " + string(step.correction) + "\n")
 		case step.backfill != "":
 			builder.WriteString("-- golem reviewed backfill companion " + string(step.backfill) + "\n")
 		case step.postcondition != nil:
@@ -97,19 +100,7 @@ func reviewedInitial(entry migration.ManifestEntry) (reviewedInitialSnapshot, er
 }
 
 func reviewedEntryPlan(entry migration.ManifestEntry) (migration.Plan, error) {
-	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
-	if err != nil {
-		return migration.Plan{}, err
-	}
-	provider := entry.AfterSnapshot.Provider.Provider
-	if plan.Provider != provider ||
-		plan.BeforeFingerprint != entry.BeforePhysical ||
-		plan.AfterFingerprint != entry.AfterPhysical ||
-		!reflect.DeepEqual(plan.Operations, entry.Operations) ||
-		!reflect.DeepEqual(plan.Phases, entry.Phases) {
-		return migration.Plan{}, fmt.Errorf("reviewed migration snapshot lacks the exact sealed typed plan")
-	}
-	return plan, nil
+	return migration.ReviewedEntryPlan(entry)
 }
 
 func reviewedEntrySnapshots(entry migration.ManifestEntry) (reviewedSnapshot, reviewedSnapshot, error) {
@@ -170,6 +161,9 @@ func (*Provider) ReadLedgerForSchema(ctx context.Context, database *sqlx.DB, sys
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
+	if migration.IsDataCorrection(entry) {
+		return planPostgreSQLCorrection(entry)
+	}
 	semantic, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
 	if err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s semantic diff: %w", entry.ID, err)
@@ -544,8 +538,11 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 	}
 	if operation.Kind == migration.AddSystemObject {
 		object, exists := postgresqlSystemObject(r.schema.System, ir.ObjectID(operation.ObjectID))
-		if !exists || (!physical.IsOutboxSystemObjectV1(object) && !physical.IsOutboxDeliverySystemObjectV1(object) && !physical.IsUpsertGuardSystemObjectV1(object)) {
+		if !exists || (!physical.IsDataIncarnationSystemObjectV1(object) && !physical.IsOutboxSystemObjectV1(object) && !physical.IsOutboxDeliverySystemObjectV1(object) && !physical.IsUpsertGuardSystemObjectV1(object)) {
 			return nil, fmt.Errorf("system object %s is not registered", operation.ObjectID)
+		}
+		if physical.IsDataIncarnationSystemObjectV1(object) {
+			return []string{renderDataIncarnation(r.schema.System.Namespace.Name, object.Name)}, nil
 		}
 		if physical.IsUpsertGuardSystemObjectV1(object) {
 			return nil, nil
@@ -1298,9 +1295,18 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := physical.CompareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
 		return fmt.Errorf("postgresql migration starting fingerprint: %w", err)
 	}
+	previousIncarnation, err := beforeDataIncarnation(ctx, transaction, entry)
+	if err != nil {
+		return err
+	}
+
 	if err := executePostgreSQLIncrementalPlan(ctx, transaction, entry, files, plan); err != nil {
 		return err
 	}
+	if err := applyDataIncarnation(ctx, transaction, entry, previousIncarnation); err != nil {
+		return err
+	}
+
 	actualAfter, err := provider.introspectReviewedQuery(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql migration final introspection: %w", err)
@@ -1324,6 +1330,10 @@ func executePostgreSQLIncrementalPlan(ctx context.Context, transaction *sqlx.Tx,
 	statements := 0
 	for _, step := range plan.steps {
 		switch {
+		case step.correction != "":
+			if err := executePostgreSQLCorrection(ctx, transaction, entry, files); err != nil {
+				return err
+			}
 		case step.backfill != "":
 			if err := executeReviewedPostgreSQLBackfill(ctx, transaction, entry, files, step.backfill); err != nil {
 				return err
@@ -1360,13 +1370,48 @@ func executeReviewedPostgreSQLBackfill(ctx context.Context, transaction *sqlx.Tx
 	if err := migration.ValidateReviewedBackfillArtifact(content); err != nil {
 		return fmt.Errorf("postgresql migration %s reviewed backfill %s artifact: %w", entry.ID, operationID, err)
 	}
+	if err := executeAtomicPostgreSQLReviewedSQL(ctx, transaction, content); err != nil {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s: %w", entry.ID, operationID, err)
+	}
+	return nil
+}
+
+// Preparation proves the existing single-statement contract without executing
+// author SQL at the protocol level, where even a single COMMIT can escape Tx.
+// The constant PL/pgSQL wrapper executes it through atomic SPI instead. The
+// migration's outer transaction remains the sole commit/rollback owner.
+func executeAtomicPostgreSQLReviewedSQL(ctx context.Context, transaction *sqlx.Tx, content []byte) error {
 	prepared, err := transaction.PrepareContext(ctx, string(content))
 	if err != nil {
-		return fmt.Errorf("postgresql migration %s reviewed backfill %s is not exactly one preparable statement", entry.ID, operationID)
+		return fmt.Errorf("not exactly one preparable statement")
 	}
-	defer prepared.Close()
-	if _, err := prepared.ExecContext(ctx); err != nil {
-		return fmt.Errorf("postgresql migration %s reviewed backfill %s failed", entry.ID, operationID)
+	if err := prepared.Close(); err != nil {
+		return fmt.Errorf("reviewed SQL preparation cleanup failed")
+	}
+	var languageAvailable bool
+	if err := transaction.QueryRowxContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_language WHERE lanname='plpgsql' AND lanpltrusted AND pg_catalog.has_language_privilege(oid,'USAGE'))`).Scan(&languageAvailable); err != nil {
+		return fmt.Errorf("reviewed SQL atomic language capability could not be checked")
+	}
+	if !languageAvailable {
+		return fmt.Errorf("reviewed SQL atomic execution requires installed trusted PL/pgSQL with USAGE")
+	}
+	// The SQL stays parameter data; it is never interpolated into the wrapper.
+	// A transaction-local setting disappears on outer commit or rollback. Clear
+	// it before author SQL runs, retaining the bounded text only in the local.
+	if _, err := transaction.ExecContext(ctx, `SELECT pg_catalog.set_config('golem.reviewed_sql',$1,true) IS NOT NULL`, string(content)); err != nil {
+		return fmt.Errorf("reviewed SQL atomic execution could not be prepared")
+	}
+	const atomicExecution = `DO LANGUAGE plpgsql $golem_reviewed_sql$
+DECLARE
+    golem_reviewed_command pg_catalog.text;
+BEGIN
+    golem_reviewed_command := pg_catalog.current_setting('golem.reviewed_sql');
+    PERFORM pg_catalog.set_config('golem.reviewed_sql','',true);
+    EXECUTE golem_reviewed_command;
+END;
+$golem_reviewed_sql$`
+	if _, err := transaction.ExecContext(ctx, atomicExecution); err != nil {
+		return fmt.Errorf("reviewed SQL failed in the atomic migration context")
 	}
 	return nil
 }
@@ -1459,11 +1504,20 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err := physical.CompareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
 		return fmt.Errorf("postgresql initial migration starting fingerprint: %w", err)
 	}
+	previousIncarnation, err := beforeDataIncarnation(ctx, transaction, entry)
+	if err != nil {
+		return err
+	}
+
 	for index, statement := range script.statements {
 		if _, err := transaction.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("postgresql initial migration statement %d: %w", index, err)
 		}
 	}
+	if err := applyDataIncarnation(ctx, transaction, entry, previousIncarnation); err != nil {
+		return err
+	}
+
 	actualAfter, err := provider.introspectReviewedQuery(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration final introspection: %w", err)

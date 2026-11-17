@@ -71,6 +71,9 @@ func (c *Compiler) EncodeCustomWithComputedPartial(ctx context.Context, root Cus
 
 func (c *Compiler) encodeCustomPreparedValuePartial(ctx context.Context, typ compilerir.GraphQLTypeIR, value any, children []selectset.Slot, resolve ComputedResolver, path []any) (any, []ComputedFieldFailure, error) {
 	if value == nil {
+		if !typ.Nullable && (typ.Kind == compilerir.GraphQLTypeModel || typ.Kind == compilerir.GraphQLTypeObject) {
+			return nil, nil, missingDTOModel()
+		}
 		return c.encodeComputedValuePartial(ctx, typ, nil, children, resolve, path)
 	}
 	reflected := reflect.ValueOf(value)
@@ -112,6 +115,9 @@ func (c *Compiler) encodeCustomPreparedValuePartial(ctx context.Context, typ com
 			return nil, nil, fmt.Errorf("custom enum %s has invalid GraphQL value", typ.Name)
 		}
 		return name, nil, nil
+	}
+	if typ.Kind == compilerir.GraphQLTypeObject {
+		return c.encodeCustomObject(ctx, typ, value, children, resolve, path)
 	}
 	return c.encodeComputedValuePartial(ctx, typ, value, children, resolve, path)
 }
@@ -392,9 +398,15 @@ func (c *Compiler) encodeComputedValuePartial(ctx context.Context, typ compileri
 	}
 	if value == nil {
 		if !typ.Nullable {
+			if typ.Kind == compilerir.GraphQLTypeObject {
+				return nil, nil, missingDTOModel()
+			}
 			return nil, nil, fmt.Errorf("non-null computed result is null")
 		}
 		return nil, nil, nil
+	}
+	if HoldsObject(typ) {
+		return c.encodeCustomPreparedValuePartial(ctx, typ, value, children, resolve, path)
 	}
 	if typ.Kind == compilerir.GraphQLTypeList {
 		if typ.Element == nil {
@@ -413,9 +425,13 @@ func (c *Compiler) encodeComputedValuePartial(ctx context.Context, typ compileri
 			rows := make([]golem.RuntimeModelRow, 0, reflected.Len())
 			positions := make([]int, 0, reflected.Len())
 			paths := make([][]any, 0, reflected.Len())
+			var missing []ComputedFieldFailure
 			for index := range result {
 				item := reflected.Index(index).Interface()
-				if item == nil && typ.Element.Nullable {
+				if item == nil {
+					if !typ.Element.Nullable {
+						missing = append(missing, ComputedFieldFailure{Path: appendPath(path, index), Err: missingDTOModel(), PropagatesToRoot: !typ.Nullable})
+					}
 					continue
 				}
 				row, ok := item.(golem.RuntimeModelRow)
@@ -433,6 +449,7 @@ func (c *Compiler) encodeComputedValuePartial(ctx context.Context, typ compileri
 			for index := range encoded {
 				result[positions[index]] = encoded[index]
 			}
+			failures = append(missing, failures...)
 			return result, propagateThroughList(failures, *typ.Element, typ), nil
 		}
 		result := make([]any, reflected.Len())

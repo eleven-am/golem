@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/eleven-am/golem/go/internal/policy/scopecontract"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
@@ -50,7 +51,25 @@ func decodeBundle(bundle golem.SchemaBundle, historical bool) (compilerir.Compil
 	if err != nil {
 		return compilerir.CompilationIR{}, err
 	}
-	return compilerir.CompilationIR{Model: model, Contract: contract}, nil
+	compilation := compilerir.CompilationIR{Model: model, Contract: contract}
+	if err := compilerir.ValidateDataIncarnation(compilation); err != nil {
+		return compilerir.CompilationIR{}, fail(CodeContract, "contract.dataIncarnation", "%v", err)
+	}
+	// Metadata-only consumers may intentionally omit provider documents. Every
+	// supplied active document must nevertheless agree with the logical opt-in.
+	if !historical {
+		for index, document := range bundle.Providers() {
+			path := fmt.Sprintf("providers[%d]", index)
+			decoded, err := decodeProviderSchemaDocument(document.Schema(), document.SystemFingerprint(), false)
+			if err != nil {
+				return compilerir.CompilationIR{}, fail(CodePhysical, path, "%v", err)
+			}
+			if err := validateProviderDataIncarnation(contract.DataIncarnation != nil, decoded); err != nil {
+				return compilerir.CompilationIR{}, fail(CodePhysical, path, "%v", err)
+			}
+		}
+	}
+	return compilation, nil
 }
 
 func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) {
@@ -59,6 +78,9 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 		return nil, err
 	}
 	model, contract := compilation.Model, compilation.Contract
+	if err := scopecontract.Validate(model, contract); err != nil {
+		return nil, fail(CodeContract, "contract.scopeTemplates", "%v", err)
+	}
 	modelDocument, contractDocument := bundle.Model(), bundle.Contract()
 	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
 		return nil, fail(CodeModel, "model.optimisticConcurrency", "%v", err)
@@ -85,6 +107,10 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 	}
 	if err := builder.validateContract(contract); err != nil {
 		return nil, err
+	}
+	builder.registry.policyCapture, err = derivePolicyCaptureFields(compilation, builder.registry.modelFingerprint)
+	if err != nil {
+		return nil, fail(CodeContract, "contract.policyCapture", "%v", err)
 	}
 	if err := builder.indexProviders(model, bundle.Providers(), historical); err != nil {
 		return nil, err
@@ -132,6 +158,24 @@ func decodeModel(document golem.SchemaDocument, historical bool) (compilerir.Mod
 }
 
 func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.ContractIR, error) {
+	if historical && document.FormatVersion() == 7 {
+		if document.CanonicalVersion() != 1 {
+			return compilerir.ContractIR{}, fail(CodeDocument, "contract.canonicalVersion", "unsupported historical canonical version %d; want 1", document.CanonicalVersion())
+		}
+		contract, err := compilerir.DecodeHistoricalContractV7(document.Bytes())
+		if err != nil {
+			return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+		}
+		fingerprint, err := compilerir.FingerprintHistoricalContractV7(document.Bytes())
+		if err != nil {
+			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "%v", err)
+		}
+		if fingerprint != compilerir.Fingerprint(document.Fingerprint().String()) {
+			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "fingerprint mismatch")
+		}
+		return contract, nil
+	}
+
 	if historical && document.FormatVersion() < uint32(compilerir.ContractFormatVersion) {
 		return compilerir.ContractIR{}, fail(CodeDocument, "contract.formatVersion", "historical contract format %d is not supported by this golem: deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles", document.FormatVersion())
 	}
@@ -535,6 +579,8 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 		fact := builder.registry.models[mid]
 		fact.maxTake = model.Limits.MaxTake
 		fact.subscriptions = model.Subscriptions
+		fact.scopeTemplates = cloneScopeTemplates(model.ScopeTemplates)
+		fact.factTemplates = cloneFactTemplates(model.FactTemplates)
 		if model.Subscriptions {
 			logical := builder.logicalModels[model.ModelID]
 			if model.Event == nil {
@@ -628,6 +674,10 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 }
 
 func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documents []golem.ProviderSchemaDocument, historical bool) error {
+	incarnation, err := compilerir.ModelDataIncarnation(model)
+	if err != nil {
+		return fail(CodeModel, "model.dataIncarnation", "%v", err)
+	}
 	declared := make(map[golem.Provider]bool, len(model.Providers))
 	for _, provider := range model.Providers {
 		declared[golem.Provider(provider)] = true
@@ -655,6 +705,9 @@ func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documen
 		if golem.Provider(decoded.Provider.Provider) != provider {
 			return fail(CodeProvider, path, "outer provider %q disagrees with physical provider %q", provider, decoded.Provider.Provider)
 		}
+		if err := validateProviderDataIncarnation(incarnation, decoded); err != nil {
+			return fail(CodePhysical, path, "%v", err)
+		}
 		if err := builder.indexPhysical(provider, decoded); err != nil {
 			return err
 		}
@@ -664,8 +717,30 @@ func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documen
 }
 
 func decodeProviderSchemaDocument(document golem.SchemaDocument, system golem.SchemaDigest, historical bool) (physical.PhysicalSchema, error) {
-	if !historical {
-		if document.FormatVersion() != physical.SchemaFormatVersion || document.CanonicalVersion() != physical.CanonicalFormatVersion {
+	decoded, err := decodeProviderSchemaProfile(document, system, historical)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	if document.FormatVersion() != decoded.Version || document.CanonicalVersion() != decoded.CanonicalVersion {
+		return physical.PhysicalSchema{}, fmt.Errorf("outer physical format/canonical versions %d/%d disagree with decoded versions %d/%d", document.FormatVersion(), document.CanonicalVersion(), decoded.Version, decoded.CanonicalVersion)
+	}
+	return decoded, nil
+}
+
+func validateProviderDataIncarnation(enabled bool, schema physical.PhysicalSchema) error {
+	if enabled != physical.HasDataIncarnation(schema.System) || enabled != (schema.Version == physical.DataIncarnationFormatVersion) {
+		return fmt.Errorf("data incarnation model/contract declaration and physical profile disagree")
+	}
+	return nil
+}
+
+func decodeProviderSchemaProfile(document golem.SchemaDocument, system golem.SchemaDigest, historical bool) (physical.PhysicalSchema, error) {
+	// Opted v4 is an explicit supported current profile even when retained as
+	// event history. Frozen v1-v3 continue through their independent decoders.
+	if !historical || document.FormatVersion() == physical.DataIncarnationFormatVersion {
+		ordinary := document.FormatVersion() == physical.SchemaFormatVersion && document.CanonicalVersion() == physical.CanonicalFormatVersion
+		opted := document.FormatVersion() == physical.DataIncarnationFormatVersion && document.CanonicalVersion() == physical.DataIncarnationFormatVersion
+		if !ordinary && !opted {
 			return physical.PhysicalSchema{}, fmt.Errorf("unsupported physical format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
 		}
 		return physical.CanonicalDecodeVerified(document.Bytes(), physical.Digest(document.Fingerprint()), physical.Digest(system))

@@ -9,14 +9,18 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/dataincarnation"
+	"github.com/eleven-am/golem/go/internal/invalidationcontract"
 )
 
 const protocolVersion = 1
 
 const (
-	codeProtocolMismatch = "GOLEM_PROTOCOL_MISMATCH"
-	codeContractMismatch = "GOLEM_CONTRACT_MISMATCH"
-	codeDeadlineRequired = "GOLEM_PRINCIPAL_DEADLINE_REQUIRED"
+	codeProtocolMismatch        = "GOLEM_PROTOCOL_MISMATCH"
+	codeContractMismatch        = "GOLEM_CONTRACT_MISMATCH"
+	codeDataIncarnationMismatch = "GOLEM_DATA_INCARNATION_MISMATCH"
+	codeDeadlineRequired        = "GOLEM_PRINCIPAL_DEADLINE_REQUIRED"
 )
 
 const (
@@ -29,13 +33,17 @@ var liveAckPayload = []byte(`{"data":null,"extensions":{"golem":{"live":true}}}`
 type handshakeRefusal string
 
 const (
-	refusedProtocol handshakeRefusal = "protocol"
-	refusedContract handshakeRefusal = "contract"
-	refusedDeadline handshakeRefusal = codeDeadlineRequired
+	refusedIncarnation handshakeRefusal = "incarnation"
+	refusedProtocol    handshakeRefusal = "protocol"
+	refusedContract    handshakeRefusal = "contract"
+	refusedDeadline    handshakeRefusal = codeDeadlineRequired
+	refusedManifest    handshakeRefusal = "manifest"
+	refusedCapability  handshakeRefusal = "capability"
 )
 
 type requestExtensions struct {
-	Golem json.RawMessage `json:"golem"`
+	discoveryNonce string
+	Golem          json.RawMessage `json:"golem"`
 }
 
 func (extensions *requestExtensions) block() json.RawMessage {
@@ -46,26 +54,97 @@ func (extensions *requestExtensions) block() json.RawMessage {
 }
 
 type liveHandshake struct {
-	Protocol *int    `json:"protocol"`
-	Contract *string `json:"contract"`
+	DataIncarnation json.RawMessage `json:"dataIncarnation"`
+	Discover        json.RawMessage `json:"discover"`
+	Protocol        *int            `json:"protocol"`
+	Contract        *string         `json:"contract"`
+	ManifestVersion json.RawMessage `json:"manifestVersion"`
+	Capabilities    json.RawMessage `json:"capabilities"`
 }
 
-func (server *Server[P]) checkHandshake(block json.RawMessage) handshakeRefusal {
+func parseLiveHandshake(block json.RawMessage) (liveHandshake, handshakeRefusal) {
+	var handshake liveHandshake
 	if len(block) == 0 {
-		return refusedProtocol
+		return handshake, refusedProtocol
 	}
 	decoder := json.NewDecoder(bytes.NewReader(block))
 	decoder.DisallowUnknownFields()
-	var handshake liveHandshake
 	if err := decoder.Decode(&handshake); err != nil {
-		return refusedProtocol
+		return handshake, refusedProtocol
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
+		return handshake, refusedProtocol
+	}
+	return handshake, ""
+}
+
+func (server *Server[P]) checkHandshake(block json.RawMessage) handshakeRefusal {
+	handshake, refusal := parseLiveHandshake(block)
+	if refusal != "" {
+		return refusal
+	}
+	if len(handshake.Discover) != 0 {
 		return refusedProtocol
 	}
+	if refusal := server.checkStaticHandshake(handshake); refusal != "" {
+		return refusal
+	}
+	if !server.dataIncarnation.Valid() {
+		if len(handshake.DataIncarnation) != 0 {
+			return refusedProtocol
+		}
+		return ""
+	}
+	var stamp string
+	if err := json.Unmarshal(handshake.DataIncarnation, &stamp); err != nil {
+		return refusedIncarnation
+	}
+	value, err := dataincarnation.Parse(stamp)
+	if err != nil || value != server.dataIncarnation {
+		return refusedIncarnation
+	}
+	return ""
+}
+
+func (server *Server[P]) checkStaticHandshake(handshake liveHandshake) handshakeRefusal {
 	if handshake.Protocol == nil || *handshake.Protocol != protocolVersion {
 		return refusedProtocol
+	}
+	version := compilerir.BaseClientManifestVersion
+	if len(handshake.ManifestVersion) != 0 {
+		version = 0
+		if err := json.Unmarshal(handshake.ManifestVersion, &version); err != nil {
+			return refusedManifest
+		}
+	}
+	required := server.clientManifestVersion
+	if required == 0 {
+		required = compilerir.BaseClientManifestVersion
+		if executor, ok := server.executor.(ClientManifestExecutor); ok {
+			required = executor.ClientManifestVersion()
+		}
+	}
+	if version != required {
+		return refusedManifest
+	}
+	var capabilities []string
+	if len(handshake.Capabilities) != 0 {
+		if err := json.Unmarshal(handshake.Capabilities, &capabilities); err != nil || capabilities == nil || len(capabilities) > 32 {
+			return refusedCapability
+		}
+	}
+	seen := map[string]bool{}
+	for _, capability := range capabilities {
+		if len(capability) == 0 || len(capability) > 128 || seen[capability] {
+			return refusedCapability
+		}
+		seen[capability] = true
+	}
+	for _, capability := range server.requiredCapabilities() {
+		if (capability != invalidationcontract.Capability && capability != dataincarnation.Capability) || !seen[capability] {
+			return refusedCapability
+		}
 	}
 	if handshake.Contract == nil || *handshake.Contract != server.contractFingerprint.String() {
 		return refusedContract
@@ -73,9 +152,19 @@ func (server *Server[P]) checkHandshake(block json.RawMessage) handshakeRefusal 
 	return ""
 }
 
+func (server *Server[P]) requiredCapabilities() []string {
+	if server.clientManifestVersion != 0 {
+		return server.clientCapabilities
+	}
+	if source, ok := server.executor.(ClientCapabilitiesExecutor); ok {
+		return source.RequiredClientCapabilities()
+	}
+	return nil
+}
+
 func (server *Server[P]) handshakeFailure(extensions *requestExtensions, required bool) *Error {
 	block := extensions.block()
-	if block == nil && !required {
+	if block == nil && !required && len(server.requiredCapabilities()) == 0 {
 		return nil
 	}
 	refusal := server.checkHandshake(block)
@@ -89,6 +178,15 @@ func (server *Server[P]) handshakeFailure(extensions *requestExtensions, require
 func (refusal handshakeRefusal) closeReason() string { return "golem:" + string(refusal) }
 
 func (refusal handshakeRefusal) failure() Error {
+	if refusal == refusedIncarnation {
+		return publicError(codeDataIncarnationMismatch, "the request data incarnation is missing, invalid or stale; discover the current identity before new work")
+	}
+	if refusal == refusedCapability {
+		return publicError(codeProtocolMismatch, "the client must advertise this contract's required client capability; regenerate with a matching Golem client")
+	}
+	if refusal == refusedManifest {
+		return publicError(codeProtocolMismatch, "the client manifest format is unsupported by this server; regenerate with a matching Golem client")
+	}
 	if refusal == refusedContract {
 		return publicError(codeContractMismatch, "the client was generated from a different contract than this server; regenerate the client")
 	}

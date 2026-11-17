@@ -9,8 +9,8 @@ import (
 	"sort"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/operator"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -408,7 +408,7 @@ func list(value any, path string) ([]any, error) {
 	return nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(path))
 }
 
-func sortedKeys(value map[string]any) []string {
+func sortedKeys[V any](value map[string]V) []string {
 	keys := make([]string, 0, len(value))
 	for key := range value {
 		keys = append(keys, key)

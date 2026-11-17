@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { Transport, type Credentials } from '../src/index.js'
+import { RECOVERY_COOLDOWN_MS, Transport, type Credentials } from '../src/index.js'
 import { CREATE_COMMENT, idle, LIST, POST_WITH_COMMENTS, sleep, titles, until, watch, world, type World } from './harness/live.js'
 import { spy, type Spy } from './harness/spy.js'
 import { actor, headerSocket, invalidatePolicies, manifest, setPrincipalMode, signUp, socialUrl, spawnSocial, type SpawnedSocial } from './harness/social.js'
@@ -79,9 +79,72 @@ describe('RESYNC', () => {
     await author.execute({ query: 'mutation($id: UUID!) { updatePost(where: { ID: $id }, data: { published: { set: false } }) { id } }', variables: { id: post } })
     await until(() => view.fetches() === before + 1)
     expect(probe.ends).toContain('GOLEM_SUBSCRIPTION_RESYNC')
-    await until(() => (view.data() as { post: unknown }).post === null)
+    await until(() => (view.data() as { post?: unknown } | undefined)?.post === null)
     author.dispose()
   }, 40_000)
+
+  it('bounds recovery across 1000 real dependency writes and converges after the last commit', async () => {
+    const { w, probe } = await live()
+    const carol = actor()
+    const author = new Transport({ url: `${socialUrl()}/graphql`, manifest, credentials: carol.credentials, createSocket: headerSocket })
+    let stopStatus: () => void = () => undefined
+    try {
+      await signUp(author, carol)
+      const posts = await w.publication('post')
+      const comments = await w.publication('comment')
+      const mine = token()
+      const created = await author.execute<{ createPost: { id: string } }>({ query: CREATE_POST, variables: { data: postInput(mine) } })
+      const post = created.createPost.id
+      const comment = randomUUID()
+      await author.execute({ query: CREATE_COMMENT, variables: { id: comment, post, author: carol.id, body: 'storm' } })
+      await posts?.published([post], 'CREATED')
+      await comments?.published([comment], 'CREATED')
+      posts?.close()
+      comments?.close()
+      const view = watch(w, POST_WITH_COMMENTS, { id: post })
+      await until(() => w.live.statusOf(view.query)?.state === 'LIVE' && view.data() !== undefined)
+      await idle(view)
+      const beforeStreams = probe.subscribes()
+      const beforeFetches = view.fetches()
+      const began = performance.now()
+      let unavailableMs = 0
+      let unavailableAt: number | undefined
+      stopStatus = w.live.subscribeStatus(() => {
+        const now = performance.now()
+        if (w.live.statusOf(view.query)?.state === 'RECOVERING') unavailableAt ??= now
+        else if (unavailableAt !== undefined) {
+          unavailableMs += now - unavailableAt
+          unavailableAt = undefined
+        }
+      })
+      // Each alias is a separately committed update. Ten bounded requests
+      // avoid a thousand client connections while exercising real publisher,
+      // dependency routing, replacement acknowledgements and HTTP recovery.
+      const fields = Array.from({ length: 100 }, (_, index) =>
+        `w${index}:updatePost(where:{ID:$id},data:{published:{set:${index % 2 === 1}},title:{set:$title}}){id}`,
+      ).join(' ')
+      for (let batch = 1; batch <= 10; batch++) {
+        await author.execute({ query: `mutation Storm($id:UUID!,$title:String!){${fields}}`, variables: { id: post, title: `${mine}-${batch * 100}` } })
+      }
+      await until(() => w.live.statusOf(view.query)?.state === 'LIVE' &&
+        (view.data() as { post?: { title?: string } } | undefined)?.post?.title === `${mine}-1000`, 20_000, 'final storm result')
+      await idle(view)
+      const elapsedMs = performance.now() - began
+      const subscriptions = probe.subscribes() - beforeStreams
+      const fetches = view.fetches() - beforeFetches
+      // Two model streams share one query recovery deadline. The bound scales
+      // with elapsed time rather than assuming a particular disk's write rate.
+      const bound = 2 * Math.ceil(elapsedMs / RECOVERY_COOLDOWN_MS) + 4
+      expect(probe.ends).toContain('GOLEM_SUBSCRIPTION_RESYNC')
+      expect(subscriptions).toBeLessThanOrEqual(bound)
+      expect(fetches).toBeLessThanOrEqual(bound)
+      expect(subscriptions).toBeLessThan(500)
+      console.info('dependency recovery workload', { writes: 1000, elapsedMs: Math.round(elapsedMs), subscriptions, fetches, unavailableMs: Math.round(unavailableMs) })
+    } finally {
+      stopStatus()
+      author.dispose()
+    }
+  }, 60_000)
 })
 
 describe('OVERFLOW', () => {
@@ -223,10 +286,11 @@ describe('4401 at the credential deadline', () => {
     await until(() => view.fetches() === before + 1)
     current = bob.id
     await until(() => probe.ends.includes('reauthenticate'), 15_000)
-    await until(() => w.live.statusOf(view.query)?.state === 'LIVE', 15_000)
     await until(() => view.fetches() === before + 2)
+    expect(w.live.statusOf(view.query)?.state).toBe('RECOVERING')
+    expect(view.data()).toBeUndefined()
     w.gate.release()
-    await until(() => titles(view.data()).length === 1)
+    await until(() => titles(view.data()).length === 1 && w.live.statusOf(view.query)?.state === 'LIVE')
     await idle(view)
     expect(titles(view.data())).toEqual([`${mine}-public`])
     expect(view.fetches()).toBe(before + 2)

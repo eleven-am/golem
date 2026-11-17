@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 )
 
 func TestGraphQLStringInputRejectsNUL(t *testing.T) {

@@ -88,3 +88,19 @@ func Serialize(values []float32, dimensions int) ([]byte, error) {
 	}
 	return encoded, nil
 }
+
+// Deserialize validates the declared dimension before allocating and shares
+// the storage writer's finite-value and exact-cosine norm checks.
+func Deserialize(encoded []byte, dimensions int) ([]float32, error) {
+	if dimensions < 1 || len(encoded)%4 != 0 || len(encoded)/4 != dimensions {
+		return nil, fmt.Errorf("SEMANTIC_VECTOR_INVALID: encoded dimensions do not match")
+	}
+	values := make([]float32, dimensions)
+	if _, err := binary.Decode(encoded, binary.LittleEndian, values); err != nil {
+		return nil, fmt.Errorf("SQLITE_VEC_VECTOR: deserialization failed")
+	}
+	if err := ValidateVector(values, dimensions); err != nil {
+		return nil, err
+	}
+	return values, nil
+}

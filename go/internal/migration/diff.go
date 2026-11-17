@@ -17,6 +17,12 @@ import (
 // Diff compares validated normalized physical schemas by stable IDs. It never
 // infers a rename from spelling similarity.
 func Diff(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version == 3 && after.Version == physical.DataIncarnationFormatVersion {
+		return DiffDataIncarnationPhysicalUpgrade(before, after)
+	}
+	if before.Version == physical.DataIncarnationFormatVersion && after.Version != physical.DataIncarnationFormatVersion {
+		return Plan{}, fmt.Errorf("data incarnation physical profile cannot be removed")
+	}
 	return diffSchemas(before, after, false, false)
 }
 
@@ -106,6 +112,10 @@ func DiffOptimisticConcurrencyPhysicalUpgrade(before, after physical.PhysicalSch
 // reviewed entry. Mixed physical versions are always refused.
 func DiffReviewed(before, after physical.PhysicalSchema) (Plan, error) {
 	switch {
+	case before.Version == 3 && after.Version == physical.DataIncarnationFormatVersion:
+		return DiffDataIncarnationPhysicalUpgrade(before, after)
+	case before.Version == physical.DataIncarnationFormatVersion && before.CanonicalVersion == physical.DataIncarnationFormatVersion && after.Version == physical.DataIncarnationFormatVersion && after.CanonicalVersion == physical.DataIncarnationFormatVersion:
+		return diffSchemas(before, after, true, true)
 	case before.Version == physical.SchemaFormatVersion && before.CanonicalVersion == physical.CanonicalFormatVersion && after.Version == physical.SchemaFormatVersion && after.CanonicalVersion == physical.CanonicalFormatVersion:
 		if physical.SchemaFormatVersion != 3 || physical.CanonicalFormatVersion != 3 {
 			return Plan{}, fmt.Errorf("current physical format %d/%d has no reviewed planner dispatch", physical.SchemaFormatVersion, physical.CanonicalFormatVersion)
@@ -173,14 +183,14 @@ func diffSchemas(before, after physical.PhysicalSchema, historicalBefore, histor
 	if err := builder.identifyGeneratedWideningRecreation(); err != nil {
 		return Plan{}, err
 	}
-	beforeSystem, err := physical.SystemFingerprint(left.Provider, left.System)
+	beforeSystem, err := physical.SystemFingerprintVersion(left.Provider, left.System, left.CanonicalVersion)
 	if historicalBefore {
 		beforeSystem, err = physical.HistoricalSystemFingerprint(left)
 	}
 	if err != nil {
 		return Plan{}, err
 	}
-	afterSystem, err := physical.SystemFingerprint(right.Provider, right.System)
+	afterSystem, err := physical.SystemFingerprintVersion(right.Provider, right.System, right.CanonicalVersion)
 	if historicalAfter {
 		afterSystem, err = physical.HistoricalSystemFingerprint(right)
 	}
@@ -348,7 +358,7 @@ func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.Syst
 }
 
 func registeredAdditiveSystemObject(object physical.SystemObject) bool {
-	return physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
+	return physical.IsDataIncarnationSystemObjectV1(object) || physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
 }
 
 func emptySystemSchema(system physical.SystemSchema) bool {
@@ -1535,4 +1545,36 @@ func stringIDs[T any](a, b map[string]T) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// DiffDataIncarnationPhysicalUpgrade owns the sole 3->4 bridge: enabling the
+// singleton without coalescing unrelated persistence changes into the bridge.
+func DiffDataIncarnationPhysicalUpgrade(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 3 || before.CanonicalVersion != 3 || after.Version != physical.DataIncarnationFormatVersion || after.CanonicalVersion != physical.DataIncarnationFormatVersion {
+		return Plan{}, fmt.Errorf("data incarnation upgrade requires exact physical 3->4")
+	}
+	left, err := physical.NormalizeHistoricalV3(before)
+	if err != nil {
+		return Plan{}, err
+	}
+	right, err := physical.Normalize(after)
+	if err != nil {
+		return Plan{}, err
+	}
+	if !physical.HasDataIncarnation(right.System) {
+		return Plan{}, fmt.Errorf("physical 4 upgrade requires data incarnation")
+	}
+	projected := right
+	projected.Version, projected.CanonicalVersion = 3, 3
+	projected.System.Objects = nil
+	for _, object := range right.System.Objects {
+		if !physical.IsDataIncarnationSystemObjectV1(object) {
+			projected.System.Objects = append(projected.System.Objects, object)
+		}
+	}
+	projected, err = physical.NormalizeHistoricalV3(projected)
+	if err != nil || !reflect.DeepEqual(left, projected) {
+		return Plan{}, fmt.Errorf("data incarnation physical upgrade must be isolated from other schema changes")
+	}
+	return diffSchemas(left, right, true, true)
 }

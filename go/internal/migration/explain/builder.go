@@ -240,11 +240,15 @@ func buildOperation(input operationInput) (Operation, error) {
 		result.capabilities = append(result.capabilities, capability)
 	}
 	if input.manual != nil {
-		if input.kind != migration.BackfillColumn || input.risk != migration.RiskManual || !input.approvalRequired || !validRelativePath(input.manual.path) || !validDigest(input.manual.sha256, false) || !validDigest(input.manual.postcondition, false) {
+		if input.kind != migration.BackfillColumn && input.kind != migration.CorrectDataColumn || input.risk != migration.RiskManual || !input.approvalRequired || !validRelativePath(input.manual.path) || !validDigest(input.manual.sha256, false) || !validDigest(input.manual.postcondition, false) {
 			return Operation{}, unavailable()
 		}
 		result.manual = &ManualCompanion{path: input.manual.path, sha256: input.manual.sha256, postcondition: input.manual.postcondition}
-		warnings.add(WarningReviewedBackfill)
+		if input.kind == migration.CorrectDataColumn {
+			warnings.add(WarningDataCorrection)
+		} else {
+			warnings.add(WarningReviewedBackfill)
+		}
 	}
 	result.warnings = warnings.values()
 	return result, nil
@@ -260,7 +264,7 @@ func knownOperationKinds() []migration.OperationKind {
 		migration.AddForeignKey, migration.DropForeignKey, migration.AddCheck, migration.DropCheck,
 		migration.CreateIndex, migration.DropIndex, migration.RenameIndex,
 		migration.CreateProviderExtension, migration.DropProviderExtension, migration.UpgradeSemanticState,
-		migration.BackfillColumn,
+		migration.BackfillColumn, migration.CorrectDataColumn,
 		migration.InitializeConcurrencyColumn,
 		migration.RebuildTable, migration.ValidateConstraint, migration.ManualStep,
 		migration.RecordSchemaVersion,
@@ -306,7 +310,7 @@ func classifyEffect(kind migration.OperationKind, facts effectInput) (Effect, []
 			}
 			return EffectValueDeleted, nil, nil
 		}
-	case migration.BackfillColumn, migration.ManualStep:
+	case migration.BackfillColumn, migration.CorrectDataColumn, migration.ManualStep:
 		if facts.beforePresent && facts.afterPresent && facts.preservation == preservationUnspecified && !facts.extensionRecreation {
 			return EffectManualDataTransform, nil, nil
 		}
@@ -350,7 +354,7 @@ func buildIdentity(kind migration.OperationKind, input identityInput, display di
 		allowed.modelID = input.modelID
 	case migration.AddColumn, migration.RenameColumn, migration.AlterColumnType,
 		migration.AlterColumnNullability, migration.SetColumnDefault, migration.DropColumnDefault,
-		migration.DropColumn, migration.BackfillColumn, migration.InitializeConcurrencyColumn:
+		migration.DropColumn, migration.BackfillColumn, migration.CorrectDataColumn, migration.InitializeConcurrencyColumn:
 		allowed.modelID, allowed.fieldID = input.modelID, input.fieldID
 	case migration.AddPrimaryKey, migration.DropPrimaryKey, migration.AddUnique, migration.DropUnique:
 		allowed.modelID, allowed.keyID = input.modelID, input.keyID
@@ -611,7 +615,7 @@ func validWarnings(values []Warning) bool {
 	allowed := warningSet{}
 	for _, warning := range []Warning{
 		WarningApprovalRequired, WarningDataLoss, WarningTableOrIndexRewrite,
-		WarningStrongLockPossible, WarningManualReview, WarningReviewedBackfill,
+		WarningStrongLockPossible, WarningManualReview, WarningReviewedBackfill, WarningDataCorrection,
 		WarningAutocommitBoundary, WarningZeroDowntimeNotGuaranteed,
 	} {
 		allowed.add(warning)
@@ -637,7 +641,7 @@ func (set warningSet) addAll(values []Warning) {
 func (set warningSet) values() []Warning {
 	order := []Warning{
 		WarningApprovalRequired, WarningDataLoss, WarningTableOrIndexRewrite,
-		WarningStrongLockPossible, WarningManualReview, WarningReviewedBackfill,
+		WarningStrongLockPossible, WarningManualReview, WarningReviewedBackfill, WarningDataCorrection,
 		WarningAutocommitBoundary, WarningZeroDowntimeNotGuaranteed,
 	}
 	result := make([]Warning, 0, len(set))

@@ -26,6 +26,17 @@ type OutboxRow struct {
 }
 
 func (envelope Envelope) OutboxRow(recordedAt time.Time) (OutboxRow, error) {
+	return envelope.outboxRow(recordedAt, true)
+}
+
+// TransportRow retains the historical graph reference and ordinary private
+// before-image. The graph itself is loaded from the producing outbox, because
+// model-routed consumers need not receive the causation's first event.
+func (envelope Envelope) TransportRow(recordedAt time.Time) (OutboxRow, error) {
+	return envelope.outboxRow(recordedAt, false)
+}
+
+func (envelope Envelope) outboxRow(recordedAt time.Time, stored bool) (OutboxRow, error) {
 	if recordedAt.IsZero() {
 		return OutboxRow{}, fmt.Errorf("P4_FACT_OUTBOX: recorded time is zero")
 	}
@@ -55,9 +66,25 @@ func (envelope Envelope) OutboxRow(recordedAt time.Time) (OutboxRow, error) {
 			return OutboxRow{}, err
 		}
 	}
+	if envelope.history != nil {
+		if stored && (envelope.ordinal == 1) != (envelope.graphCompanion != nil) {
+			return OutboxRow{}, fmt.Errorf("P5_POLICY_HISTORY: only the first stored fact must contain its graph")
+		}
+		var graph []byte
+		if stored && envelope.graphCompanion != nil {
+			if err := envelope.validatePolicyHistoryCompanion(*envelope.graphCompanion); err != nil {
+				return OutboxRow{}, err
+			}
+			graph = envelope.graphCompanion.encoded
+		}
+		deleteSnapshot, err = encodePolicyHistoryPrivateEvidence(deleteSnapshot, graph)
+		if err != nil {
+			return OutboxRow{}, err
+		}
+	}
 	return OutboxRow{
-		EventID: formatUUID([16]byte(envelope.event)), FactVersion: int64(FormatVersion),
-		CodecIdentity: CodecIdentity, GenerationFingerprint: hex.EncodeToString(envelope.generation[:]),
+		EventID: formatUUID([16]byte(envelope.event)), FactVersion: int64(envelope.FormatVersion()),
+		CodecIdentity: envelope.CodecIdentity(), GenerationFingerprint: hex.EncodeToString(envelope.generation[:]),
 		ModelID: hex.EncodeToString(envelope.model[:]), Action: actionText(envelope.action),
 		BeforeIdentity: beforeIdentity, AfterIdentity: afterIdentity,
 		CausationID: formatUUID([16]byte(envelope.causation)), TransactionOrdinal: int64(envelope.ordinal),

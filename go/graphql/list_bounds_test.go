@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 )
 
 type boundsExecutor struct{ bounds map[string]int }
@@ -12,7 +14,14 @@ func (boundsExecutor) Execute(context.Context, int, Operation) Response {
 	return Response{Data: map[string]any{}}
 }
 
-func (executor boundsExecutor) ListBounds() ListBounds { return NewListBounds(executor.bounds) }
+func (executor boundsExecutor) ListBounds() ListBounds {
+	entries := make(map[string]graphqloperation.ListBound, len(executor.bounds))
+	for key, maximum := range executor.bounds {
+		// Only the group root in this fixture enforces its take argument.
+		entries[key] = graphqloperation.ListBound{Maximum: maximum, TakeBounded: key == "Query.groups"}
+	}
+	return generatedListBounds(entries)
+}
 
 const listBoundsSDL = `type Query {
   me: [User!]!
@@ -76,6 +85,33 @@ func TestComplexityUsesDeclaredListBounds(t *testing.T) {
 	}
 }
 
+func TestComplexityUsesDeclaredScalarListBounds(t *testing.T) {
+	bounds := map[string]int{"Query.tags": 4}
+	for key, bound := range listBoundsTable {
+		bounds[key] = bound
+	}
+	server, err := listBoundsServer(t, Limits{MaxComplexity: 2}, bounds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := server.Execute(context.Background(), 1, Request{Query: `{ tags }`})
+	if len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "QUERY_LIMIT_EXCEEDED" || response.Errors[0].Extensions["cost"] != 5 {
+		t.Fatalf("bounded scalar list escaped its output cost: %#v", response)
+	}
+}
+
+func TestFixedListBoundsDoNotTrustAnArgumentNamedTake(t *testing.T) {
+	server, err := listBoundsServer(t, Limits{MaxComplexity: 1}, listBoundsTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.listBounds = NewListBounds(listBoundsTable)
+	response := server.Execute(context.Background(), 1, Request{Query: `{ groups(by: ["a"], take: 1) { key } }`})
+	if len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "QUERY_LIMIT_EXCEEDED" || response.Errors[0].Extensions["cost"] != 10_001 {
+		t.Fatalf("untrusted take narrowed a fixed result maximum: %#v", response)
+	}
+}
+
 func TestComplexityIgnoresMaxPageSize(t *testing.T) {
 	queries := []string{
 		`{ me { collections { id } } }`,
@@ -109,7 +145,6 @@ func TestNewServerRejectsExecutorMissingABound(t *testing.T) {
 func TestNewServerRejectsBoundForUnknownField(t *testing.T) {
 	for name, extra := range map[string]string{
 		"a field that does not exist":    "Query.nothing",
-		"a scalar list":                  "Query.tags",
 		"a list with a take default":     "Query.users",
 		"a relation list with a default": "User.collections",
 		"a type that does not exist":     "Ghost.items",

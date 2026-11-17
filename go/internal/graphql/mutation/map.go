@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )
 

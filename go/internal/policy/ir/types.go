@@ -14,6 +14,7 @@ type (
 	ModelID             [16]byte
 	FieldID             [16]byte
 	RelationID          [16]byte
+	FactID              [16]byte
 	EnumID              [16]byte
 	EnumValueID         [16]byte
 	OperatorID          uint16
@@ -45,12 +46,14 @@ const (
 )
 
 const (
-	ConditionConstant ConditionKind = 1
-	ConditionLogical  ConditionKind = 2
-	ConditionScalar   ConditionKind = 3
-	ConditionList     ConditionKind = 4
-	ConditionJSON     ConditionKind = 5
-	ConditionRelation ConditionKind = 6
+	ConditionConstant      ConditionKind = 1
+	ConditionLogical       ConditionKind = 2
+	ConditionScalar        ConditionKind = 3
+	ConditionList          ConditionKind = 4
+	ConditionJSON          ConditionKind = 5
+	ConditionRelation      ConditionKind = 6
+	ConditionFactReference ConditionKind = 7
+	ConditionFact          ConditionKind = 8
 )
 
 const (

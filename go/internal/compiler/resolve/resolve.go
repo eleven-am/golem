@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
+	"github.com/eleven-am/golem/go/internal/dataincarnation"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
@@ -109,6 +110,17 @@ func (r *baseResolver) resolveSchema() {
 		}
 	}
 	r.compilation.Contract = ir.ContractIR{FormatVersion: ir.ContractFormatVersion}
+	if root.DataIncarnation {
+		r.compilation.Contract.DataIncarnation = &ir.DataIncarnationContractIR{Kind: "provider", Version: dataincarnation.Version}
+		for _, provider := range providers {
+			extension, diagnostic := r.ids.Register(ir.ObjectExtension, ir.OwnedIdentity(identity.ID, dataincarnation.Kind+"\x00"+string(provider)), root.Span)
+			if diagnostic != nil {
+				r.diagnostics = append(r.diagnostics, *diagnostic)
+				continue
+			}
+			r.compilation.Model.Extensions = append(r.compilation.Model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionIDFrom(extension), Provider: provider, Version: dataincarnation.Version, Owner: ir.ObjectID(identity.ID), Kind: dataincarnation.Kind, Payload: "{}"})
+		}
+	}
 }
 
 func (r *baseResolver) resolveEnums() {

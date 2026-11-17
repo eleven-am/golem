@@ -15,11 +15,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-type testPrincipal struct{ Allow bool }
-type testActor struct{ Allow bool }
-type testUser struct{}
-type testPost struct{}
-
 func TestOpenCreatesIsolatedCallerAndExplicitSystemExecutions(t *testing.T) {
 	ctx := context.Background()
 	fixture := schematest.New(t)

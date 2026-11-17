@@ -738,7 +738,7 @@ func TestDiffReviewedAcceptsOnlyClosedPhysicalVersionPairs(t *testing.T) {
 	mixedAfter := v3
 	mixedAfter.CanonicalVersion = 1
 	future := v3
-	future.Version, future.CanonicalVersion = 4, 4
+	future.Version, future.CanonicalVersion = physical.DataIncarnationFormatVersion+1, physical.DataIncarnationFormatVersion+1
 	for _, test := range []struct {
 		name          string
 		before, after physical.PhysicalSchema
@@ -1312,5 +1312,19 @@ func TestLegacySemanticSnapshotRebuildsShadowStorage(t *testing.T) {
 	}
 	if len(create.Dependencies) != 1 || create.Dependencies[0] != drop.ID {
 		t.Fatalf("legacy semantic recreate does not depend on drop: drop=%#v create=%#v", drop, create)
+	}
+}
+
+func TestDataIncarnationBridgeRefusesMissingFeatureAndMixedProfile(t *testing.T) {
+	before := physical.PhysicalSchema{Version: 3, CanonicalVersion: 3, Provider: physical.SQLiteManifest(), Namespace: physical.Namespace{Name: "main"}}
+	after := before
+	after.Version, after.CanonicalVersion = physical.DataIncarnationFormatVersion, physical.DataIncarnationFormatVersion
+	if _, err := DiffReviewed(before, after); err == nil {
+		t.Fatal("bridge without durable incarnation accepted")
+	}
+	after.System = physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: "main"}, Objects: []physical.SystemObject{physical.DataIncarnationSystemObjectV1()}}
+	after.CanonicalVersion = 3
+	if _, err := DiffReviewed(before, after); err == nil {
+		t.Fatal("mixed physical/canonical bridge accepted")
 	}
 }

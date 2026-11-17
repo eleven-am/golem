@@ -97,5 +97,5 @@ func (value GraphQLTypeIR) CompositeListCapacity() (int, bool) {
 		}
 		current = current.Element
 	}
-	return capacity, current != nil && current.Kind == GraphQLTypeModel
+	return capacity, current != nil && (current.Kind == GraphQLTypeModel || current.Kind == GraphQLTypeObject)
 }

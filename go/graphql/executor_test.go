@@ -136,10 +136,22 @@ func generatedTestCompilation(t *testing.T) (compilerir.CompilationIR, golem.Sch
 
 func generatedTestBundle(t *testing.T, compilation compilerir.CompilationIR) golem.SchemaBundle {
 	t.Helper()
-	modelBytes, _ := compilerir.CanonicalModel(compilation.Model)
-	contractBytes, _ := compilerir.CanonicalContract(compilation.Contract)
-	modelFingerprint, _ := compilerir.ModelFingerprint(compilation.Model)
-	contractFingerprint, _ := compilerir.ContractFingerprint(compilation.Contract)
+	modelBytes, err := compilerir.CanonicalModel(compilation.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractBytes, err := compilerir.CanonicalContract(compilation.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelFingerprint, err := compilerir.ModelFingerprint(compilation.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractFingerprint, err := compilerir.ContractFingerprint(compilation.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
 	modelDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ModelFormatVersion), uint32(compilerir.CanonicalFormatVersion), generatedTestDigest(t, modelFingerprint), modelBytes)
 	contractDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), generatedTestDigest(t, contractFingerprint), contractBytes)
 	return golem.GeneratedSchemaBundle(golem.SchemaDigest{1}, "test", "test", modelDocument, contractDocument)

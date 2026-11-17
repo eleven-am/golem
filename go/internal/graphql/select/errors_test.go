@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 )
 
 func socialRequest(t *testing.T, model string, source string) (Request, compilerir.CompilationIR) {
@@ -138,7 +138,7 @@ func TestExtensionValueRefusalsAreTypedAndKeepSchemaTermsOnly(t *testing.T) {
 		message string
 	}{
 		{"non-null-is-null", compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeScalar, Name: "Int"}, nil, compileerr.KindNullNotAllowed, "Value cannot be null"},
-		{"list-wrong-shape", list, "x", compileerr.KindInvalidValue, "Value has the wrong kind of value"},
+		{"list-singleton-wrong-kind", list, "x", compileerr.KindInvalidValue, "Input [0] must be of type Int"},
 		{"list-too-long", list, []any{int32(1), int32(2), int32(3)}, compileerr.KindInputLimit, "Input exceeds MaxListItems (2)"},
 		{"list-element-wrong-kind", list, []any{int32(1), "x"}, compileerr.KindInvalidValue, "Input [1] must be of type Int"},
 		{"enum-unknown", compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeEnum, Name: "Kind", Nullable: true}, "Nope", compileerr.KindInvalidValue, "Value is not a value of enum Kind"},

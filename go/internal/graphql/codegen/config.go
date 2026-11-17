@@ -246,6 +246,16 @@ func Emit(request Request) (Result, error) {
 		body.WriteString("\t\treturn run(ctx, golemGeneratedOperationCaller[P](inner))\n")
 		body.WriteString("\t})\n}\n\n")
 	}
+	if hasPageOperation(request.Compilation) {
+		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLDispatchPage(ctx context.Context, extensionID string, resolver any, arguments map[string]any, input golem.PageInput, run func(context.Context, golem.RuntimePageState, map[string]any) (golem.PageBatch[any], error)) (golem.RuntimePageResult, error) {\n")
+		body.WriteString("\tif caller == nil || caller.public == nil { return golem.RuntimePageResult{}, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
+		body.WriteString("\treturn golemruntime.DispatchCallerPage(ctx, caller.public.runtime, extensionID, resolver, arguments, input, run)\n}\n\n")
+	}
+	if request.Compilation != nil && len(request.Compilation.Contract.RequiredClientCapabilities()) != 0 {
+		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLSubscribeInvalidation(ctx context.Context, operationID string, arguments map[string]any) (golem.InvalidationStream, error) {\n")
+		body.WriteString("\tif caller == nil || caller.public == nil { return nil, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
+		body.WriteString("\treturn golemruntime.CallerInvalidations(ctx, caller.public.runtime, operationID, arguments)\n}\n\n")
+	}
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenRead(ctx context.Context, request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {\n")
 	body.WriteString("\treturn caller.execution.ExecuteFrozenRead(ctx, request)\n")
 	body.WriteString("}\n\n")
@@ -303,6 +313,9 @@ func Emit(request Request) (Result, error) {
 	}
 	body.WriteString("\texecutor, err := golemgraphql.NewGeneratedExecutor(golemgraphql.GeneratedExecutorConfig[P]{\n")
 	body.WriteString("\t\tBundle: bundle, Limits: config.Limits, BeginCaller: app.golemGeneratedGraphQLBeginCaller, AuthenticatePrincipal: app.golemGeneratedGraphQLAuthenticatePrincipal, ReportInternalError: config.ReportInternalError,\n")
+	if request.Compilation != nil && request.Compilation.Contract.DataIncarnation != nil {
+		body.WriteString("\t\tDataIncarnationSource: app.runtime,\n")
+	}
 	if len(computedBindings) != 0 {
 		body.WriteString("\t\tComputedBindings: []golemgraphql.ComputedBinding{\n")
 		for index := range computedBindings {
@@ -320,6 +333,9 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\t})\n")
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\tserver, err := golemgraphql.NewServer(golemGeneratedGraphQLSDL, golemgraphql.Config[P]{\n")
+	if request.Compilation != nil && len(request.Compilation.Contract.RequiredClientCapabilities()) != 0 {
+		body.WriteString("\t\tBundle: bundle,\n")
+	}
 	body.WriteString("\t\tPrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection, WebSocketInit: config.WebSocketInit, EventLimits: app.runtime.EventLimits(),\n")
 	body.WriteString("\t\tContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable, Observer: app.observer, Provider: app.provider,\n")
 	body.WriteString("\t\tSubscriptionRecheck: config.SubscriptionRecheck,\n")
@@ -441,6 +457,10 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 		}
 		if err != nil {
 			return nil, err
+		}
+		if operation.Pagination != nil {
+			bindings = append(bindings, fmt.Sprintf("golemgraphql.BindGeneratedPageQueryContract(bundle, golemgraphql.CustomBindingSpec{ExtensionID: %s, ResolverPackage: %s, ResolverName: %s}, %s)", strconv.Quote(string(operation.ExtensionID)), strconv.Quote(operation.Resolver.PackagePath), strconv.Quote(operation.Resolver.Name), resolver))
+			continue
 		}
 		constructor := "BindGeneratedCustomQueryContract"
 		if operation.Operation == ir.CustomOperationMutation {
@@ -669,4 +689,16 @@ func formatToFixedPoint(source []byte, run func([]byte) ([]byte, error), passes 
 		source = formatted
 	}
 	return nil, fmt.Errorf("generated GraphQL source did not reach a gofmt fixed point after %d passes", passes)
+}
+
+func hasPageOperation(compilation *ir.CompilationIR) bool {
+	if compilation == nil {
+		return false
+	}
+	for _, operation := range compilation.Contract.CustomOperations {
+		if operation.Pagination != nil {
+			return true
+		}
+	}
+	return false
 }

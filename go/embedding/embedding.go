@@ -213,6 +213,53 @@ func NewVector(values []float32) (Vector, error) {
 func (value Vector) Dimensions() int   { return len(value.values) }
 func (value Vector) Values() []float32 { return append([]float32(nil), value.values...) }
 
+// QueryVector binds a prepared cosine vector to the provider/model/revision
+// that produced it. Applications may also prepare derived vectors in that same
+// space. The specification is provenance supplied by the application, not an
+// authorization grant; ranking still applies the selected index's policies.
+type QueryVector struct {
+	specification Specification
+	vector        Vector
+}
+
+func NewQueryVector(specification Specification, vector Vector) (QueryVector, error) {
+	query := QueryVector{specification: specification, vector: vector}
+	if err := query.Validate(); err != nil {
+		return QueryVector{}, err
+	}
+	return query, nil
+}
+
+func (query QueryVector) Specification() Specification { return query.specification }
+func (query QueryVector) Vector() Vector               { return query.vector }
+
+func (query QueryVector) Validate() error {
+	if err := query.specification.Validate(); err != nil {
+		return fmt.Errorf("EMBEDDING_QUERY_INVALID: specification is invalid: %w", err)
+	}
+	if err := validateCosineVector(query.vector, query.specification.Dimensions()); err != nil {
+		return fmt.Errorf("EMBEDDING_QUERY_INVALID: vector %w", err)
+	}
+	return nil
+}
+
+func validateCosineVector(vector Vector, dimensions int) error {
+	if len(vector.values) != dimensions {
+		return fmt.Errorf("has the wrong dimensions")
+	}
+	var norm float64
+	for _, value := range vector.values {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return fmt.Errorf("contains a non-finite element")
+		}
+		norm += float64(value) * float64(value)
+	}
+	if norm == 0 {
+		return fmt.Errorf("has zero cosine norm")
+	}
+	return nil
+}
+
 // ValidateResult verifies the closed positional batch contract without
 // exposing provider errors or input contents in the returned diagnostic.
 func ValidateResult(specification Specification, inputs []Input, vectors []Vector) error {
@@ -232,18 +279,8 @@ func ValidateResult(specification Specification, inputs []Input, vectors []Vecto
 		if _, err := newInput(input.key, input.text, input.purpose); err != nil {
 			return fmt.Errorf("EMBEDDING_BATCH_INVALID: input %d is invalid", index)
 		}
-		if len(vectors[index].values) != specification.Dimensions() {
-			return fmt.Errorf("EMBEDDING_RESULT_INVALID: vector %d has the wrong dimensions", index)
-		}
-		var norm float64
-		for _, value := range vectors[index].values {
-			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-				return fmt.Errorf("EMBEDDING_RESULT_INVALID: vector %d contains a non-finite element", index)
-			}
-			norm += float64(value) * float64(value)
-		}
-		if norm == 0 {
-			return fmt.Errorf("EMBEDDING_RESULT_INVALID: vector %d has zero cosine norm", index)
+		if err := validateCosineVector(vectors[index], specification.Dimensions()); err != nil {
+			return fmt.Errorf("EMBEDDING_RESULT_INVALID: vector %d %w", index, err)
 		}
 	}
 	return nil

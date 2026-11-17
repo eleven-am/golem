@@ -38,12 +38,17 @@ func (failure *CodecError) Error() string {
 }
 
 type encoder struct {
-	data []byte
-	err  error
+	data  []byte
+	err   error
+	limit int
 }
 
 func (e *encoder) raw(value []byte) {
 	if e.err == nil {
+		if e.limit > 0 && len(value) > e.limit-len(e.data) {
+			e.err = fmt.Errorf("P5_POLICY_HISTORY: encoded graph exceeds its byte limit")
+			return
+		}
 		e.data = append(e.data, value...)
 	}
 }
@@ -91,8 +96,8 @@ func Encode(envelope Envelope) ([]byte, error) {
 	}
 	e := encoder{}
 	e.raw(factMagic)
-	e.u16(FormatVersion)
-	e.text(CodecIdentity)
+	e.u16(envelope.FormatVersion())
+	e.text(envelope.CodecIdentity())
 	e.raw(envelope.event[:])
 	e.raw(envelope.generation[:])
 	e.raw(envelope.eventSchema[:])
@@ -105,6 +110,14 @@ func Encode(envelope Envelope) ([]byte, error) {
 	e.u8(uint8(envelope.deleteState))
 	e.i64(envelope.rowVersion)
 	e.fields(envelope.snapshotFields)
+	if envelope.history != nil {
+		if err := envelope.history.validate(); err != nil {
+			return nil, err
+		}
+		e.u16(envelope.history.format)
+		e.raw(envelope.history.projection[:])
+		e.raw(envelope.history.digest[:])
+	}
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -385,6 +398,10 @@ func (resolver activeResolver) ResolveFactSchema(reference SchemaReference) (*sc
 	return resolver.registry, resolver.eventSchema, resolver.eventSchema != (golem.SchemaDigest{}) && reference.EventSchema == resolver.eventSchema
 }
 
+func (resolver activeResolver) ResolvePolicyHistorySchema(generation, projection golem.SchemaDigest) (*schema.Registry, bool) {
+	return resolver.registry, resolver.registry != nil && resolver.registry.GenerationDigest() == generation && resolver.registry.PolicyCaptureFingerprint() == projection
+}
+
 func Decode(payload []byte, registry *schema.Registry, eventSchema golem.SchemaDigest) (Envelope, error) {
 	return DecodeWithResolver(payload, activeResolver{registry: registry, eventSchema: eventSchema})
 }
@@ -410,11 +427,11 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 	if version == formatVersionV1 || version == formatVersionV2 {
 		return Envelope{}, nil, FormatRetired(version)
 	}
-	if version != FormatVersion {
+	if version != FormatVersion && version != HistoryFactVersion {
 		return Envelope{}, nil, d.fail("unsupported fact version %d", version)
 	}
 	codec, err := d.text()
-	if err != nil || codec != CodecIdentity {
+	if err != nil || version == FormatVersion && codec != CodecIdentity || version == HistoryFactVersion && codec != HistoryFactCodecIdentity {
 		return Envelope{}, nil, d.fail("unsupported codec identity %q", codec)
 	}
 	eventBytes, err := d.fixed16()
@@ -443,6 +460,9 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 	if resolvedEventSchema != reference.EventSchema {
 		return Envelope{}, nil, d.fail("resolved event-schema fingerprint disagrees")
 	}
+	if version == HistoryFactVersion && (reference.Generation == (golem.SchemaDigest{}) || registry.GenerationDigest() != reference.Generation) {
+		return Envelope{}, nil, d.fail("history-bearing fact requires its exact producer generation")
+	}
 	modelBytes, err := d.fixed16()
 	if err != nil {
 		return Envelope{}, nil, err
@@ -466,6 +486,14 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 		return Envelope{}, nil, err
 	}
 	model := policyir.ModelID(modelBytes)
+	if version == HistoryFactVersion {
+		metadata, known := registry.Model(golem.ModelID(model))
+		fingerprint, _, enabled := metadata.EventSchema()
+		digest, parseErr := ParseEventSchemaFingerprint(fingerprint)
+		if !known || !enabled || parseErr != nil || digest != reference.EventSchema {
+			return Envelope{}, nil, d.fail("history-bearing fact event schema disagrees with its producer model")
+		}
+	}
 	before, err := d.optionalIdentity()
 	if err != nil {
 		return Envelope{}, nil, err
@@ -489,6 +517,29 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 	snapshotFields, err := d.fields()
 	if err != nil {
 		return Envelope{}, nil, err
+	}
+	var history *PolicyHistoryReference
+	if version == HistoryFactVersion {
+		format, err := d.u16()
+		if err != nil {
+			return Envelope{}, nil, err
+		}
+		projection, err := d.fixed32()
+		if err != nil {
+			return Envelope{}, nil, err
+		}
+		digest, err := d.fixed32()
+		if err != nil {
+			return Envelope{}, nil, err
+		}
+		bound, err := NewPolicyHistoryReference(format, golem.SchemaDigest(projection), golem.SchemaDigest(digest))
+		if err != nil {
+			return Envelope{}, nil, d.fail("invalid historical graph reference")
+		}
+		if registry.PolicyCaptureFingerprint() != bound.projection {
+			return Envelope{}, nil, d.fail("historical graph capture fingerprint disagrees with producer schema")
+		}
+		history = &bound
 	}
 	if d.remaining() != 0 {
 		return Envelope{}, nil, d.fail("trailing bytes")
@@ -527,7 +578,7 @@ func decodeResolved(payload []byte, resolver HistoricalSchemaResolver) (Envelope
 		event: EventID(eventBytes), generation: golem.SchemaDigest(generationBytes), model: model,
 		eventSchema: golem.SchemaDigest(eventSchemaBytes), rowVersion: rowVersion,
 		action: action, causation: CausationID(causationBytes), ordinal: ordinal,
-		beforeIdentity: before, afterIdentity: after, snapshotFields: snapshotFields, deleteState: deleteState,
+		beforeIdentity: before, afterIdentity: after, snapshotFields: snapshotFields, deleteState: deleteState, history: history,
 	}
 	canonical, err := Encode(result)
 	if err != nil || !bytes.Equal(canonical, payload) {
@@ -547,9 +598,46 @@ func DecodeOutboxWithResolver(metadata, deleteSnapshot []byte, resolver Historic
 }
 
 func decodeOutbox(metadata, deleteSnapshot []byte, resolver HistoricalSchemaResolver) (Envelope, error) {
+	return decodePrivateEvidence(metadata, deleteSnapshot, resolver, true)
+}
+
+// DecodeTransportOutboxWithResolver is deliberately distinct from storage
+// admission: a transport event carries a graph reference, never the graph.
+func DecodeTransportOutboxWithResolver(metadata, deleteSnapshot []byte, resolver HistoricalSchemaResolver) (Envelope, error) {
+	return decodePrivateEvidence(metadata, deleteSnapshot, resolver, false)
+}
+
+func decodePrivateEvidence(metadata, deleteSnapshot []byte, resolver HistoricalSchemaResolver, stored bool) (Envelope, error) {
 	envelope, registry, err := decodeResolved(metadata, resolver)
 	if err != nil {
 		return Envelope{}, err
+	}
+	if envelope.history != nil {
+		base, graph, err := decodePolicyHistoryPrivateEvidence(deleteSnapshot)
+		if err != nil {
+			return Envelope{}, err
+		}
+		if !stored && len(graph) != 0 {
+			return Envelope{}, &CodecError{Detail: "transport evidence must omit the stored historical graph"}
+		}
+		if stored && (envelope.ordinal == 1) != (len(graph) != 0) {
+			return Envelope{}, &CodecError{Detail: "only the first stored fact must contain its graph"}
+		}
+		if len(graph) != 0 {
+			exact, present := resolver.(PolicyHistorySchemaResolver)
+			if !present {
+				return Envelope{}, &CodecError{Detail: "stored graph requires an exact producer schema resolver"}
+			}
+			companion, err := DecodePolicyHistory(graph, exact)
+			if err != nil {
+				return Envelope{}, err
+			}
+			if err := envelope.validatePolicyHistoryCompanion(companion); err != nil {
+				return Envelope{}, err
+			}
+			envelope.graphCompanion = &companion
+		}
+		deleteSnapshot = base
 	}
 	if len(envelope.snapshotFields) == 0 {
 		if len(deleteSnapshot) != 0 {
@@ -708,6 +796,13 @@ func validateFactShape(action mutationir.FactAction, before, after *mutationdeco
 }
 
 func (d *decoder) row(registry *schema.Registry) (mutationdecode.Row, error) {
+	return d.rowLimited(registry, maxItems, false)
+}
+
+// Historical graph rows use the same exact scalar encoding while imposing
+// their smaller cell budget before allocation. Complex values are outside
+// the static capture grammar and are rejected before recursive decoding.
+func (d *decoder) rowLimited(registry *schema.Registry, maxCells uint32, scalarOnly bool) (mutationdecode.Row, error) {
 	modelBytes, err := d.fixed16()
 	if err != nil {
 		return mutationdecode.Row{}, err
@@ -716,7 +811,7 @@ func (d *decoder) row(registry *schema.Registry) (mutationdecode.Row, error) {
 	if err != nil {
 		return mutationdecode.Row{}, err
 	}
-	if count > maxItems || uint64(count)*17 > uint64(d.remaining()) {
+	if count > maxItems || count > maxCells || uint64(count)*17 > uint64(d.remaining()) {
 		return mutationdecode.Row{}, d.fail("invalid row cell count %d", count)
 	}
 	cells := make([]mutationdecode.Cell, int(count))
@@ -736,6 +831,9 @@ func (d *decoder) row(registry *schema.Registry) (mutationdecode.Row, error) {
 		}
 		if present != 1 {
 			return mutationdecode.Row{}, d.fail("invalid cell presence marker %d", present)
+		}
+		if scalarOnly && d.remaining() > 0 && (policyir.ValueKind(d.data[d.offset]) == policyir.ValueJSON || policyir.ValueKind(d.data[d.offset]) == policyir.ValueScalarList) {
+			return mutationdecode.Row{}, d.fail("complex values are not historical capture scalars")
 		}
 		value, valueErr := d.value(0)
 		if valueErr != nil {

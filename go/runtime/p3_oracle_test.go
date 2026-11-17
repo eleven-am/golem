@@ -19,16 +19,6 @@ import (
 // author-facing policy declarations; no production plan, predicate evaluator,
 // SQL renderer, or decoder is used to compute the expected result.
 
-type oracleUser struct{}
-type oraclePost struct{}
-
-type oraclePrincipal struct {
-	UserPrefix string
-	PostPrefix string
-}
-
-type oracleActor = oraclePrincipal
-
 type oracleHarness struct {
 	app        *App[oraclePrincipal, oracleActor]
 	fixture    schematest.Fixture

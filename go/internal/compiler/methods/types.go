@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	"github.com/eleven-am/golem/go/internal/policy/scopecontract"
 )
 
 // Config contains the resolved model graph and the package locations needed
@@ -58,9 +59,12 @@ type Result struct {
 	GraphQLModels         []graphqlcontract.ModelPatch
 	GraphQLComputed       []graphqlextension.ComputedDeclaration
 	GraphQLCustom         []graphqlextension.CustomOperationDeclaration
+	GraphQLTypes          []ir.GraphQLTypeDefinitionIR
 	TxOperations          []TxOperationDeclaration
 	AnalyticsModels       []analyticscontract.ModelPatch
 	Extensions            []ir.ProviderExtensionIR
+	ScopeTemplates        []scopecontract.Declaration
+	FactTemplates         []scopecontract.FactDeclaration
 	Diagnostics           []ir.Diagnostic
 }
 

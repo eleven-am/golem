@@ -40,8 +40,8 @@ func CanonicalDecodeHistoricalV3(payload []byte) (PhysicalSchema, error) {
 }
 
 // CanonicalDecodeReviewedHistory accepts only the explicitly retained v1, v2,
-// and v3 projections. It is the migration-history boundary; callers that claim
-// one exact version should use the corresponding version-specific decoder.
+// v3, and opted v4 projections. It is the migration-history boundary; callers
+// that claim one exact version should use the corresponding version-specific decoder.
 func CanonicalDecodeReviewedHistory(payload []byte) (PhysicalSchema, error) {
 	return canonicalDecode(payload, decodeReviewedHistory)
 }
@@ -73,7 +73,8 @@ func canonicalDecode(payload []byte, mode decodeMode) (PhysicalSchema, error) {
 	acceptV1 := mode == decodeHistoricalV1Only || mode == decodeReviewedHistory
 	acceptV2 := mode == decodeHistoricalV2Only || mode == decodeReviewedHistory
 	acceptV3 := mode == decodeHistoricalV3Only || mode == decodeReviewedHistory
-	accepted := version == uint64(CanonicalFormatVersion) && acceptCurrent || version == 1 && acceptV1 || version == 2 && acceptV2 || version == 3 && acceptV3
+	acceptV4 := (mode == decodeCurrent || mode == decodeReviewedHistory) && version == uint64(DataIncarnationFormatVersion)
+	accepted := acceptV4 || version == uint64(CanonicalFormatVersion) && acceptCurrent || version == 1 && acceptV1 || version == 2 && acceptV2 || version == 3 && acceptV3
 	if !accepted {
 		return PhysicalSchema{}, decoder.fail("canonical format version", "got %d, want %d", version, CanonicalFormatVersion)
 	}
@@ -110,7 +111,7 @@ func canonicalDecode(payload []byte, mode decodeMode) (PhysicalSchema, error) {
 		return PhysicalSchema{}, fmt.Errorf("physical canonical decode: invalid schema: %w", err)
 	}
 	var reencoded []byte
-	if uint32(version) == CanonicalFormatVersion && mode == decodeCurrent {
+	if acceptV4 || uint32(version) == CanonicalFormatVersion && mode == decodeCurrent {
 		reencoded, err = CanonicalEncode(schema)
 	} else if uint32(version) == 1 {
 		normalized, normalizeErr := NormalizeHistoricalV1(schema)
@@ -141,7 +142,10 @@ func canonicalDecode(payload []byte, mode decodeMode) (PhysicalSchema, error) {
 }
 
 func validateDecodedSchema(schema PhysicalSchema, canonicalVersion uint32, mode decodeMode) error {
-	if canonicalVersion == CanonicalFormatVersion && mode == decodeCurrent {
+	if canonicalVersion == DataIncarnationFormatVersion && (schema.Version != canonicalVersion || schema.CanonicalVersion != canonicalVersion) {
+		return fmt.Errorf("canonical envelope version %d requires exact physical/canonical versions %d/%d, got %d/%d", canonicalVersion, canonicalVersion, canonicalVersion, schema.Version, schema.CanonicalVersion)
+	}
+	if canonicalVersion == DataIncarnationFormatVersion && (mode == decodeCurrent || mode == decodeReviewedHistory) || canonicalVersion == CanonicalFormatVersion && mode == decodeCurrent {
 		return Validate(schema)
 	}
 	if canonicalVersion == 3 && schema.Version == 3 && schema.CanonicalVersion == 3 {

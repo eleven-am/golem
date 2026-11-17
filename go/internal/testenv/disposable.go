@@ -44,7 +44,7 @@ func SkipMissingPGVectorf(t testing.TB, format string, args ...any) {
 
 var disposableSequence atomic.Uint64
 
-func disposablePostgreSQL(t testing.TB, base string, unavailable func(testing.TB, string, ...any)) string {
+func disposablePostgreSQL(t testing.TB, base string, unavailable func(testing.TB, string, ...any), beforeWrite ...func(context.Context, *sql.DB) error) string {
 	t.Helper()
 	admin, err := sql.Open("pgx", base)
 	if err != nil {
@@ -55,6 +55,12 @@ func disposablePostgreSQL(t testing.TB, base string, unavailable func(testing.TB
 	if err := admin.PingContext(ctx); err != nil {
 		_ = admin.Close()
 		unavailable(t, "reach %s: %v", variableOf(base), err)
+	}
+	for _, verify := range beforeWrite {
+		if err := verify(ctx, admin); err != nil {
+			_ = admin.Close()
+			t.Fatalf("validate disposable PostgreSQL ownership: %v", err)
+		}
 	}
 	var encoding, collate, characterType string
 	if err := admin.QueryRowContext(ctx, `SELECT pg_encoding_to_char(encoding),datcollate,datctype FROM pg_database WHERE datname=current_database()`).Scan(&encoding, &collate, &characterType); err != nil {

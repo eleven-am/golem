@@ -18,6 +18,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	fulltextruntime "github.com/eleven-am/golem/go/internal/fulltext/runtime"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
@@ -80,11 +81,13 @@ type Config[P, A any] struct {
 	PolicyCache              PolicyCacheConfig
 	PolicyCacheKey           func(A) (string, bool)
 	SubscriptionPrincipalKey func(P) (string, bool)
+	Pages                    *PageConfig[A]
 }
 
 // App contains immutable process-wide metadata and the actor-keyed policy
 // cache. No loader, request context, or decoded row is retained here.
 type App[P, A any] struct {
+	dataIncarnation           golem.DataIncarnation
 	databaseHandle            *providerapi.Database
 	database                  *sqlx.DB
 	provider                  policyir.Provider
@@ -140,6 +143,8 @@ type App[P, A any] struct {
 	queueOperator             queue.Operator
 	queueLimits               queue.Limits
 	queueRunning              atomic.Bool
+	pages                     *pageRuntime[A]
+	invalidations             *invalidationRuntime
 }
 
 // Caller is one principal-bound execution. Its identity is not shared with
@@ -251,6 +256,14 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: %w", err)
 	}
+	pages, err := newPageRuntime(config.Pages, config.Bundle, config.Bindings)
+	if err != nil {
+		return nil, err
+	}
+	invalidations, err := newInvalidationRuntime(config.Bundle, config.Bindings)
+	if err != nil {
+		return nil, err
+	}
 	if registry.HasScopedReads() && (config.AuditPrincipal == nil || config.ReportScopedQuery == nil) {
 		return nil, fmt.Errorf("P6_RUNTIME_CONFIG: AuditPrincipal and ReportScopedQuery are required when scoped reads are enabled")
 	}
@@ -315,8 +328,24 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonSchemaDrift
 		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
 	}
+	incarnation, err := loadDataIncarnation(ctx, database, providerIdentity, expected.System, config.Bundle)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("P12_RUNTIME_INCARNATION: durable data identity is unavailable")
+	}
+	if pages != nil {
+		if !incarnation.Valid() {
+			return nil, fmt.Errorf("P6_PAGE_CONFIG: PageQuery requires admitted durable data identity")
+		}
+		pages.incarnation = incarnation.String()
+	}
 	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, policyCache: cache, policyCacheKey: config.PolicyCacheKey, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, subscriptionPrincipalKey: config.SubscriptionPrincipalKey, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
+	app.dataIncarnation = incarnation
+	app.pages = pages
+	app.invalidations = invalidations
 	providerhandle.AttachMaintenanceObserver((*providerhandle.Database)(databaseHandle), config.Observer)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err
@@ -417,6 +446,12 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 	if _, err := events.ValidateCDCAdapters(providerIdentity, config.CDCAdapters); err != nil {
 		return events.Limits{}, err
 	}
+	if len(config.CDCAdapters) != 0 && mutationHistoryWriterRequired(registry) {
+		// Current adapters carry changed row images, not a complete graph from
+		// the external source transaction. A later recorder transaction cannot
+		// establish those historical relationships or certify their snapshot.
+		return events.Limits{}, events.Failf(events.CodeEventConfig, "CDCAdapters cannot supply the source-transaction historical policy evidence required by this writer")
+	}
 	return limits, nil
 }
 
@@ -489,7 +524,11 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 
 func (app *App[P, A]) policySet(actor A) (*policyruntime.Set, error) {
 	build := func() (*policyruntime.Set, error) {
-		return policyruntime.Build(policyruntime.BuildRequest[A]{Bindings: app.bindings, Actor: actor, Registry: app.registry, Provider: app.provider, Capabilities: app.capabilities})
+		constructor := policyruntime.Build[A]
+		if mutationHistoryWriterRequired(app.registry) {
+			constructor = policyruntime.BuildHistorical[A]
+		}
+		return constructor(policyruntime.BuildRequest[A]{Bindings: app.bindings, Actor: actor, Registry: app.registry, Provider: app.provider, Capabilities: app.capabilities})
 	}
 	if app.policyCache == nil {
 		return build()
@@ -1528,14 +1567,7 @@ func proveCapabilities(ctx context.Context, database *sqlx.DB, provider policyir
 }
 
 func selectedPhysicalSchema(bundle golem.SchemaBundle, provider golem.Provider) (physical.PhysicalSchema, error) {
-	for _, document := range bundle.Providers() {
-		if document.Provider() != provider {
-			continue
-		}
-		schemaDocument := document.Schema()
-		return physical.CanonicalDecodeVerified(schemaDocument.Bytes(), physical.Digest(schemaDocument.Fingerprint()), physical.Digest(document.SystemFingerprint()))
-	}
-	return physical.PhysicalSchema{}, fmt.Errorf("provider %q has no physical schema", provider)
+	return migration.BundlePhysicalSchema(bundle, provider)
 }
 
 func verifyPhysical(ctx context.Context, database *sqlx.DB, provider policyir.Provider, expected physical.PhysicalSchema) error {

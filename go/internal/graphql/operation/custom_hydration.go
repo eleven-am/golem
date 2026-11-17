@@ -67,6 +67,25 @@ func (c *Compiler) newHydration(typ compilerir.GraphQLTypeIR, modelID compilerir
 	if !ok {
 		return nil, fmt.Errorf("hydration model contract is absent")
 	}
+	if len(selection) == 0 {
+		for _, model := range c.compilation.Model.Models {
+			if model.ID != modelID {
+				continue
+			}
+			for _, id := range model.PrimaryKey.Fields {
+				field, err := publicFieldID(id)
+				if err != nil {
+					return nil, err
+				}
+				selected, err := readir.NewScalarSelection(policyir.FieldID(field))
+				if err != nil {
+					return nil, err
+				}
+				selection = append(selection, selected)
+			}
+			break
+		}
+	}
 	chunk := readir.NarrowCap(int(contract.Limits.PageMaximum()), c.limits.Bind.MaxPageSize)
 	return &Hydration{
 		typ: typ, publicModel: publicModel, model: policyir.ModelID(publicModel), selection: append([]readir.Selection(nil), selection...),

@@ -194,8 +194,23 @@ func (context renderContext) stampCreatedVersionStatement(source uint32) ([]Stat
 	}
 	field, _ := context.resolver.Field(context.provider, context.node.ModelID(), *context.version)
 	projected := policysql.ProjectColumn(context.provider, field.Type, column)
-	text := "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + column + " = " + context.versionNext + " WHERE " + where + " RETURNING " + projected + " AS " + context.dialect.Quote("golem_c0")
-	return []Statement{{role: StampVersion, text: text, bindings: bindings, columns: []ResultColumn{{field: *context.version, alias: "golem_c0"}}, cardinality: ExactlyOneRow}}, nil
+	returning := " RETURNING " + projected + " AS " + context.dialect.Quote("golem_c0")
+	columns := []ResultColumn{{field: *context.version, alias: "golem_c0"}}
+	if len(context.registry.PolicyCaptureFields(golem.ModelID(context.node.ModelID()))) != 0 {
+		// Unlike the provider clock advance, this stamp mutates the created row.
+		// Capture its current evidence instead of reusing the earlier insert image:
+		// an intervening statement observer may have changed the row already.
+		fields, captureErr := context.returnFields(context.primaryKey(), context.versionFields())
+		if captureErr != nil {
+			return nil, captureErr
+		}
+		returning, columns, err = context.returning(fields)
+		if err != nil {
+			return nil, err
+		}
+	}
+	text := "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + column + " = " + context.versionNext + " WHERE " + where + returning
+	return []Statement{{role: StampVersion, text: text, bindings: bindings, columns: columns, cardinality: ExactlyOneRow}}, nil
 }
 
 func (context renderContext) renderCreate() ([]Statement, error) {
@@ -742,6 +757,13 @@ func (context renderContext) returnFields(groups ...[]policyir.FieldID) ([]polic
 		for _, field := range group {
 			set[field] = struct{}{}
 		}
+	}
+	// Capture static policy evidence at the executable image boundary, including
+	// scalar nodes built directly by nested membership operations. These fields
+	// are private execution data, independent of the acting caller's grants,
+	// result selection, and the persisted change-fact snapshot contract.
+	for _, field := range context.registry.PolicyCaptureFields(golem.ModelID(context.node.ModelID())) {
+		set[policyir.FieldID(field)] = struct{}{}
 	}
 	result := make([]policyir.FieldID, 0, len(set))
 	for field := range set {

@@ -38,6 +38,9 @@ func Condition(condition ir.Condition, record Record, providers ir.ProviderSet) 
 // this pass proves the loaded value/relation family and endpoint context.
 func validateLoadedShape(condition ir.Condition, record Record) error {
 	switch condition.Kind() {
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return validateLoadedShape(body, record)
 	case ir.ConditionConstant:
 		return nil
 	case ir.ConditionLogical:
@@ -104,6 +107,9 @@ func validateLoadedShape(condition ir.Condition, record Record) error {
 
 func evaluate(condition ir.Condition, record Record) (bool, error) {
 	switch condition.Kind() {
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return evaluate(body, record)
 	case ir.ConditionConstant:
 		truth, _ := condition.Constant()
 		return truth, nil

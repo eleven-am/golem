@@ -1,8 +1,8 @@
 package bind
 
 import (
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	"github.com/eleven-am/golem/go/internal/policy/publicvalue"
 )
 

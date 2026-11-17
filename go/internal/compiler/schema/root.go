@@ -191,6 +191,17 @@ func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 			seenWithoutGraphQL = true
 			root.WithoutGraphQL = true
 
+		case "WithDataIncarnation":
+			if typeArgument != nil || len(call.Args) != 1 || !isIdent(call.Args[0], parameter) {
+				c.error(pkg, "P12_DATA_INCARNATION_CALL", "WithDataIncarnation requires exactly the schema parameter", call)
+				continue
+			}
+			if root.DataIncarnation {
+				c.error(pkg, "P12_DATA_INCARNATION_DUPLICATE", "WithDataIncarnation may be declared once", call)
+				continue
+			}
+			root.DataIncarnation = true
+
 		case "EmbeddingSpace":
 			if typeArgument != nil || len(call.Args) != 3 || !isIdent(call.Args[0], parameter) {
 				c.error(pkg, "P9_EMBEDDING_SPACE_CALL", "EmbeddingSpace requires (schema, name, dimensions)", call)

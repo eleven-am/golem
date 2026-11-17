@@ -384,6 +384,9 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		}
 		body.WriteString("}\n\n")
 	}
+	if err := emitPolicyScopes(&body, models, modelByID, enumByID, relations, contracts, imports); err != nil {
+		return File{}, nil, err
+	}
 	body.WriteString("func GolemGeneratedDescriptors() golem.PackageDescriptors {\n")
 	if stamp == nil {
 		body.WriteString("\treturn golem.GeneratedPackageDescriptors(\n")

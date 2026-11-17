@@ -115,12 +115,12 @@ func TestPublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
 
 	expectedObjects := map[string][]string{
 		paths[0]: {
-			"Capabilities", "Code", "CodeClose", "CodeConfig", "CodeMaintenance", "CodeOf", "CodeOpen", "Database", "Feature",
+			"Capabilities", "Code", "CodeClose", "CodeConfig", "CodeMaintenance", "CodeOf", "CodeOpen", "CodeRestorePublished", "CodeSnapshotPublished", "Database", "Feature",
 			"FeatureAdvisoryLocks", "FeatureAnalyticsExact", "FeatureForeignKeys", "FeatureGeneratedColumns", "FeatureJSON",
 			"FeaturePolicyASCIIText", "FeaturePolicyBinaryText", "FeaturePolicyExactJSON", "FeaturePolicyRelation", "FeaturePolicyScalarList",
 			"PoolStatus", "Version",
 		},
-		paths[1]: {"CheckpointForBackup", "Config", "Open", "OpenNetworkFilesystem", "OpenNetworkFilesystemWAL"},
+		paths[1]: {"CheckpointForBackup", "Config", "Open", "OpenNetworkFilesystem", "OpenNetworkFilesystemWAL", "PrepareRestore", "RestoreAbandonAndResync", "RestoreConfig", "RestoreMode", "RestoreResumeAtLeastOnce", "RestoreSession", "Snapshot"},
 		paths[2]: {"Config", "Open", "PoolConfig"},
 	}
 	expectedMethods := map[string]map[string][]string{
@@ -129,10 +129,15 @@ func TestPublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
 			"Database":     {"Capabilities", "Close", "Pool", "Provider", "UnsafeSQLX"},
 			"PoolStatus":   {"ConnectionMaximumIdleTime", "ConnectionMaximumLifetime", "MaximumIdle", "MaximumOpen"},
 		},
+		paths[1]: {"RestoreSession": {"Close", "Database", "Publish", "StagePath"}},
 	}
 	expectedFields := map[string]map[string][]string{
 		paths[0]: {"Version": {"Major", "Minor", "Patch"}},
-		paths[1]: {"Config": {"DataSourceName"}},
+		paths[1]: {
+			"Config":         {"DataSourceName"},
+			"RestoreConfig":  {"Archive", "ArchiveBundle", "Destination", "HistoricalEventBundles", "Mode", "TargetBundle"},
+			"RestoreSession": {},
+		},
 		paths[2]: {
 			"Config":     {"DataSourceName", "Pool"},
 			"PoolConfig": {"ConnectionMaximumIdleTime", "ConnectionMaximumLifetime", "MaximumIdle", "MaximumOpen"},

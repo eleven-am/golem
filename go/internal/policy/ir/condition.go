@@ -594,6 +594,8 @@ type Policy struct {
 	model      ModelID
 	rules      []Rule
 	rowVersion FieldID
+	facts      []FactDefinition
+	factScope  FactScope
 }
 
 func NewModelRule(action Action, effect Effect, model ModelID, condition *Condition, position uint32) (Rule, error) {
@@ -660,6 +662,10 @@ func (rule Rule) Fields() (fields []FieldID, modelWide bool) {
 }
 func (rule Rule) RowOnly() bool { return rule.rowOnly }
 func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
+	return NewPolicyWithFacts(model, rules, nil, FactScope{})
+}
+
+func newPolicy(model ModelID, rules []Rule, facts []FactDefinition, scope FactScope) (Policy, error) {
 	if model == (ModelID{}) {
 		return Policy{}, fmt.Errorf("policy IR: zero policy model")
 	}
@@ -670,7 +676,11 @@ func NewPolicy(model ModelID, rules []Rule) (Policy, error) {
 		}
 		copy[i] = rule
 	}
-	return Policy{model: model, rules: copy}, nil
+	policy := Policy{model: model, rules: copy, facts: facts, factScope: scope}
+	if err := validateFactGraph(policy); err != nil {
+		return Policy{}, err
+	}
+	return policy, nil
 }
 
 func (policy Policy) ModelID() ModelID { return policy.model }

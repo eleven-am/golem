@@ -28,7 +28,7 @@ func Condition(input ir.Condition) (ir.Condition, error) {
 // Binding and normalization remain separate operations by design. Callers bind
 // a frozen policy first, then pass the successfully bound policy here.
 func Policy(input ir.Policy) (ir.Policy, error) {
-	validated, err := ir.NewPolicy(input.ModelID(), input.Rules())
+	validated, err := ir.NewPolicyWithFacts(input.ModelID(), input.Rules(), input.Facts(), input.FactScope())
 	if err != nil {
 		return ir.Policy{}, fmt.Errorf("normalize policy: %w", err)
 	}
@@ -70,7 +70,29 @@ func Policy(input ir.Policy) (ir.Policy, error) {
 		}
 	}
 
-	result, err := ir.NewPolicy(model, normalized)
+	facts := validated.Facts()
+	for index, fact := range facts {
+		body, normalizeErr := Condition(fact.Body())
+		if normalizeErr != nil {
+			return ir.Policy{}, fmt.Errorf("normalize policy: fact %q: %w", fact.Name(), normalizeErr)
+		}
+		facts[index], err = fact.WithBody(body)
+		if err != nil {
+			return ir.Policy{}, fmt.Errorf("normalize policy: rebuild fact: %w", err)
+		}
+	}
+	scope := validated.FactScope()
+	if len(facts) != 0 {
+		scopeCondition, scopeErr := Condition(scope.Condition())
+		if scopeErr != nil {
+			return ir.Policy{}, scopeErr
+		}
+		scope, err = scope.WithCondition(scopeCondition)
+		if err != nil {
+			return ir.Policy{}, err
+		}
+	}
+	result, err := ir.NewPolicyWithFacts(model, normalized, facts, scope)
 	if err != nil {
 		return ir.Policy{}, fmt.Errorf("normalize policy: rebuild: %w", err)
 	}
@@ -106,6 +128,24 @@ func rewrite(input ir.Condition) (ir.Condition, error) {
 		return normalizeJSON(input)
 	case ir.ConditionRelation:
 		return normalizeRelation(input)
+	case ir.ConditionFactReference:
+		id, _ := input.FactReference()
+		return ir.NewFactReference(input.ModelID(), id)
+	case ir.ConditionFact:
+		_, body, _ := input.Fact()
+		scope, _ := input.FactScope()
+		normalized, err := condition(body)
+		if err != nil {
+			return ir.Condition{}, err
+		}
+		if input.IsFactScope() {
+			normalizedScope, err := scope.WithCondition(normalized)
+			if err != nil {
+				return ir.Condition{}, err
+			}
+			return ir.NewFactScopeCondition(normalizedScope)
+		}
+		return input.WithFactBody(normalized)
 	default:
 		return ir.Condition{}, fmt.Errorf("normalize condition: unknown condition kind %d", input.Kind())
 	}

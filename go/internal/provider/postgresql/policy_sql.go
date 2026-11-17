@@ -97,6 +97,19 @@ func (dialect PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *pol
 			}
 			return "FALSE", nil
 		}
+		parameter, packed, err := binder.JSONScalarSet(values, leaf.Field.Type)
+		if err != nil {
+			return "", err
+		}
+		if packed {
+			left, right := scalarComparisonOperands(column, policyCast("golem_set.value", leaf.Field.Type), leaf.Field.Type.Kind(), leaf.Mode)
+			array := "ARRAY(SELECT " + right + " FROM pg_catalog.jsonb_array_elements_text(" + parameter + "::jsonb) AS golem_set(value))"
+			predicate := "COALESCE(" + left + " = ANY (" + array + "), FALSE)"
+			if leaf.Operator == policyir.OperatorNotIn {
+				return "NOT (" + predicate + ")", nil
+			}
+			return predicate, nil
+		}
 		parts := make([]string, len(values))
 		for index, value := range values {
 			predicate, err := comparison(value, "=")

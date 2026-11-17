@@ -42,19 +42,21 @@ const (
 // Worker claims and executes registered job types. One Worker owns one Run at a
 // time; a second concurrent Run is refused rather than sharing capacity.
 type Worker struct {
-	store       queueprovider.Store
-	registry    *queue.Registry
-	claimGroups []claimGroup
-	claimOffset int
-	limits      queue.Limits
-	provider    golem.Provider
-	observer    observe.Observer
-	fail        *FailHook
-	wake        chan struct{}
-	running     atomic.Bool
-	mutex       sync.Mutex
-	active      int
-	inflight    map[string]int
+	store                 queueprovider.Store
+	registry              *queue.Registry
+	claimGroups           []claimGroup
+	claimOffset           [2]int
+	limits                queue.Limits
+	provider              golem.Provider
+	observer              observe.Observer
+	fail                  *FailHook
+	wake                  chan struct{}
+	running               atomic.Bool
+	mutex                 sync.Mutex
+	active                int
+	normalActive          int
+	interactiveAdmissions int
+	inflight              map[string]int
 
 	dispatchLock chan struct{}
 	plan         *activePlan
@@ -274,34 +276,107 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 		return 0, nil
 	}
 	plan := worker.currentPlan()
-	claimed := 0
-	offset := worker.claimOffset
-	if len(worker.claimGroups) != 0 {
-		worker.claimOffset = (worker.claimOffset + 1) % len(worker.claimGroups)
+	// The bound applies to admissions by this continuously running worker,
+	// across all its resource/type cohorts. It is not a fleet-wide order or
+	// preemption promise. An occupied-slot retry spends no lane opportunity.
+	lanes := [2]queue.Priority{queue.PriorityInteractive, queue.PriorityNormal}
+	if worker.interactiveAdmissions >= 3 {
+		lanes = [2]queue.Priority{queue.PriorityNormal, queue.PriorityInteractive}
 	}
-	for _, capped := range []bool{false, true} {
-		for position := range worker.claimGroups {
-			claimGroup := worker.claimGroups[(offset+position)%len(worker.claimGroups)]
-			group, ok := worker.cohort(claimGroup, capped, plan)
-			if !ok {
-				continue
+	claimed := 0
+	for _, priority := range lanes {
+		if worker.laneCapacity(plan, priority) <= 0 {
+			continue
+		}
+		budget := plan.concurrency
+		if priority == queue.PriorityNormal && worker.interactiveAdmissions > 0 {
+			// With both lanes competing, one normal admission completes the
+			// opportunity before interactive work gets its next three turns.
+			// An empty interactive lane still permits a full normal batch.
+			budget = 1
+		}
+		if priority == queue.PriorityInteractive {
+			budget = 3 - worker.interactiveAdmissions
+			if budget <= 0 {
+				// Reserved slots can still execute interactive work while every
+				// slot available to normal work remains occupied.
+				budget = 1
 			}
-			claimedAt := time.Now()
-			records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: plan.resourceFor(claimGroup.resource)})
-			if err != nil {
-				return claimed, err
-			}
-			for _, record := range records {
-				if ctx.Err() != nil {
-					worker.release(ctx, observer, record)
-					continue
-				}
-				claimed++
-				worker.start(handlerContext, record, claimedAt, observer, handlers)
-			}
+		}
+		count, err := worker.dispatchLane(ctx, handlerContext, observer, handlers, plan, priority, budget)
+		claimed += count
+		if err != nil {
+			return claimed, err
+		}
+		if priority == queue.PriorityNormal {
+			// A complete normal pass is the promised opportunity, including
+			// when every due normal job is blocked by its existing gates.
+			worker.interactiveAdmissions = 0
 		}
 	}
 	return claimed, nil
+}
+
+func (worker *Worker) dispatchLane(ctx, handlerContext context.Context, observer observe.Observer, handlers *sync.WaitGroup, plan *activePlan, priority queue.Priority, budget int) (int, error) {
+	claimed := 0
+	offset := worker.claimOffset[priority]
+	// Flatten capped/uncapped resource cohorts so neither has permanent
+	// precedence. Each lane retains its own next cohort across dispatches.
+	cohorts := 2 * len(worker.claimGroups)
+	for position := 0; position < cohorts && claimed < budget; position++ {
+		index := (offset + position) % cohorts
+		claimGroup := worker.claimGroups[index%len(worker.claimGroups)]
+		group, ok := worker.cohort(claimGroup, index >= len(worker.claimGroups), plan)
+		if !ok {
+			continue
+		}
+		if capacity := worker.laneCapacity(plan, priority); group.limit > capacity {
+			group.limit = capacity
+		}
+		if group.limit > budget-claimed {
+			group.limit = budget - claimed
+		}
+		if group.limit <= 0 {
+			break
+		}
+		claimedAt := time.Now()
+		records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Priority: int(priority), Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: plan.resourceFor(claimGroup.resource)})
+		if err != nil {
+			return claimed, err
+		}
+		for _, record := range records {
+			if ctx.Err() != nil {
+				worker.release(ctx, observer, record)
+				continue
+			}
+			claimed++
+			worker.start(handlerContext, record, claimedAt, observer, handlers)
+			if !record.Finalize && !record.CancelRequested {
+				if priority == queue.PriorityInteractive {
+					if worker.interactiveAdmissions < 3 {
+						worker.interactiveAdmissions++
+					}
+				} else {
+					worker.interactiveAdmissions = 0
+				}
+			}
+			worker.claimOffset[priority] = (index + 1) % cohorts
+		}
+	}
+	return claimed, nil
+}
+
+func (worker *Worker) laneCapacity(plan *activePlan, priority queue.Priority) int {
+	worker.mutex.Lock()
+	defer worker.mutex.Unlock()
+	free := plan.concurrency - worker.active
+	if priority == queue.PriorityNormal {
+		normal := plan.concurrency - worker.limits.ReservedInteractive - worker.normalActive
+		if normal < free {
+			free = normal
+		}
+	}
+	return free
 }
 
 // cohort selects the job types with free capacity and the largest claim that
@@ -348,18 +423,24 @@ func (worker *Worker) start(ctx context.Context, record queueprovider.Record, cl
 	}
 	worker.mutex.Lock()
 	worker.active++
+	if record.Priority == int(queue.PriorityNormal) {
+		worker.normalActive++
+	}
 	worker.inflight[record.Type]++
 	worker.mutex.Unlock()
 	handlers.Add(1)
 	go func() {
-		defer worker.finish(record.Type, handlers)
+		defer worker.finish(record.Type, record.Priority, handlers)
 		worker.run(ctx, record, claimedAt, registration, observer)
 	}()
 }
 
-func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
+func (worker *Worker) finish(typeName string, priority int, handlers *sync.WaitGroup) {
 	worker.mutex.Lock()
 	worker.active--
+	if priority == int(queue.PriorityNormal) {
+		worker.normalActive--
+	}
 	worker.inflight[typeName]--
 	worker.mutex.Unlock()
 	handlers.Done()
@@ -400,7 +481,7 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, clai
 			}
 		}()
 		err := registration.Handle(handlerContext, record.Payload, queue.Meta{
-			ID: queue.JobID(record.ID), Attempt: int(record.AttemptCount),
+			ID: queue.JobID(record.ID), Priority: queue.Priority(record.Priority), Attempt: int(record.AttemptCount),
 			MaxAttempts: int(record.MaxAttempts), EnqueuedAt: record.EnqueuedAt,
 		})
 		done <- handlerResult{err: err, cause: context.Cause(handlerContext)}

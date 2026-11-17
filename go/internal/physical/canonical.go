@@ -16,7 +16,7 @@ func CanonicalEncode(schema PhysicalSchema) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return canonicalValue(normalized)
+	return canonicalValueVersion(normalized, normalized.CanonicalVersion)
 }
 
 // CanonicalFragment encodes a detached physical semantic fragment with the
@@ -37,7 +37,7 @@ func CanonicalFragmentVersion(value any, version uint32) ([]byte, error) {
 	if version == 2 && CanonicalFormatVersion != 2 {
 		return HistoricalV2CanonicalFragment(value)
 	}
-	if version != CanonicalFormatVersion && version != 1 {
+	if version != CanonicalFormatVersion && version != 1 && version != DataIncarnationFormatVersion {
 		return nil, fmt.Errorf("physical canonical fragment version %d is unsupported", version)
 	}
 	return canonicalValueVersion(value, version)

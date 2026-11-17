@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -127,17 +128,16 @@ func queueStoreOf(t *testing.T, store queueprovider.Store) *queueStore {
 func TestPostgreSQLVerifiesEveryQueueIndexNotJustDedupe(t *testing.T) {
 	ctx := context.Background()
 	for _, probe := range []struct {
-		name       string
-		namespace  string
-		redefine   string
-		wantNamed  string
-		wantAction string
+		name      string
+		namespace string
+		redefine  string
+		wantNamed string
 	}{
-		{name: "enqueued", namespace: "queue_verify_enqueued", redefine: `CREATE INDEX "golem_queue_enqueued" ON %s ("enqueued_at")`, wantNamed: "golem_queue_enqueued", wantAction: "drop it"},
-		{name: "history", namespace: "queue_verify_history", redefine: `CREATE INDEX "golem_queue_history" ON %s ("status","id")`, wantNamed: "golem_queue_history", wantAction: "drop it"},
-		{name: "terminal", namespace: "queue_verify_terminal", redefine: `CREATE INDEX "golem_queue_terminal" ON %s ("finished_at")`, wantNamed: "golem_queue_terminal", wantAction: "drop it"},
-		{name: "claim", namespace: "queue_verify_claim", redefine: `CREATE INDEX "golem_queue_claim" ON %s ("status")`, wantNamed: "golem_queue_claim", wantAction: "drop it"},
-		{name: "exclusive", namespace: "queue_verify_exclusive", redefine: `CREATE INDEX "golem_queue_exclusive" ON %s ("exclusive_key")`, wantNamed: "golem_queue_exclusive", wantAction: "drop it"},
+		{name: "enqueued", namespace: "queue_verify_enqueued", redefine: `CREATE INDEX "golem_queue_enqueued" ON %s ("enqueued_at")`, wantNamed: "golem_queue_enqueued"},
+		{name: "history", namespace: "queue_verify_history", redefine: `CREATE INDEX "golem_queue_history" ON %s ("status","id")`, wantNamed: "golem_queue_history"},
+		{name: "terminal", namespace: "queue_verify_terminal", redefine: `CREATE INDEX "golem_queue_terminal" ON %s ("finished_at")`, wantNamed: "golem_queue_terminal"},
+		{name: "claim", namespace: "queue_verify_claim", redefine: `CREATE INDEX "golem_queue_claim" ON %s ("status")`, wantNamed: "golem_queue_claim"},
+		{name: "exclusive", namespace: "queue_verify_exclusive", redefine: `CREATE INDEX "golem_queue_exclusive" ON %s ("exclusive_key")`, wantNamed: "golem_queue_exclusive"},
 	} {
 		t.Run(probe.name, func(t *testing.T) {
 			store, database := openQueueHistoryNamespace(t, probe.namespace, true)
@@ -148,14 +148,12 @@ func TestPostgreSQLVerifiesEveryQueueIndexNotJustDedupe(t *testing.T) {
 			if _, err := database.ExecContext(ctx, fmt.Sprintf(probe.redefine, table)); err != nil {
 				t.Fatal(err)
 			}
-			err := queueStoreOf(t, store).verifyQueueGuarantees(ctx)
+			err := queueStoreOf(t, store).EnsureSchema(ctx)
 			if err == nil {
 				t.Fatalf("a wrong-shaped %s was accepted", probe.wantNamed)
 			}
-			for _, fragment := range []string{probe.wantNamed, probe.wantAction} {
-				if !strings.Contains(err.Error(), fragment) {
-					t.Fatalf("refusal must name the object and say what to do, got: %v", err)
-				}
+			if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+				t.Fatalf("wrong-shaped %s must fail strict storage admission: %v", probe.wantNamed, err)
 			}
 		})
 	}
@@ -167,14 +165,12 @@ func TestPostgreSQLRefusesAUserIndexOnTheQueueTable(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `CREATE INDEX "tenant_queue_by_type" ON "queue_verify_foreign"."golem_queue" ("type")`); err != nil {
 		t.Fatal(err)
 	}
-	err := queueStoreOf(t, store).verifyQueueGuarantees(ctx)
+	err := queueStoreOf(t, store).EnsureSchema(ctx)
 	if err == nil {
 		t.Fatal("a user-authored index on golem_queue was tolerated")
 	}
-	for _, fragment := range []string{"tenant_queue_by_type", "drop it"} {
-		if !strings.Contains(err.Error(), fragment) {
-			t.Fatalf("refusal must name the object and say what to do, got: %v", err)
-		}
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+		t.Fatalf("foreign queue index must fail strict storage admission: %v", err)
 	}
 }
 
@@ -182,7 +178,7 @@ func TestPostgreSQLReleasedQueueDatabasePassesVerification(t *testing.T) {
 	ctx := context.Background()
 	for _, admitted := range []bool{false, true} {
 		store, _ := openQueueHistoryNamespace(t, fmt.Sprintf("queue_released_%t", admitted), admitted)
-		if err := queueStoreOf(t, store).verifyQueueGuarantees(ctx); err != nil {
+		if err := queueStoreOf(t, store).EnsureSchema(ctx); err != nil {
 			t.Fatalf("admitted=%v: a queue golem created itself failed verification: %v", admitted, err)
 		}
 	}
@@ -227,10 +223,16 @@ func TestAPostgreSQLQueueFromV030ThroughV040PassesIndexVerification(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := store.EnsureSchema(ctx); !errors.Is(err, queueprovider.ErrStorageUpgradeRequired) {
+			t.Fatalf("legacy startup did not refuse: %v", err)
+		}
+		if _, err := store.(queueprovider.StorageMaintenance).UpgradeStorage(ctx); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.EnsureSchema(ctx); err != nil {
 			t.Fatalf("admitted=%v: a released PostgreSQL queue database was refused on upgrade: %v", admitted, err)
 		}
-		if err := queueStoreOf(t, store).verifyQueueGuarantees(ctx); err != nil {
+		if err := queueStoreOf(t, store).EnsureSchema(ctx); err != nil {
 			t.Fatalf("admitted=%v: released PostgreSQL queue indexes failed verification: %v", admitted, err)
 		}
 	}
@@ -248,14 +250,12 @@ func TestPostgreSQLRefusesAMissingQueueIndex(t *testing.T) {
 			if _, err := database.ExecContext(ctx, `DROP INDEX "`+namespace+`"."`+name+`"`); err != nil {
 				t.Fatal(err)
 			}
-			err := queueStoreOf(t, store).verifyQueueGuarantees(ctx)
+			err := queueStoreOf(t, store).EnsureSchema(ctx)
 			if err == nil {
 				t.Fatalf("a missing %s was accepted", name)
 			}
-			for _, fragment := range []string{name, "golem"} {
-				if !strings.Contains(err.Error(), fragment) {
-					t.Fatalf("refusal must name the absent object, got: %v", err)
-				}
+			if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+				t.Fatalf("missing %s must fail strict storage admission: %v", name, err)
 			}
 		})
 	}
@@ -287,7 +287,7 @@ func TestPostgreSQLNameCollisionOnAnotherTableIsCaught(t *testing.T) {
 	if err == nil {
 		t.Fatal("a queue whose claim index name was taken by another table started anyway")
 	}
-	if !strings.Contains(err.Error(), "golem_queue_claim") {
-		t.Fatalf("refusal must name the absent index, got: %v", err)
+	if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
+		t.Fatalf("foreign index-name collision must fail closed before bootstrap: %v", err)
 	}
 }

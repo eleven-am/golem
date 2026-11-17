@@ -32,7 +32,7 @@ func TestComputedArgumentCoercionCoversEveryScalarTheLogicalTypeSystemProduces(t
 			continue
 		}
 		typ := compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeScalar, Name: name}
-		if _, _, err := coerceComputedValue(typ, raw, nil, 16); err != nil {
+		if _, _, err := coerceComputedValue(typ, raw, nil, nil, 16); err != nil {
 			t.Errorf("coerceComputedValue rejects scalar %q that the logical type system produces: %v", name, err)
 		}
 	}

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"

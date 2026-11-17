@@ -2,8 +2,8 @@ package operation
 
 import (
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )

@@ -101,6 +101,10 @@ func ReadModelHead(moduleDir, root string) (*ir.ModelIR, error) {
 }
 
 func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
+	return prepareNew(ctx, request, nil)
+}
+
+func prepareNew(ctx context.Context, request NewRequest, correction *DataCorrectionRequest) (NewResult, error) {
 	if err := ctx.Err(); err != nil {
 		return NewResult{}, err
 	}
@@ -119,6 +123,11 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		return NewResult{}, err
 	}
 	state, headLength := preview.State, preview.HeadLength
+	if correction != nil {
+		if err := prepareDataCorrectionPreview(&preview, request, correction.Field); err != nil {
+			return NewResult{}, err
+		}
+	}
 	if err := validateNewHeadLength(headLength); err != nil {
 		return NewResult{}, err
 	}
@@ -163,8 +172,8 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		}
 		backfills := pendingBackfillOperations(migration.ManifestEntry{Operations: plan.Operations})
 		pendingRequiredColumn := len(backfills) != 0
-		if pendingRequiredColumn && (len(providers) != 1 || providerID != ir.PostgreSQL || len(backfills) != 1) {
-			return NewResult{}, requiredFieldWithoutDefault(after, backfills, len(providers) != 1 || providerID != ir.PostgreSQL)
+		if pendingRequiredColumn && (len(providers) != 1 || len(backfills) != 1) {
+			return NewResult{}, requiredFieldWithoutDefault(after, backfills, len(providers) != 1)
 		}
 		var approvals []migration.Approval
 		var risks []migration.OperationRisk
@@ -198,6 +207,19 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 			BeforePhysical: plan.BeforeFingerprint, AfterPhysical: plan.AfterFingerprint,
 			BeforeSnapshot: before, AfterSnapshot: after, UnmanagedAllowlistDigest: migration.Digest(allowlist.String()),
 		}
+		prefix := path.Join(root, string(providerID), string(id))
+		if correction != nil {
+			operation := plan.Operations[0]
+			field := ir.FieldID(operation.ObjectID)
+			model, _ := migration.BackfillOwner(after, field)
+			filename := prefix + ".data.sql"
+			entry.Manual = []migration.ManualCompanion{{OperationID: operation.ID, File: migration.FileChecksum{Path: filename, SHA256: migration.Checksum(correction.SQL)}, Postcondition: migration.DataCorrectionPostcondition(model, field)}}
+			if history.Files == nil {
+				history.Files = map[string][]byte{}
+			}
+			history.Files[filename] = append([]byte(nil), correction.SQL...)
+			artifactByPath[filename] = codegenmanifest.Artifact{Path: filename, Kind: codegenmanifest.ArtifactMigrationSQL, Content: append([]byte(nil), correction.SQL...), Immutable: true}
+		}
 		if pendingRequiredColumn {
 			pending, pendingErr := newPendingBackfill(request.ModuleDir, root, entry, request.Model, beforeModel, request.ModelFingerprint, request.ContractFingerprint, provider.Result.Fingerprint, provider.Result.SystemFingerprint)
 			if pendingErr != nil {
@@ -209,7 +231,6 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		if err != nil {
 			return NewResult{}, fmt.Errorf("render provider %s migration %s: %w", providerID, id, err)
 		}
-		prefix := path.Join(root, string(providerID), string(id))
 		beforeBytes, err := historicalSnapshotBytes(before)
 		if err != nil {
 			return NewResult{}, err
@@ -264,7 +285,7 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		artifactByPath[manifestPath] = codegenmanifest.Artifact{Path: manifestPath, Kind: codegenmanifest.ArtifactMigrationManifest, Content: manifestBytes}
 		changedProviders = append(changedProviders, providerID)
 	}
-	if beforeModelFingerprint == request.ModelFingerprint && !physicalChanged {
+	if correction == nil && beforeModelFingerprint == request.ModelFingerprint && !physicalChanged {
 		return NewResult{}, fmt.Errorf("migration has no logical or physical schema changes; contract-only changes belong to generate")
 	}
 	modelPrefix := path.Join(root, "models", string(id))
@@ -294,7 +315,7 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 	return NewResult{Prospective: prospective, PublicationPath: path.Join(root, PublicationFilename), MigrationID: id, Providers: changedProviders}, nil
 }
 
-func requiredFieldWithoutDefault(after physical.PhysicalSchema, backfills []migration.Operation, notPostgreSQLOnly bool) error {
+func requiredFieldWithoutDefault(after physical.PhysicalSchema, backfills []migration.Operation, multipleProviders bool) error {
 	fields := make([]string, 0, len(backfills))
 	for _, operation := range backfills {
 		name := operation.ObjectID
@@ -308,8 +329,8 @@ func requiredFieldWithoutDefault(after physical.PhysicalSchema, backfills []migr
 		fields = append(fields, name)
 	}
 	sort.Strings(fields)
-	if notPostgreSQLOnly {
-		return fmt.Errorf("required field %s is added without a default, so existing rows would have no value; declare a default or make the field optional (a reviewed backfill is supported only when PostgreSQL is the schema's sole provider)", strings.Join(fields, ", "))
+	if multipleProviders {
+		return fmt.Errorf("required field %s is added without a default, so existing rows would have no value; declare a default or make the field optional (reviewed backfills currently require a single SQLite or PostgreSQL provider; multi-provider companion publication is not supported)", strings.Join(fields, ", "))
 	}
 	return fmt.Errorf("required fields %s are added without defaults; a reviewed backfill migration adds exactly one required field, so declare defaults, make the fields optional, or add them in separate migrations", strings.Join(fields, ", "))
 }
@@ -562,7 +583,7 @@ func emptyHistories(providers []Provider) map[ir.Provider]History {
 
 func canonicalEmpty(desired physical.PhysicalSchema) physical.PhysicalSchema {
 	value, _ := physical.Normalize(physical.PhysicalSchema{
-		Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion,
+		Version: desired.Version, CanonicalVersion: desired.CanonicalVersion,
 		Provider: desired.Provider, Namespace: desired.Namespace,
 	})
 	return value

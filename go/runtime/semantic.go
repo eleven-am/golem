@@ -29,6 +29,75 @@ const semanticIdentityChunk = 100
 
 type semanticRanker func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error)
 
+// CallerSearchByVector uses the same authorized candidates, index-source field
+// permissions, result limits and hydration as text search. The query is prepared
+// before entering the operation; ranking never invokes the embedding provider.
+func CallerSearchByVector[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName string, query embedding.QueryVector, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if caller == nil || caller.app == nil || ctx == nil {
+		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "searchByVector", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+	}
+	options, err := semanticCandidateOptions(predicates, take)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := prepareCallerFindManyRead(ctx, caller, descriptor, options)
+	if err != nil {
+		return nil, err
+	}
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
+		return nil, callErr
+	}
+	queryer, err := prepared.executor.queryerFor(caller.app.database)
+	if err != nil {
+		return nil, err
+	}
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "searchByVector", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+		return caller.app.semantic.QueryVectorOn(ctx, queryer, model, indexName, query, candidates, take)
+	})
+}
+
+func SystemSearchByVector[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName string, query embedding.QueryVector, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if system.app == nil || ctx == nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_RUNTIME: system execution is unavailable")
+	}
+	options, err := semanticCandidateOptions(predicates, take)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := prepareSystemFindManyRead(system, descriptor, options)
+	if err != nil {
+		return nil, err
+	}
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
+		return nil, callErr
+	}
+	queryer, err := prepared.executor.queryerFor(system.app.database)
+	if err != nil {
+		return nil, err
+	}
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, "searchByVector", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+		return system.app.semantic.QueryVectorOn(ctx, queryer, model, indexName, query, candidates, take)
+	})
+}
+
+func CallerTxSearchByVector[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, query embedding.QueryVector, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerSearchByVector(ctx, transaction.caller, descriptor, indexName, query, take, predicates...)
+	})
+}
+
+func SystemTxSearchByVector[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, query embedding.QueryVector, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemSearchByVector(ctx, transaction.system, descriptor, indexName, query, take, predicates...)
+	})
+}
+
 // CallerSearch executes ordinary caller authorization before distance
 // evaluation. The authorized predicate is pushed into the ranking statement, so
 // only rows the caller may read can occupy a result slot or affect ordering.
@@ -49,6 +118,9 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	}
 	queryer, err := prepared.executor.queryerFor(caller.app.database)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireSemanticEmbeddingExecution(prepared.executor); err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
@@ -113,6 +185,9 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	}
 	queryer, err := prepared.executor.queryerFor(system.app.database)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireSemanticEmbeddingExecution(prepared.executor); err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, system.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
@@ -198,6 +273,16 @@ func prepareSystemFindManyRead[P, A, M any](system System[P, A], descriptor gole
 		return PreparedRead{}, err
 	}
 	return system.Prepare(frozen)
+}
+
+func requireSemanticEmbeddingExecution(executor *executionBinding) error {
+	// Scoped executions retain their connection through hooks/transactions.
+	// A provider may need that same pool, so calling it here can deadlock a
+	// one-connection profile. Prepared vectors do not cross this boundary.
+	if executor != nil && executor.scoped && executor.database != nil && executor.database.Stats().MaxOpenConnections == 1 {
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "text search cannot call an embedding provider inside a single-connection transaction; prepare a QueryVector before the transaction and use SearchByVector")
+	}
+	return nil
 }
 
 func semanticReadOptions[M any](predicates []golem.Predicate[M], query string, take int) ([]golem.ReadOption[M], error) {
@@ -293,7 +378,12 @@ func renderSemanticCandidates[P, A any](app *App[P, A], prepared PreparedRead, p
 	if !ok {
 		return renderedSemanticCandidates{}, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
 	}
-	conditions := make([]policyir.Condition, 0, len(fields))
+	conditions := make([]policyir.Condition, 0, len(fields)+1)
+	if pending, present, err := semanticPendingExclusion(app, prepared, planned.ModelID()); err != nil {
+		return renderedSemanticCandidates{}, err
+	} else if present {
+		conditions = append(conditions, pending)
+	}
 	if !prepared.system {
 		policy, present := prepared.policies.Policy(planned.ModelID())
 		if !present {

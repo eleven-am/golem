@@ -741,8 +741,11 @@ func (f *fixture) cardinalityRamp() {
 
 func (f *fixture) mutationCardinalityRamp() {
 	lockReads, parentLocks, versionInserts, versionUpdates := 0, 0, 1, 1
+	setRechecks := 0
 	if f.database.Provider() == golem.PostgreSQL {
 		lockReads, parentLocks, versionUpdates = 1, 1, 0
+		// Compact identity sets retain the conservative post-lock reread.
+		setRechecks = 1
 	}
 	for _, size := range []int{1, 2, 4, 8} {
 		inputs := make([]social.CommentCreateInput, size)
@@ -776,11 +779,11 @@ func (f *fixture) mutationCardinalityRamp() {
 			f.t.Fatalf("updateMany size=%d count=%d error=%v", size, count, err)
 		}
 		statements := singleStatements(f.t, f.trace.snapshot(), observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess)
-		// The bounded identity capture is one statement through 32 identities;
-		// the 128-identity shape crosses exactly one provider-safe bind chunk.
-		want := 6 + lockReads + versionUpdates
+		// At 128 rows, the fact flush needs a second insert under the bind
+		// ceiling. Compact-set locking adds a reread only on PostgreSQL.
+		want := 6 + lockReads + setRechecks + versionUpdates
 		if size == 128 {
-			want = 7 + lockReads + versionUpdates
+			want = 7 + lockReads + setRechecks + versionUpdates
 		}
 		if statements != want {
 			f.t.Fatalf("updateMany size=%d statements=%d want exact reviewed plan=%d", size, statements, want)

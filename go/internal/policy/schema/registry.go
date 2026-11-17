@@ -69,6 +69,7 @@ type Registry struct {
 	physicalNamespaces       map[golem.Provider]physical.PhysicalName
 	physicalSystemNamespaces map[golem.Provider]physical.PhysicalName
 	capabilities             map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
+	policyCapture            policyCaptureInventory
 }
 
 type DeleteEffect struct {
@@ -426,6 +427,8 @@ type Model struct {
 	semanticIndexed       bool
 	eventSchema           compilerir.Fingerprint
 	eventSnapshot         []golem.FieldID
+	scopeTemplates        []compilerir.ScopeTemplateIR
+	factTemplates         []compilerir.FactTemplateIR
 	analytics             *compilerir.AggregationContractIR
 	scopedReads           bool
 	hookOwnedCreate       []golem.FieldID
@@ -460,6 +463,85 @@ func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTak
 // SubscriptionsEnabled is the normalized contract decision controlling
 // durable mutation-fact capture for this model.
 func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
+
+// ScopeTemplates returns the validated static authority inventory. Runtime
+// subscribers do not add to it, and consumers cannot mutate registry truth.
+func (model Model) ScopeTemplates() []compilerir.ScopeTemplateIR {
+	return cloneScopeTemplates(model.scopeTemplates)
+}
+
+func (model Model) ScopeTemplate(id compilerir.ScopeTemplateID) (compilerir.ScopeTemplateIR, bool) {
+	for _, template := range model.scopeTemplates {
+		if template.ID == id {
+			return cloneScopeTemplates([]compilerir.ScopeTemplateIR{template})[0], true
+		}
+	}
+	return compilerir.ScopeTemplateIR{}, false
+}
+
+// FactTemplates is the actor-independent body inventory. Capture must use it
+// together with the associated scope, independently of active subscribers.
+func (model Model) FactTemplates() []compilerir.FactTemplateIR {
+	return cloneFactTemplates(model.factTemplates)
+}
+
+func (model Model) FactTemplate(id compilerir.FactTemplateID) (compilerir.FactTemplateIR, bool) {
+	for _, template := range model.factTemplates {
+		if template.ID == id {
+			return cloneFactTemplates([]compilerir.FactTemplateIR{template})[0], true
+		}
+	}
+	return compilerir.FactTemplateIR{}, false
+}
+
+func cloneFactTemplates(input []compilerir.FactTemplateIR) []compilerir.FactTemplateIR {
+	if input == nil {
+		return nil
+	}
+	result := make([]compilerir.FactTemplateIR, len(input))
+	for index, template := range input {
+		template.Parameters = cloneTemplateParameters(template.Parameters)
+		template.Expression = cloneScopeExpression(template.Expression)
+		result[index] = template
+	}
+	return result
+}
+
+func cloneTemplateParameters(input []compilerir.ScopeParameterIR) []compilerir.ScopeParameterIR {
+	if input == nil {
+		return nil
+	}
+	result := append(make([]compilerir.ScopeParameterIR, 0, len(input)), input...)
+	for index := range result {
+		result[index].Type = cloneLogicalType(result[index].Type)
+	}
+	return result
+}
+
+func cloneScopeTemplates(input []compilerir.ScopeTemplateIR) []compilerir.ScopeTemplateIR {
+	if input == nil {
+		return nil
+	}
+	result := make([]compilerir.ScopeTemplateIR, len(input))
+	for index, template := range input {
+		template.Parameters = cloneTemplateParameters(template.Parameters)
+		template.Expression = cloneScopeExpression(template.Expression)
+		result[index] = template
+	}
+	return result
+}
+
+func cloneScopeExpression(input compilerir.ScopeExpressionIR) compilerir.ScopeExpressionIR {
+	result := input
+	result.Literals = append([]compilerir.TypedLiteralIR(nil), input.Literals...)
+	if input.Children != nil {
+		result.Children = make([]compilerir.ScopeExpressionIR, len(input.Children))
+		for index, child := range input.Children {
+			result.Children[index] = cloneScopeExpression(child)
+		}
+	}
+	return result
+}
 
 // SemanticIndexed is the normalized compiler decision controlling durable
 // semantic record marking for this model. It reports that at least one

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"

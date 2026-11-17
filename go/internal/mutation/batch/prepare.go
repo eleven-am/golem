@@ -367,7 +367,30 @@ func (context renderContext) identitiesWhere(identities [][]any, offset int) (st
 		}
 		rows[rowIndex] = "(" + strings.Join(parts, " AND ") + ")"
 	}
-	return strings.Join(rows, " OR "), bindings, nil
+	return identityDisjunction(rows), bindings, nil
+}
+
+// SQLite's expression-depth limit applies even when the parameter chunk is
+// legal, and embedding a linear disjunction in a dependent EXISTS consumes
+// further depth. Balance only the Boolean structure: each leaf is still one
+// complete identity tuple and bindings retain their original row/component order.
+func identityDisjunction(rows []string) string {
+	var output strings.Builder
+	var write func([]string)
+	write = func(parts []string) {
+		if len(parts) <= 2 {
+			output.WriteString(strings.Join(parts, " OR "))
+			return
+		}
+		middle := len(parts) / 2
+		output.WriteByte('(')
+		write(parts[:middle])
+		output.WriteString(") OR (")
+		write(parts[middle:])
+		output.WriteByte(')')
+	}
+	write(rows)
+	return output.String()
 }
 
 func (context renderContext) encodedPrimary(row mutationdecode.Row) ([]any, string, error) {
@@ -428,20 +451,18 @@ func (context renderContext) encode(value policyir.Value, typ policyir.TypeRef) 
 
 func (context renderContext) returning() (string, []ResultColumn, error) {
 	model, _ := context.registry.Model(golem.ModelID(context.modelID()))
-	var fields []string
-	var columns []ResultColumn
+	var persisted []golem.FieldID
 	for _, publicID := range model.Fields() {
 		fieldID := policyir.FieldID(publicID)
-		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
+		_, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		if !ok {
 			continue
 		}
-		alias := fmt.Sprintf("golem_f_%x", fieldID)
-		fields = append(fields, policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(field.Column))+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
-		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
+		persisted = append(persisted, publicID)
 	}
-	if len(fields) == 0 {
-		return "", nil, fail(CodeSchema, context.modelID(), policyir.FieldID{}, "model has no persisted scalar fields", nil)
+	fields, columns, err := context.projectColumns(persisted, false)
+	if err != nil {
+		return "", nil, err
 	}
 	return strings.Join(fields, ", "), columns, nil
 }

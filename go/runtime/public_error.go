@@ -12,6 +12,7 @@ import (
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
@@ -59,6 +60,15 @@ type limitDetail struct {
 }
 
 func limitFailure(err error) (limitDetail, bool) {
+	var set *policysql.ScalarSetLimitError
+	if errors.As(err, &set) {
+		var field golem.FieldID
+		var rendered *policysql.Error
+		if errors.As(err, &rendered) {
+			field = golem.FieldID(rendered.FieldID)
+		}
+		return limitDetail{limit: golem.LimitScalarSetBytes, maximum: set.Maximum, field: field}, true
+	}
 	var state *mutationLimitError
 	if errors.As(err, &state) {
 		return limitDetail{limit: state.limit, maximum: state.max}, true

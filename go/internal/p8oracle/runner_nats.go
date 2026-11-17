@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,12 +50,33 @@ func runExternalNATSScenario(t *testing.T, source []byte, scenario string, race 
 	if strings.TrimSpace(scenario) == "" {
 		t.Fatal("external NATS scenario is required")
 	}
-	available, err := order7NATSAvailable(
-		os.Getenv(testenv.NATSRequiredVariable),
-		os.Getenv(testenv.PostgreSQLRequiredVariable),
-		exec.LookPath,
-		localNATSImagePresent,
-	)
+	WithLocalCoreNATS(t, func(address string) {
+		proxy := newNATSCutProxy(t, strings.TrimPrefix(address, "nats://"))
+		control := newNATSCutControl(t, proxy)
+		runExternalNATSProfiles(t, source, scenario, race, proxy.URL(), control.URL())
+	})
+}
+
+// WithLocalCoreNATS lends the existing owned Core NATS broker to a scenario.
+// All Docker commands are pinned to a verified local Unix socket; a remote
+// context or remote DOCKER_HOST can never acquire or remove a container.
+func WithLocalCoreNATS(t *testing.T, scenario func(string)) {
+	t.Helper()
+	if scenario == nil {
+		t.Fatal("Core NATS scenario is required")
+	}
+	if err := validateOrder7NATSMode(os.Getenv(testenv.NATSRequiredVariable), os.Getenv(testenv.PostgreSQLRequiredVariable)); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := localDockerEndpoint()
+	if err != nil {
+		if os.Getenv(testenv.NATSRequiredVariable) == "1" {
+			t.Fatal(err)
+		}
+		t.Skip("live Core NATS local Unix endpoint is unavailable")
+	}
+	t.Setenv("DOCKER_HOST", endpoint)
+	available, err := order7NATSAvailable(os.Getenv(testenv.NATSRequiredVariable), os.Getenv(testenv.PostgreSQLRequiredVariable), exec.LookPath, localNATSImagePresent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,27 +84,72 @@ func runExternalNATSScenario(t *testing.T, source []byte, scenario string, race 
 		t.Skip("live Core NATS prerequisites are unavailable")
 	}
 	startOrder7NATSContainer(t)
-	proxy := newNATSCutProxy(t, order7NATSAddress)
-	control := newNATSCutControl(t, proxy)
-	runExternalNATSProfiles(t, source, scenario, race, proxy.URL(), control.URL())
+	scenario("nats://" + order7NATSAddress)
+}
+
+func localDockerEndpoint() (string, error) {
+	endpoint := os.Getenv("DOCKER_HOST")
+	if endpoint == "" {
+		endpoint = "unix:///var/run/docker.sock"
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "unix" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" || !filepath.IsAbs(parsed.Path) {
+		return "", errors.New("Core NATS requires a local Unix Docker endpoint")
+	}
+	socket, err := filepath.EvalSymlinks(parsed.Path)
+	if err != nil {
+		return "", errors.New("Core NATS local Docker socket is unavailable")
+	}
+	info, err := os.Stat(socket)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return "", errors.New("Core NATS Docker endpoint is not a Unix socket")
+	}
+	return (&url.URL{Scheme: "unix", Path: socket}).String(), nil
+}
+
+func localDockerCommand(ctx context.Context, arguments ...string) (*exec.Cmd, error) {
+	endpoint, err := localDockerEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	command := exec.CommandContext(ctx, "docker", append([]string{"--host", endpoint}, arguments...)...)
+	command.WaitDelay = time.Second
+	// An explicit --host excludes ambient Docker contexts; suppress TLS flags
+	// too, so every operation retains the same local Unix endpoint semantics.
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		switch key {
+		case "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH":
+			continue
+		}
+		command.Env = append(command.Env, value)
+	}
+	return command, nil
 }
 
 type executableLookup func(string) (string, error)
-type imageLookup func(string) bool
+type imageLookup func(string) (bool, error)
 
-func order7NATSAvailable(required, postgresRequired string, lookup executableLookup, imagePresent imageLookup) (bool, error) {
+func validateOrder7NATSMode(required, postgresRequired string) error {
 	switch required {
 	case "", "0", "1":
 	default:
-		return false, errors.New(testenv.NATSRequiredVariable + " must be 0 or 1")
+		return errors.New(testenv.NATSRequiredVariable + " must be 0 or 1")
 	}
 	switch postgresRequired {
 	case "", "0", "1":
 	default:
-		return false, errors.New(testenv.PostgreSQLRequiredVariable + " must be 0 or 1")
+		return errors.New(testenv.PostgreSQLRequiredVariable + " must be 0 or 1")
 	}
 	if required == "1" && postgresRequired != "1" {
-		return false, errors.New("required live Core NATS requires mandatory PostgreSQL profiles")
+		return errors.New("required live Core NATS requires mandatory PostgreSQL profiles")
+	}
+	return nil
+}
+
+func order7NATSAvailable(required, postgresRequired string, lookup executableLookup, imagePresent imageLookup) (bool, error) {
+	if err := validateOrder7NATSMode(required, postgresRequired); err != nil {
+		return false, err
 	}
 	if lookup == nil || imagePresent == nil {
 		return false, errors.New("live Core NATS prerequisite inspection is unavailable")
@@ -93,7 +160,14 @@ func order7NATSAvailable(required, postgresRequired string, lookup executableLoo
 		}
 		return false, nil
 	}
-	if !imagePresent(order7NATSImage) {
+	present, err := imagePresent(order7NATSImage)
+	if err != nil {
+		if required == "1" {
+			return false, fmt.Errorf("inspect required pinned Core NATS image: %w", err)
+		}
+		return false, nil
+	}
+	if !present {
 		if required == "1" {
 			return false, errors.New("required pinned Core NATS image is unavailable")
 		}
@@ -102,18 +176,17 @@ func order7NATSAvailable(required, postgresRequired string, lookup executableLoo
 	return true, nil
 }
 
-func localNATSImagePresent(image string) bool {
-	command := exec.Command("docker", "image", "inspect", image, "--format", "{{join .RepoDigests \"\\n\"}}")
-	output, err := command.Output()
+func localNATSImagePresent(image string) (bool, error) {
+	output, err := dockerOutput("image", "inspect", image, "--format", "{{join .RepoDigests \"\\n\"}}")
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if line == order7NATSImageDigest {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func startOrder7NATSContainer(t *testing.T) {
@@ -201,8 +274,16 @@ func order7NATSContainerOwned(actual, expected string) bool {
 }
 
 func dockerOutput(arguments ...string) (string, error) {
-	command := exec.Command("docker", arguments...)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command, err := localDockerCommand(ctx, arguments...)
+	if err != nil {
+		return "", err
+	}
 	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("local Docker command exceeded 15s deadline: %w", ctx.Err())
+	}
 	if err != nil {
 		diagnostic := strings.Join(strings.Fields(string(output)), " ")
 		if len(diagnostic) > 1024 {

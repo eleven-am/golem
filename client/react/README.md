@@ -10,7 +10,7 @@ Built on `@eleven-am/golem-client` and `@tanstack/react-query`.
 npm install @eleven-am/golem-react @eleven-am/golem-client @tanstack/react-query react gql.tada graphql graphql-ws
 ```
 
-Peer dependencies: `@eleven-am/golem-client` ^0.2.1, `@tanstack/react-query` ^5, `react` >=18, `gql.tada` ^1.8. The client in turn needs `graphql` ^16 and `graphql-ws` ^6 (and `@tanstack/query-core` ^5, which `@tanstack/react-query` brings).
+Peer dependencies: `@eleven-am/golem-client` ^0.3.0, `@tanstack/react-query` ^5, `react` >=18, `gql.tada` ^1.8. The client in turn needs `graphql` ^16 and `graphql-ws` ^6 (and `@tanstack/query-core` ^5, which `@tanstack/react-query` brings).
 
 ## Setup
 
@@ -88,9 +88,19 @@ return <small>{status?.state}</small>
 
 The connection state of the whole client, as one of the `transport.status` values: `idle` before any live query has opened a connection, then `connecting`, `open`, `reconnecting` or one of the fatal states. It is global, unlike `useGolemStatus`.
 
+### Initialization and session changes
+
+When the generated manifest requires `data-incarnation-v1`, await
+`client.ready()` before offering mutation actions. Queries initialize lazily.
+Update the state read by `credentials`, then await `client.resetSession()` for
+each principal/profile switch or logout. Reset clears every Golem query and
+page chain, disposes the old socket and discovers the current data identity;
+other TanStack cache entries remain available. `operation-invalidation-v1` can
+be required alongside the incarnation capability.
+
 ### useGolemMutation
 
-`useMutation` over `client.mutate`. A committed mutation invalidates every cached query over the models it touches, so the live event or the refetch brings it up to date. The mutation result is never written into the cache. A document holds exactly one operation.
+A TanStack mutation over `client.mutate`. A committed mutation invalidates every cached query over the models it touches, so the live event or the refetch brings it up to date. The mutation result is never written into the query cache. A document holds exactly one operation.
 
 ```tsx
 const RETITLE = `
@@ -102,6 +112,42 @@ const RETITLE = `
 const retitle = useGolemMutation(RETITLE)
 retitle.mutate({ id, title: 'New title' })
 ```
+
+The hook captures the session and JSON arguments when `mutate` or
+`mutateAsync` is called, before async `onMutate`, offline pauses or scope queues.
+A queued old-session intent cannot send after reset. Sent stale outcomes report
+`GolemCommitUnknownError`; explicit PARTIAL/UNKNOWN evidence is preserved.
+Retries are disabled even when hook or application defaults request them.
+Original variables (including `undefined`), typed optimistic context, global
+MutationCache callbacks and per-call callbacks keep their TanStack shapes.
+Hook and global cache callbacks run for each invocation. Per-call callbacks
+belong to the latest observed invocation and stop after unmount or a session
+boundary. Reset, identity adoption and disposal reset mounted mutation results
+and clear completed Golem MutationCache records. Pending records preserve
+TanStack scope ordering until settlement, then stale records are removed;
+`mutateAsync` still rejects with the original explicit commit evidence.
+Other mutation records remain available. `meta.golem` is reserved for SDK
+ownership; other application metadata is preserved. Read back uncertain writes
+instead of replaying them automatically.
+
+Own successful mutations and explicit PARTIAL/UNKNOWN commit errors invalidate
+SDK reads in the same session, including static reads and models without event
+streams. Generated reads use their public model dependencies, including selected
+nested rows and public relation filters. Opaque/custom roots and computed
+results conservatively depend on every own write; the browser does not infer
+hidden policy dependencies. Unscoped mutations invalidate all SDK reads.
+Write reach uses the generated manifest's `mutationScope`, independently of
+response models. Custom mutations and older manifests without this metadata
+conservatively invalidate all SDK reads; generated nested writes use the
+server's conservative model scope.
+Inactive matching reads become stale; active ones refetch under normal TanStack
+policy. Unrelated generated-model reads and application cache entries stay
+unchanged. Static mode opens no subscriptions.
+
+Invalidating a custom continuation query, static or live, discards its pages and
+restarts at `null`. A held or already-settled obsolete result cannot refill the
+chain. Ordinary explicit refetch retains the current traversal semantics.
+Generated cursor pagination retains its normal refetch traversal.
 
 ### useGolemInfiniteQuery
 
@@ -119,9 +165,49 @@ const pages = feed.data?.pages ?? []
 // feed.hasNextPage, feed.fetchNextPage()
 ```
 
+### useGolemStaticInfiniteQuery
+
+The same generated-list cursor pagination without event streams. It works for
+models without subscriptions and preserves typed document results, variables
+and `Cursor | null` page parameters. Normal TanStack refetch options still apply;
+clear cached pages when the authenticated principal or selected profile changes.
+Custom `PageQuery` roots use `useGolemStaticContinuationQuery` below.
+
+```tsx
+const feed = useGolemStaticInfiniteQuery(FEED)
+const pages = feed.data?.pages ?? []
+// feed.hasNextPage, feed.fetchNextPage()
+```
+
+### useGolemStaticContinuationQuery
+
+Pages a custom server `PageQuery` using opaque `string | null` page parameters.
+The server's generated manifest must use format 3. Select one pageable root
+directly; the hook obtains `next` automatically and owns the `after` argument.
+Your model field selections stay as authored, including title-only selections
+whose row identities are private.
+
+For a `homeFeed` page whose items have a `title` field:
+
+```tsx
+const HOME = `
+  query Home($take: Int = 25) {
+    homeFeed(take: $take) { items { title } }
+  }
+`
+const feed = useGolemStaticContinuationQuery(HOME)
+const pages = feed.data?.pages ?? []
+// feed.hasNextPage, feed.fetchNextPage()
+```
+
+A short or empty page can have a next token. Only `next: null` ends traversal.
+Expired tokens fail with reason `CONTINUATION_EXPIRED`; discard the accumulated
+chain and start at its first page. Clear cached pages when the principal or
+selected profile changes. Normal TanStack refetch options still apply.
+
 ### useGolemStaticQuery
 
-`useQuery` for a document you want fetched once and never refreshed, or one that cannot be live (a model without events, a custom root with no model rows). Counts and aggregates are live through `useGolemQuery`.
+`useQuery` without event streams, including for a model without events or a custom root with no model rows. Authored model field selections are preserved; normal TanStack refetch options still apply. Counts and aggregates can be live through `useGolemQuery`.
 
 ```tsx
 const COUNT = `
@@ -185,7 +271,7 @@ You never filter events in the client. The server judges each event against the 
 - `CREATED` refetches.
 - `DELETED` and `EXITED` remove the held row from the cache at once. The query then refetches, because a removal changes a list or empties a slot.
 - A response that carries an older row version than the cache already holds is discarded, and the query refetches.
-- A mutation result is never written into the cache. A committed mutation invalidates the cached queries over the models it touches (TanStack marks them stale and refetches the ones in use).
+- A mutation result is never written into the query cache. A committed mutation invalidates the cached queries over the models it touches (TanStack marks them stale and refetches the ones in use).
 - Refetches that arrive close together are coalesced into one.
 
 #### Row versions
@@ -239,7 +325,7 @@ All server errors are `GolemError` (`code`, `path`, `extensions`, `retryable`) o
 - `GolemProtocolMismatchError`, `GolemContractMismatchError`: the client and server disagree on the live protocol or the contract. Regenerate the manifest.
 - `GolemDeadlineRequiredError` (`GOLEM_PRINCIPAL_DEADLINE_REQUIRED`): the server refused a live socket because the principal has no deadline. This is a server fix.
 - `GolemUnauthenticatedError`, `GolemHttpError`.
-- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated for you, as they are after every committed mutation.
+- `GolemPartialCommitError`, `GolemCommitUnknownError`: a mutation whose commit state is partial or unknown. Affected live queries are invalidated in the same session, as after every committed mutation; stale-session outcomes do not invalidate replacement data.
 
 Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError` (a document the client cannot run, for example one that sets `cursor` or `skip` itself) and its subclass `GolemMultipleOperationsError` (a document with more than one operation), `GolemNotLiveError`, `GolemNotFoundError`, `GolemProtocolError`.
 
@@ -256,3 +342,10 @@ Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError
 - [Client workspace overview](https://github.com/eleven-am/golem/blob/main/client/README.md)
 
 License: GPL-3.0.
+
+
+### Declared live continuation pages
+
+`useGolemContinuationQuery(document, variables, options)` exposes the same generated result and `string | null` page types as the static continuation hook. It requires a generated operation invalidation subscription; it never infers observability from the returned rows. Invalidations discard accumulated pages and restart after replacement acknowledgement. Use `useGolemStaticContinuationQuery` when the root has no invalidation declaration. Query functions, continuation parameters and structural sharing remain coordinator-owned options.
+
+The server may refuse live admission when the declared source lacks snapshot coverage or uses unsupported ordinary relation paths. `useGolemStaticContinuationQuery` remains available without subscribing; it does not bypass query authorization or the schema's required capability handshake. Operation-invalidation schemas require a matching client for every request, including static queries and mutations. See [the server's supported invalidation contract](../../docs/golem-go/GUIDE.md#declared-operation-invalidation).

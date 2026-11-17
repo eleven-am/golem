@@ -250,6 +250,22 @@ func (subscriptionOption[M]) subscriptionOption(M) {}
 
 func DeleteSnapshot[M any](_ ...Column[M]) SubscriptionOption[M] { return subscriptionOption[M]{} }
 
+// ScopeTemplate declares a parameterized positive policy domain. The compiler
+// interprets the function's single predicate expression without executing it.
+// Its argument must be a named struct; direct argument fields supply typed
+// parameters. Capture paths and generated bindings share this expression.
+// Related scopes remain unavailable until historical evidence is supported.
+func ScopeTemplate[M, A any](_ string, _ func(A) Predicate[M]) SubscriptionOption[M] {
+	return subscriptionOption[M]{}
+}
+
+// FactTemplate declares a static physical predicate and its named authority
+// scope. Code generation produces a BoundFact for Rules.BindFact. The compiler
+// interprets this function; runtime policy construction never executes it.
+func FactTemplate[M, A any](_ string, _ string, _ func(A) Predicate[M]) SubscriptionOption[M] {
+	return subscriptionOption[M]{}
+}
+
 type EnumValueOption struct{ _ enumValueOptionMarker }
 type enumValueOptionMarker struct{}
 type EnumValueSpec[E ~string] struct{ _ func() E }

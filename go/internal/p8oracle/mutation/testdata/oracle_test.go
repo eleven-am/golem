@@ -614,26 +614,29 @@ func (f *fixture) assertOrdinaryObservationSamples() {
 		inserts       int
 		updates       int
 	}
+	// Compact PostgreSQL identity sets contain a parameter-only subquery.
+	// The conservative row-lock reader uses a separate lock and post-lock
+	// recheck for these batches; the initial capture is in the base count.
 	expectations := []expectation{
 		{"caller", "create", observe.OperationMutationCreate, 4, 0, 0, 0, 1, 1, 0},
 		{"caller", "update", observe.OperationMutationUpdate, 5, 0, 1, 0, 0, 0, 1},
 		{"caller", "delete", observe.OperationMutationDelete, 6, 0, 1, 0, 0, 0, 0},
-		{"caller", "update-many", observe.OperationMutationUpdateMany, 6, 2, 1, 0, 0, 0, 1},
-		{"caller", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 1, 0, 0, 0, 0},
+		{"caller", "update-many", observe.OperationMutationUpdateMany, 6, 2, 2, 0, 0, 0, 1},
+		{"caller", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 2, 0, 0, 0, 0},
 		{"caller", "upsert-create", observe.OperationMutationUpsert, 7, 0, 0, 0, 1, 1, 0},
 		{"caller", "upsert-update", observe.OperationMutationUpsert, 8, 0, 0, 1, 0, 0, 1},
 		{"caller-tx", "create", observe.OperationMutationCreate, 2, 0, 0, 0, 1, 1, 0},
 		{"caller-tx", "update", observe.OperationMutationUpdate, 3, 0, 1, 0, 0, 0, 1},
 		{"caller-tx", "delete", observe.OperationMutationDelete, 4, 0, 1, 0, 0, 0, 0},
-		{"caller-tx", "update-many", observe.OperationMutationUpdateMany, 4, 2, 1, 0, 0, 0, 1},
-		{"caller-tx", "delete-many", observe.OperationMutationDeleteMany, 5, 2, 1, 0, 0, 0, 0},
+		{"caller-tx", "update-many", observe.OperationMutationUpdateMany, 4, 2, 2, 0, 0, 0, 1},
+		{"caller-tx", "delete-many", observe.OperationMutationDeleteMany, 5, 2, 2, 0, 0, 0, 0},
 		{"caller-tx", "upsert-create", observe.OperationMutationUpsert, 5, 0, 0, 0, 1, 1, 0},
 		{"caller-tx", "upsert-update", observe.OperationMutationUpsert, 6, 0, 0, 1, 0, 0, 1},
 		{"graphql", "create", observe.OperationMutationCreate, 5, 0, 0, 0, 1, 1, 0},
 		{"graphql", "update", observe.OperationMutationUpdate, 6, 0, 1, 0, 0, 0, 1},
 		{"graphql", "delete", observe.OperationMutationDelete, 7, 0, 1, 0, 0, 0, 0},
-		{"graphql", "update-many", observe.OperationMutationUpdateMany, 6, 2, 1, 0, 0, 0, 1},
-		{"graphql", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 1, 0, 0, 0, 0},
+		{"graphql", "update-many", observe.OperationMutationUpdateMany, 6, 2, 2, 0, 0, 0, 1},
+		{"graphql", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 2, 0, 0, 0, 0},
 		{"graphql", "upsert-create", observe.OperationMutationUpsert, 8, 0, 0, 0, 1, 1, 0},
 		{"graphql", "upsert-update", observe.OperationMutationUpsert, 9, 0, 0, 1, 0, 0, 1},
 	}

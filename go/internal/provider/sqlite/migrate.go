@@ -56,6 +56,9 @@ type IncrementalPlan struct {
 type migrationStep struct {
 	statements []string
 	rebuild    *TableRebuild
+	backfill   *sqliteReviewedBackfill
+	validate   *sqliteReviewedBackfill
+	correction *sqliteDataCorrection
 }
 
 type structuralGuard struct {
@@ -64,7 +67,8 @@ type structuralGuard struct {
 }
 
 // PlanIncremental lowers an already reviewed semantic migration entry. It
-// accepts no casts, backfills, manual SQL, or caller-defined transforms.
+// accepts closed required-column backfills and data corrections; it never
+// invents casts or accepts arbitrary schema/data transforms.
 func (provider *Provider) PlanIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
 	return provider.planIncremental(entry)
 }
@@ -81,18 +85,7 @@ func reviewedInitial(entry migration.ManifestEntry) (reviewedInitialSnapshot, er
 }
 
 func reviewedEntryPlan(entry migration.ManifestEntry) (migration.Plan, error) {
-	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
-	if err != nil {
-		return migration.Plan{}, err
-	}
-	if plan.Provider != entry.AfterSnapshot.Provider.Provider ||
-		plan.BeforeFingerprint != entry.BeforePhysical ||
-		plan.AfterFingerprint != entry.AfterPhysical ||
-		!reflect.DeepEqual(plan.Operations, entry.Operations) ||
-		!reflect.DeepEqual(plan.Phases, entry.Phases) {
-		return migration.Plan{}, fmt.Errorf("reviewed migration snapshot lacks the exact sealed typed plan")
-	}
-	return plan, nil
+	return migration.ReviewedEntryPlan(entry)
 }
 
 func reviewedEntrySnapshots(entry migration.ManifestEntry) (reviewedSnapshot, reviewedSnapshot, error) {
@@ -129,7 +122,16 @@ func (provider *Provider) RenderMigration(entry migration.ManifestEntry) (Script
 	}
 	var statements []string
 	for _, step := range plan.steps {
-		statements = append(statements, step.statements...)
+		switch {
+		case step.correction != nil:
+			statements = append(statements, "-- golem reviewed data correction companion "+string(step.correction.operation), "-- golem generated data correction postcondition "+string(step.correction.companion.Postcondition))
+		case step.backfill != nil:
+			statements = append(statements, "-- golem reviewed backfill companion "+string(step.backfill.operation))
+		case step.validate != nil:
+			statements = append(statements, "-- golem generated postcondition "+string(step.validate.validation))
+		default:
+			statements = append(statements, step.statements...)
+		}
 	}
 	return Script{statements: statements}, nil
 }
@@ -194,19 +196,22 @@ func sqliteLedgerName(system physical.SystemSchema) (physical.PhysicalName, erro
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
-	semantic, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := migration.ReviewedEntryPlan(entry)
 	if err != nil {
-		return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic diff: %w", entry.ID, err)
+		return IncrementalPlan{}, err
 	}
-	if semantic.Provider != ir.SQLite || semantic.BeforeFingerprint != entry.BeforePhysical || semantic.AfterFingerprint != entry.AfterPhysical ||
-		!reflect.DeepEqual(semantic.Operations, entry.Operations) || !reflect.DeepEqual(semantic.Phases, entry.Phases) {
-		return IncrementalPlan{}, fmt.Errorf("sqlite migration %s operation graph differs from embedded snapshots", entry.ID)
+	if semantic.Provider != ir.SQLite {
+		return IncrementalPlan{}, fmt.Errorf("sqlite migration requires SQLite plan")
 	}
 	if err := migration.ValidatePlan(semantic, entry.Approvals); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("sqlite migration %s invalid reviewed plan: %w", entry.ID, err)
 	}
-	if len(entry.Manual) != 0 {
-		return IncrementalPlan{}, fmt.Errorf("sqlite migration %s manual companions are unsupported by the automatic runner", entry.ID)
+	if migration.IsDataCorrection(entry) {
+		return planSQLiteDataCorrection(entry)
+	}
+	backfill, err := planSQLiteReviewedBackfill(entry)
+	if err != nil {
+		return IncrementalPlan{}, err
 	}
 	for _, phase := range entry.Phases {
 		if phase.Mode != migration.Transactional {
@@ -214,7 +219,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		}
 	}
 	for _, operation := range semantic.Operations {
-		if operation.Transform != nil || operation.Kind == migration.BackfillColumn || operation.Kind == migration.ManualStep || operation.Kind == migration.ValidateConstraint && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) || operation.Kind == migration.InitializeConcurrencyColumn && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) {
+		if operation.Transform != nil || operation.Kind == migration.ManualStep || operation.Kind == migration.ValidateConstraint && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) && (backfill == nil || operation.ID != backfill.validation) || operation.Kind == migration.InitializeConcurrencyColumn && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s operation %s requires an unsupported transform or manual step", entry.ID, operation.ID)
 		}
 	}
@@ -281,6 +286,12 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		if !beforeOK || !afterOK {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s cannot rebuild missing table %s", entry.ID, tableID)
 		}
+		// The companion fills this provider-staged column on the original
+		// table before its final rebuild. Include that exact new field in the
+		// stable-ID copy mapping instead of inventing a default expression.
+		if backfill != nil && backfill.model == tableID {
+			before.Columns = append(append([]physical.PhysicalColumn(nil), before.Columns...), backfill.column)
+		}
 		rebuild, buildErr := buildTableRebuild(before, after, entry.AfterPhysical)
 		if buildErr != nil {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s: %w", entry.ID, buildErr)
@@ -328,6 +339,13 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 	if len(preRefresh) != 0 {
 		plan.steps = append(plan.steps, migrationStep{statements: preRefresh})
+	}
+	if backfill != nil {
+		staging, stageErr := backfill.stagingStatement()
+		if stageErr != nil {
+			return IncrementalPlan{}, stageErr
+		}
+		plan.steps = append(plan.steps, migrationStep{statements: []string{staging}}, migrationStep{backfill: backfill}, migrationStep{validate: backfill})
 	}
 
 	emitted := map[ir.ModelID]bool{}
@@ -868,7 +886,7 @@ func findSystemObject(system physical.SystemSchema, id ir.ObjectID) (physical.Sy
 }
 
 func sqliteRegisteredAdditiveSystemObject(object physical.SystemObject) bool {
-	return physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
+	return physical.IsDataIncarnationSystemObjectV1(object) || physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
 }
 
 func sqliteOutboxDeliveryBackfill(system physical.SystemSchema) string {
@@ -1143,6 +1161,11 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("sqlite migration starting physical verification: %w", err)
 	}
 
+	previousIncarnation, err := beforeDataIncarnation(ctx, transaction, entry)
+	if err != nil {
+		return err
+	}
+
 	for _, guard := range plan.guards {
 		if err := refuseUnmanagedStructuralDependents(ctx, transaction, entry.BeforeSnapshot, guard.tableID, guard.action); err != nil {
 			return err
@@ -1161,6 +1184,24 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		}
 	}
 	for stepIndex, step := range plan.steps {
+		if step.correction != nil {
+			if err := executeSQLiteDataCorrection(ctx, connection, transaction, entry, files, *step.correction); err != nil {
+				return err
+			}
+			continue
+		}
+		if step.backfill != nil {
+			if err := executeSQLiteReviewedBackfill(ctx, connection, entry, files, *step.backfill); err != nil {
+				return err
+			}
+			continue
+		}
+		if step.validate != nil {
+			if err := verifySQLiteBackfillPostcondition(ctx, transaction, entry.ID, *step.validate); err != nil {
+				return err
+			}
+			continue
+		}
 		for statementIndex, statement := range step.statements {
 			if _, err := transaction.ExecContext(ctx, executableStatement(statement)); err != nil {
 				return fmt.Errorf("sqlite migration step %d statement %d: %w", stepIndex, statementIndex, err)
@@ -1170,6 +1211,14 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := verifyForeignKeys(ctx, transaction); err != nil {
 		return err
 	}
+	if migration.IsDataCorrection(entry) {
+		if _, err := rotateDataIncarnation(ctx, transaction, entry.AfterSnapshot.System, previousIncarnation); err != nil {
+			return err
+		}
+	} else if err := applyDataIncarnation(ctx, transaction, entry, previousIncarnation); err != nil {
+		return err
+	}
+
 	actualAfter, err := provider.introspectReviewedCatalog(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite migration final introspection: %w", err)
@@ -1272,6 +1321,11 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err := physical.CompareFingerprintDigest(actualBefore, string(entry.BeforePhysical)); err != nil {
 		return fmt.Errorf("sqlite initial migration starting physical verification: %w", err)
 	}
+	previousIncarnation, err := beforeDataIncarnation(ctx, transaction, entry)
+	if err != nil {
+		return err
+	}
+
 	for index, statement := range script.statements {
 		if _, err := transaction.ExecContext(ctx, executableStatement(statement)); err != nil {
 			return fmt.Errorf("sqlite initial migration statement %d: %w", index, err)
@@ -1283,6 +1337,10 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err := verifyForeignKeys(ctx, transaction); err != nil {
 		return err
 	}
+	if err := applyDataIncarnation(ctx, transaction, entry, previousIncarnation); err != nil {
+		return err
+	}
+
 	actualAfter, err := provider.introspectReviewedCatalog(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration final introspection: %w", err)

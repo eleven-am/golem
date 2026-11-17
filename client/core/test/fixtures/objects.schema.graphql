@@ -1,0 +1,157 @@
+directive @oneOf on INPUT_OBJECT
+
+scalar BigInt
+
+scalar UUID
+
+scalar JSON
+
+enum SortOrder { asc desc }
+
+enum QueryMode { sensitive insensitive }
+
+input StringFilter { equals: String not: String in: [String!] notIn: [String!] lt: String lte: String gt: String gte: String contains: String startsWith: String endsWith: String mode: QueryMode }
+
+input StringUpdateOperationsInput @oneOf { set: String }
+
+input UUIDFilter { equals: UUID not: UUID in: [UUID!] notIn: [UUID!] }
+
+input UUIDUpdateOperationsInput @oneOf { set: UUID }
+
+enum HomeSegmentKind {
+  BASIC_PICK
+  EDITOR_PICK
+  RECOMMENDATION
+}
+
+type HomeFeedPage {
+  exhausted: Boolean!
+  page: Int!
+  results: [HomeSegment!]!
+  totalPages: Int!
+  totalResults: Int!
+}
+
+input HomeInput {
+  range: PageRange
+}
+
+type HomeSegment {
+  index: Int!
+  kind: HomeSegmentKind!
+}
+
+type InputView {
+  childNoteState: String!
+  childState: String!
+  count: Int!
+  countState: String!
+  document: String!
+  documentState: String!
+  note: String!
+  noteState: String!
+  tagState: String!
+  valueStates: [String!]!
+  valuesState: String!
+}
+
+input PageRange {
+  seed: Int!
+}
+
+input PatchChild {
+  note: String
+}
+
+input PatchInput {
+  child: PatchChild
+  count: Int
+  document: JSON
+  note: String
+  values: [String]
+}
+
+input PlaybackTarget @oneOf {
+  mediaId: UUID
+  playQueueItemId: UUID
+  playlistId: UUID
+  playlistVideoId: UUID
+  videoId: UUID
+}
+
+type TransportMetadata {
+  _version: BigInt!
+  grid: [[HomeSegment!]!]!
+  id: String!
+  items: [HomeSegment]!
+  maybe: HomeSegment
+}
+
+type User {
+  id: UUID
+  name: String
+  batchInputState(patch: PatchInput!, tag: String): InputView!
+  inputState(patch: PatchInput!, tag: String): InputView!
+  metadata: TransportMetadata!
+}
+
+input UserWhereInput {
+  all: Boolean
+  AND: [UserWhereInput!]
+  OR: [UserWhereInput!]
+  NOT: [UserWhereInput!]
+  id: UUIDFilter
+  name: StringFilter
+}
+
+input UserOrderByInput {
+  id: SortOrder
+  name: SortOrder
+}
+
+enum UserScalarField {
+  id
+  name
+}
+
+input UserWhereUniqueInput @oneOf {
+  ID: UUID
+}
+
+input UserCreateInput {
+  id: UUID
+  name: String!
+}
+
+input UserUpdateInput {
+  id: UUIDUpdateOperationsInput
+  name: StringUpdateOperationsInput
+}
+
+input UserUpdateManyInput {
+  id: UUIDUpdateOperationsInput
+  name: StringUpdateOperationsInput
+}
+
+type Query {
+  user(where: UserWhereUniqueInput!): User
+  users(where: UserWhereInput, orderBy: [UserOrderByInput!], cursor: UserWhereUniqueInput, distinct: [UserScalarField!], skip: Int, take: Int = 50): [User!]!
+  homeFeed(input: HomeInput!): HomeFeedPage!
+  homeFeedList(take: Int!): [HomeFeedPage!]!
+  inputState(patch: PatchInput!, tag: String): InputView!
+  transportMetadata: TransportMetadata!
+}
+
+type Mutation {
+  createUser(data: UserCreateInput!): User!
+  updateUser(where: UserWhereUniqueInput!, data: UserUpdateInput!): User!
+  upsertUser(where: UserWhereUniqueInput!, create: UserCreateInput!, update: UserUpdateInput!): User!
+  deleteUser(where: UserWhereUniqueInput!): User!
+  updateManyUsers(where: UserWhereInput!, data: UserUpdateManyInput!): BatchPayload!
+  deleteManyUsers(where: UserWhereInput!): BatchPayload!
+  choosePlayback(target: PlaybackTarget!): String!
+}
+
+type BatchPayload {
+  count: Int!
+}

@@ -26,7 +26,7 @@ import (
 
 const (
 	schemaUnavailableRemedy = "which no active or historical bundle provides: deliver or drain events written before the schema changed, or supply the bundle that wrote them"
-	regenerateContractV6    = "generated contract format 6 predates this golem (format 7): regenerate with golem generate"
+	regenerateContractV6    = "generated contract format 6 predates this golem (format 8): regenerate with golem generate"
 )
 
 func sqliteP10Fixture(t *testing.T) *p10OperationFixture {

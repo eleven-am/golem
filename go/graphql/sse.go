@@ -133,6 +133,11 @@ func (server *Server[P]) serveSSE(writer http.ResponseWriter, request *http.Requ
 		refuseSSE(writer, *failure)
 		return
 	}
+	if extensions != nil && extensions.discoveryNonce != "" {
+		writer.Header().Set("Cache-Control", "no-store")
+		refuseSSE(writer, publicError("BAD_REQUEST", "data incarnation discovery requires the JSON transport"))
+		return
+	}
 	if failure := server.handshakeFailure(extensions, false); failure != nil {
 		refuseSSE(writer, *failure)
 		return
@@ -193,7 +198,7 @@ func (server *Server[P]) streamSSE(writer http.ResponseWriter, request *http.Req
 	defer server.closeResponseStream(opCtx, source)
 	stream := server.openSSE(opCtx, cancel, writer)
 	defer stream.release()
-	if stream.write(sseEventFrame("next", liveAckPayload)) != nil {
+	if stream.write(sseEventFrame("next", server.operationAckPayload())) != nil {
 		return
 	}
 	stopKeepAlive := stream.keepAlive()
@@ -284,10 +289,7 @@ func (stream *sseStream[P]) relay(source ResponseStream, request Request, prepar
 			stream.terminate(PresentError(stream.ctx, err, nil, stream.server.config.ReportInternalError))
 			return err
 		}
-		serialized := stream.server.selectionOrdered(response, prepared.Operation)
-		if stream.server.executable != nil && response.Data != nil {
-			serialized = stream.server.executePrepared(stream.ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
-		}
+		serialized := stream.server.renderResponse(stream.ctx, request, prepared.Operation, response)
 		if stream.ctx.Err() != nil {
 			return context.Canceled
 		}
@@ -298,7 +300,7 @@ func (stream *sseStream[P]) relay(source ResponseStream, request Request, prepar
 }
 
 func (stream *sseStream[P]) next(response Response) error {
-	payload, err := encodeResponse(response)
+	payload, err := encodeResponse(stream.server.stampDataIncarnation(response))
 	if err != nil {
 		stream.terminate(publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 		return err

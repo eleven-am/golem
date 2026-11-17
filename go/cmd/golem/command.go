@@ -42,7 +42,11 @@ const usage = `usage:
   golem migration new --name <slug> [--schema <pattern>] [--root <name>] [--migrations <path>] [--approve <operation-id> ...]
   golem migration plan [--schema <pattern>] [--root <name>] [--migrations <path>] [--migration <id>] [--provider <sqlite|postgresql>] [--json]
   golem migration backfill attach --migration <id> --field <Model.Field> --file <path> [--migrations <path>]
-  golem migration apply --provider <sqlite|postgresql> --dsn <explicit> [--migrations <path>]`
+  golem migration data new --name <slug> --field <Model.Field> --file <path> [--schema <pattern>] [--root <name>] [--migrations <path>] [--approve <operation-id> ...]
+  golem migration apply --provider <sqlite|postgresql> --dsn <explicit> [--migrations <path>]
+  golem queue storage inspect --provider <sqlite|postgresql> --dsn <explicit> [--system-namespace <name>] [--sqlite-profile <local|network|network-wal>]
+  golem queue storage upgrade --provider <sqlite|postgresql> --dsn <explicit> [--system-namespace <name>] [--sqlite-profile <local|network|network-wal>]
+    Queue storage upgrade requires all queue producers and workers, including older binaries, to have stopped.`
 
 const generationOutputFormatVersion uint16 = 1
 const buildDiagnosticsOutputFormatVersion uint16 = 1
@@ -119,6 +123,8 @@ func run(ctx context.Context, directory string, args []string, stdout, stderr io
 		return runGeneration(ctx, directory, args[1:], stdout, stderr, "check", publication.ModeCheck)
 	case "migration":
 		return runMigration(ctx, directory, args[1:], stdout, stderr)
+	case "queue":
+		return runQueueStorage(ctx, args[1:], stdout, stderr)
 	default:
 		writeError(stderr, errors.New(usage))
 		return 2

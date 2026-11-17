@@ -1,6 +1,7 @@
 package operation
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -8,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
@@ -184,8 +185,12 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 		t.Fatalf("semantic hydration request take/selection = %d/%t/%d", take, ok, len(request.Selection()))
 	}
 	where, present := request.Where()
-	if !present || where.View().Root().Operator() != golem.FrozenOperatorAnd {
+	if !present || hydration.where == nil || !bytes.Equal(where.CanonicalBytes(), hydration.where.CanonicalBytes()) {
 		t.Fatalf("semantic hydration request discarded its filter: present=%t", present)
+	}
+	correlation, fields, present := request.RuntimeIdentityCorrelation()
+	if !present || len(fields) != 1 || fields[0] != postFieldID || correlation.View().Root().Operator() != golem.FrozenOperatorOr {
+		t.Fatal("semantic hydration request discarded its separate ranked identities")
 	}
 	sliced, err := compiler.HydrationRequest(hydration, 1, 2)
 	if err != nil {

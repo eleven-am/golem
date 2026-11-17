@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +21,11 @@ import (
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	"github.com/eleven-am/golem/go/internal/commitreport"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	"github.com/eleven-am/golem/go/internal/dataincarnation"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/observe"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -36,7 +39,7 @@ type Limits struct {
 	MaxRequestBytes, MaxVariableBytes, MaxTokens, MaxASTNodes, MaxFragments                int
 	MaxDepth, MaxSelectedFields, MaxAliases, MaxInputDepth, MaxInputNodes                  int
 	MaxListItems, MaxComplexity, MaxPageSize, MaxResolverConcurrency, MaxComputedBatchSize int
-	MaxGroups                                                                              int
+	MaxGroups, MaxHydratedRows, MaxResultBytes                                             int
 }
 
 var defaultLimits = Limits{
@@ -56,6 +59,8 @@ var defaultLimits = Limits{
 	MaxResolverConcurrency: 64,
 	MaxComputedBatchSize:   256,
 	MaxGroups:              10_000,
+	MaxHydratedRows:        1_000,
+	MaxResultBytes:         16 << 20, // Fits the client's recovery fixture: 80 rows with 200 KB bodies.
 }
 
 var hardLimits = Limits{
@@ -75,6 +80,8 @@ var hardLimits = Limits{
 	MaxResolverConcurrency: 256,
 	MaxComputedBatchSize:   4_096,
 	MaxGroups:              10_000,
+	MaxHydratedRows:        10_000,
+	MaxResultBytes:         16 << 20,
 }
 
 type limitBound struct {
@@ -106,6 +113,8 @@ var limitBounds = []limitBound{
 	{"MaxResolverConcurrency", func(limits *Limits) *int { return &limits.MaxResolverConcurrency }, "", ""},
 	{"MaxComputedBatchSize", func(limits *Limits) *int { return &limits.MaxComputedBatchSize }, "", ""},
 	{"MaxGroups", func(limits *Limits) *int { return &limits.MaxGroups }, "", ""},
+	{"MaxHydratedRows", func(limits *Limits) *int { return &limits.MaxHydratedRows }, "", ""},
+	{"MaxResultBytes", func(limits *Limits) *int { return &limits.MaxResultBytes }, "", ""},
 }
 
 var (
@@ -233,6 +242,8 @@ func NormalizeLimits(input Limits) (Limits, error) {
 }
 
 type Config[P any] struct {
+	// Bundle carries authoritative capability requirements for generated contracts.
+	Bundle               golem.SchemaBundle
 	PrincipalFromContext func(context.Context) (P, bool)
 	Limits               Limits
 	Introspection        bool
@@ -279,23 +290,35 @@ type Executor[P any] interface {
 	ListBounds() ListBounds
 }
 
+// ClientManifestExecutor exposes the manifest format understood by an executor.
+// Wrappers around a generated executor forward this capability with Execute.
+// Executors without it retain the original manifest format.
+type ClientManifestExecutor interface {
+	ClientManifestVersion() int
+}
+
+type ClientCapabilitiesExecutor interface{ RequiredClientCapabilities() []string }
+
 type Server[P any] struct {
-	schema              *ast.Schema
-	sdl                 string
-	config              Config[P]
-	limits              Limits
-	executor            Executor[P]
-	listBounds          ListBounds
-	concurrency         chan struct{}
-	contractFingerprint golem.SchemaDigest
-	executable          gqlgengraphql.ExecutableSchema
-	eventLimits         events.Limits
-	lifecycle           context.Context
-	cancel              context.CancelFunc
-	connections         sync.WaitGroup
-	rechecks            sync.WaitGroup
-	lifecycleMu         sync.Mutex
-	shuttingDown        bool
+	dataIncarnation       golem.DataIncarnation
+	clientManifestVersion int
+	clientCapabilities    []string
+	schema                *ast.Schema
+	sdl                   string
+	config                Config[P]
+	limits                Limits
+	executor              Executor[P]
+	listBounds            ListBounds
+	concurrency           chan struct{}
+	contractFingerprint   golem.SchemaDigest
+	executable            gqlgengraphql.ExecutableSchema
+	eventLimits           events.Limits
+	lifecycle             context.Context
+	cancel                context.CancelFunc
+	connections           sync.WaitGroup
+	rechecks              sync.WaitGroup
+	lifecycleMu           sync.Mutex
+	shuttingDown          bool
 }
 
 func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Server[P], error) {
@@ -330,8 +353,46 @@ func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Serv
 	if config.ExecutableSchema != nil && config.ExecutableSchema.Schema() == nil {
 		return nil, fmt.Errorf("GraphQL executable schema is incomplete")
 	}
+	manifestVersion := 1
+	var capabilities []string
+	if source, ok := executor.(ClientManifestExecutor); ok {
+		manifestVersion = source.ClientManifestVersion()
+	}
+	if source, ok := executor.(ClientCapabilitiesExecutor); ok {
+		capabilities = append([]string(nil), source.RequiredClientCapabilities()...)
+	}
+	if config.Bundle.FormatVersion() != 0 {
+		compilation, err := policyschema.DecodeActive(config.Bundle)
+		if err != nil {
+			return nil, fmt.Errorf("GraphQL capability bundle: %w", err)
+		}
+		if config.Bundle.Contract().Fingerprint() != config.ContractFingerprint {
+			return nil, fmt.Errorf("GraphQL capability bundle differs from the server contract fingerprint")
+		}
+		required := compilation.Contract.RequiredClientCapabilities()
+		if source, ok := executor.(ClientCapabilitiesExecutor); ok && !slices.Equal(source.RequiredClientCapabilities(), required) {
+			return nil, fmt.Errorf("GraphQL executor capabilities differ from the active bundle")
+		}
+		if source, ok := executor.(ClientManifestExecutor); ok && source.ClientManifestVersion() != compilation.Contract.RequiredClientManifestVersion() {
+			return nil, fmt.Errorf("GraphQL executor manifest format differs from the active bundle")
+		}
+		manifestVersion, capabilities = compilation.Contract.RequiredClientManifestVersion(), append([]string(nil), required...)
+	}
+	var incarnation golem.DataIncarnation
+	if source, ok := executor.(DataIncarnationExecutor); ok {
+		incarnation = source.DataIncarnation()
+	}
+	incarnationRequired := slices.Contains(capabilities, dataincarnation.Capability)
+	if incarnationRequired != incarnation.Valid() || incarnationRequired && config.Bundle.FormatVersion() == 0 {
+		return nil, fmt.Errorf("GraphQL durable data identity requires the authoritative opted bundle and admitted executor source")
+	}
+	if incarnationRequired {
+		if _, ok := executor.(PrincipalAuthenticationExecutor[P]); !ok {
+			return nil, fmt.Errorf("GraphQL durable data identity requires principal authentication capability")
+		}
+	}
 	lifecycle, cancel := context.WithCancel(context.Background())
-	return &Server[P]{schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, listBounds: listBounds, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema, eventLimits: eventLimits, lifecycle: lifecycle, cancel: cancel}, nil
+	return &Server[P]{dataIncarnation: incarnation, clientManifestVersion: manifestVersion, clientCapabilities: capabilities, schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, listBounds: listBounds, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema, eventLimits: eventLimits, lifecycle: lifecycle, cancel: cancel}, nil
 }
 
 func (server *Server[P]) SDL() string {
@@ -362,6 +423,11 @@ type Request struct {
 }
 
 func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+	// Set this before parsing or authentication so refused discovery requests,
+	// including malformed bodies and SSE attempts, cannot be cached either.
+	if server.dataIncarnation.Valid() {
+		writer.Header().Set("Cache-Control", "no-store")
+	}
 	if isWebSocketUpgrade(request) {
 		server.serveWebSocket(writer, request)
 		return
@@ -383,9 +449,20 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 		writeResponse(writer, Response{Errors: []Error{*failure}})
 		return
 	}
+	if extensions != nil && extensions.discoveryNonce != "" {
+		writer.Header().Set("Cache-Control", "no-store")
+	}
 	principal, ok := server.config.PrincipalFromContext(request.Context())
 	if !ok {
 		writeResponse(writer, Response{Errors: []Error{publicError("UNAUTHENTICATED", "authentication is required")}})
+		return
+	}
+	if extensions != nil && extensions.discoveryNonce != "" {
+		if negotiated != eventStreamRefused {
+			writeResponse(writer, Response{Errors: []Error{publicError("BAD_REQUEST", "data incarnation discovery requires the JSON transport")}})
+			return
+		}
+		writeResponse(writer, server.discoverDataIncarnation(request.Context(), principal, extensions))
 		return
 	}
 	if failure := server.handshakeFailure(extensions, false); failure != nil {
@@ -412,19 +489,18 @@ func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *requestExtensio
 	}
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
-	var envelope requestEnvelope
+	var envelope struct {
+		Query         json.RawMessage `json:"query"`
+		OperationName json.RawMessage `json:"operationName"`
+		Variables     json.RawMessage `json:"variables"`
+		Extensions    json.RawMessage `json:"extensions"`
+	}
 	if err := decoder.Decode(&envelope); err != nil {
 		return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
-	}
-	if envelope.Query == "" {
-		return fail(publicError("BAD_REQUEST", "GraphQL request requires a query"))
-	}
-	if exceedsLexicalTokenLimit(envelope.Query, limits.MaxTokens) {
-		return fail(limitError(limitTokens, limits.MaxTokens, nil))
 	}
 	var extensions *requestExtensions
 	if len(envelope.Extensions) != 0 && string(envelope.Extensions) != "null" {
@@ -434,6 +510,27 @@ func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *requestExtensio
 		if err := extensionDecoder.Decode(extensions); err != nil {
 			return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
 		}
+	}
+	if discovery, failure := decodeDiscovery(extensions); discovery {
+		if failure != nil {
+			return fail(*failure)
+		}
+		if len(envelope.Query) != 0 || len(envelope.OperationName) != 0 || len(envelope.Variables) != 0 {
+			return fail(publicError("BAD_REQUEST", "discovery cannot include executable fields"))
+		}
+		return Request{}, extensions, nil
+	}
+	var query, operationName string
+	if err := json.Unmarshal(envelope.Query, &query); err != nil || query == "" {
+		return fail(publicError("BAD_REQUEST", "GraphQL request requires a query"))
+	}
+	if len(envelope.OperationName) != 0 {
+		if err := json.Unmarshal(envelope.OperationName, &operationName); err != nil {
+			return fail(publicError("BAD_REQUEST", "invalid GraphQL request"))
+		}
+	}
+	if exceedsLexicalTokenLimit(query, limits.MaxTokens) {
+		return fail(limitError(limitTokens, limits.MaxTokens, nil))
 	}
 	variables := map[string]any{}
 	if len(envelope.Variables) != 0 && string(envelope.Variables) != "null" {
@@ -446,7 +543,7 @@ func decodeHTTPRequest(body io.Reader, limits Limits) (Request, *requestExtensio
 			return fail(publicError("BAD_USER_INPUT", "invalid GraphQL variables"))
 		}
 	}
-	return Request{Query: envelope.Query, OperationName: envelope.OperationName, Variables: variables}, extensions, nil
+	return Request{Query: query, OperationName: operationName, Variables: variables}, extensions, nil
 }
 
 // Execute applies the same parse, validation, coercion, limit, isolation, and
@@ -475,13 +572,9 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 			response = Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 		}
 		if state, reported := commits.State(); reported && len(response.Errors) != 0 {
-			extensions := make(map[string]any, len(response.Extensions)+1)
-			for name, value := range response.Extensions {
-				extensions[name] = value
-			}
-			extensions["golem"] = map[string]any{"commit": state}
-			response.Extensions = extensions
+			mergeGolemExtensions(&response, map[string]any{"commit": state})
 		}
+		response = server.stampDataIncarnation(response)
 		if operationSpan != nil {
 			outcome, reason := graphQLObservationResult(response)
 			observeexec.Finish(operationSpan, outcome, reason)
@@ -515,10 +608,7 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "request was cancelled")}}
 	}
 	prepared := server.executor.Execute(ctx, principal, preparedOperation.Operation)
-	if server.executable == nil || prepared.Data == nil {
-		return server.selectionOrdered(prepared, preparedOperation.Operation)
-	}
-	return server.executePrepared(ctx, request, preparedOperation.Operation.Document, preparedOperation.Operation.Definition, preparedOperation.Operation.Variables, prepared)
+	return server.renderResponse(ctx, request, preparedOperation.Operation, prepared)
 }
 
 func graphQLObservationResult(response Response) (observe.Outcome, observe.Reason) {
@@ -593,6 +683,9 @@ func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool)
 		return fail(publicError("GRAPHQL_PARSE_FAILED", "GraphQL parsing failed"))
 	}
 	if validationErrors := validator.Validate(server.schema, document); len(validationErrors) != 0 {
+		if diagnostic := enumInputDiagnostic(server.schema, document, request.OperationName, request.Variables); diagnostic != nil {
+			return fail(*diagnostic)
+		}
 		return fail(presentValidationErrors(validationErrors)...)
 	}
 	if len(document.Fragments) > limits.MaxFragments {
@@ -628,7 +721,13 @@ func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool)
 	}
 	coerced, err := validator.VariableValues(server.schema, definition, request.Variables)
 	if err != nil {
+		if diagnostic := enumInputDiagnostic(server.schema, document, request.OperationName, request.Variables); diagnostic != nil {
+			return fail(*diagnostic)
+		}
 		return fail(invalidVariables)
+	}
+	if bound := resolvedInputLimit(server.schema, definition, document.Fragments, coerced, limits); bound != nil {
+		return fail(limitError(bound, limits.valueOf(bound), nil))
 	}
 	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.listBounds, map[string]bool{}, false)
 	if err != nil {
@@ -687,15 +786,6 @@ func (server *Server[P]) executePrepared(ctx context.Context, request Request, d
 			preparedErrorPaths[key] = struct{}{}
 		}
 	}
-	if len(result.Data) != 0 {
-		data, err := canonicalExecutableData(result.Data)
-		if err != nil {
-			return Response{Errors: []Error{PresentError(ctx, fmt.Errorf("decode gqlgen executable response: %w", err), nil, server.config.ReportInternalError)}}
-		}
-		if string(data) != "null" {
-			response.Data = data
-		}
-	}
 	for _, executableError := range result.Errors {
 		path := make([]any, 0, len(executableError.Path))
 		for _, element := range executableError.Path {
@@ -712,6 +802,13 @@ func (server *Server[P]) executePrepared(ctx context.Context, request Request, d
 			}
 		}
 		response.Errors = append(response.Errors, PresentError(ctx, fmt.Errorf("gqlgen executable: %s", executableError.Message), path, server.config.ReportInternalError))
+	}
+	if len(result.Data) != 0 && !bytes.Equal(bytes.Trim(result.Data, " \t\r\n"), []byte("null")) {
+		data, err := canonicalExecutableDataWithLimit(result.Data, server.limits.MaxResultBytes)
+		if err != nil {
+			return server.resultFailure(ctx, definition.Operation, response, err)
+		}
+		response.Data = data
 	}
 	return response
 }
@@ -772,6 +869,15 @@ func presentCompileError(failure *compileerr.Error, path []any) Error {
 	}
 	if minimum, ok := failure.Min(); ok {
 		extensions["min"] = minimum
+	}
+	if expected := failure.ExpectedType(); expected != "" {
+		extensions["expectedType"] = expected
+	}
+	if allowed := failure.AllowedValues(); len(allowed) != 0 {
+		extensions["allowedValues"] = allowed
+	}
+	if example := failure.Example(); example != "" {
+		extensions["example"] = example
 	}
 	return Error{Message: failure.Message(), Path: append([]any(nil), path...), Extensions: extensions}
 }
@@ -880,16 +986,23 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				return 0, err
 			}
 			multiplier := 1
+			boundedLeaf := false
 			if !nested && value.Definition != nil && value.Definition.Type != nil && value.Definition.Type.Elem != nil {
-				if take, ok := exactComplexityTake(value.ArgumentMap(variables)["take"]); ok {
+				key := value.ObjectDefinition.Name + "." + value.Name
+				if bounds.fixed[key] {
+					multiplier, boundedLeaf = bounds.entries[key], true
+				} else if take, ok := exactComplexityTake(value.ArgumentMap(variables)["take"]); ok {
 					multiplier = take
 				} else if bound, declared := bounds.of(value.ObjectDefinition.Name, value.Name); declared {
 					multiplier = bound
+					boundedLeaf = true
 				}
 			}
 			cost := 1
 			if child != 0 {
 				cost = saturatingAdd(cost, saturatingMultiply(child, multiplier))
+			} else if boundedLeaf {
+				cost = saturatingAdd(cost, multiplier)
 			}
 			total = saturatingAdd(total, cost)
 		case *ast.InlineFragment:

@@ -432,9 +432,17 @@ func cursorBoundary(orders []readir.Order, roots map[policyir.FieldID]string, cu
 func renderOrders(orders []readir.Order, fields []readplan.Field, columns map[policyir.FieldID]string, dialect policysql.Dialect, provider policyir.Provider, reverse bool) (string, string, error) {
 	aliases := make(map[policyir.FieldID]string, len(fields))
 	logicalTypes := make(map[policyir.FieldID]compilerir.LogicalTypeIR, len(fields))
+	required := make(map[policyir.FieldID]bool, len(fields))
 	for index, field := range fields {
 		aliases[field.FieldID()] = fmt.Sprintf("golem_c%d", index)
 		logicalTypes[field.FieldID()] = field.LogicalType()
+		_, masked := field.Mask()
+		_, sqlMasked := field.SQLMask()
+		unmasked := !field.Conditional() && !masked && !sqlMasked
+		// The planner's discharging constraint proves this conditional field
+		// visible throughout the authorized candidate set.
+		discharged := field.Conditional() && field.DischargedByConstraint()
+		required[field.FieldID()] = !field.Nullable() && (unmasked || discharged)
 	}
 	rootParts, outerParts := make([]string, 0, len(orders)*2), make([]string, 0, len(orders)*2)
 	for _, order := range orders {
@@ -453,8 +461,20 @@ func renderOrders(orders []readir.Order, fields []readplan.Field, columns map[po
 		}
 		descending := direction == readir.Descending
 		outer := dialect.Quote("golem_d0") + "." + dialect.Quote(physical.PhysicalName(alias))
-		rootParts = append(rootParts, OrderTerm(provider, logicalTypes[order.FieldID()], root, descending))
-		outerParts = append(outerParts, OrderTerm(provider, logicalTypes[order.FieldID()], outer, descending))
+		// These operands are local stored columns, not nullable relation paths.
+		// Missing field metadata retains the conservative null rank.
+		rootTerm := OrderTerm(provider, logicalTypes[order.FieldID()], root, descending)
+		outerTerm := OrderTerm(provider, logicalTypes[order.FieldID()], outer, descending)
+		if required[order.FieldID()] {
+			word := " ASC"
+			if descending {
+				word = " DESC"
+			}
+			rootTerm = portableOrderOperand(provider, logicalTypes[order.FieldID()], root) + word
+			outerTerm = portableOrderOperand(provider, logicalTypes[order.FieldID()], outer) + word
+		}
+		rootParts = append(rootParts, rootTerm)
+		outerParts = append(outerParts, outerTerm)
 	}
 	return strings.Join(rootParts, ", "), strings.Join(outerParts, ", "), nil
 }

@@ -55,6 +55,8 @@ type Envelope struct {
 	snapshotFields []policyir.FieldID
 	deleteSnapshot *mutationdecode.Row
 	deleteState    mutationir.DeleteSnapshotState
+	history        *PolicyHistoryReference
+	graphCompanion *PolicyHistory
 }
 
 func New(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventID, requirement mutationir.FactRequirement, causation CausationID, ordinal uint32, rowVersion int64, before, after *mutationdecode.Row) (Envelope, error) {
@@ -149,8 +151,18 @@ func New(registry *schema.Registry, eventSchema golem.SchemaDigest, event EventI
 	return result, nil
 }
 
-func (envelope Envelope) FormatVersion() uint16                 { return FormatVersion }
-func (envelope Envelope) CodecIdentity() string                 { return CodecIdentity }
+func (envelope Envelope) FormatVersion() uint16 {
+	if envelope.history != nil {
+		return HistoryFactVersion
+	}
+	return FormatVersion
+}
+func (envelope Envelope) CodecIdentity() string {
+	if envelope.history != nil {
+		return HistoryFactCodecIdentity
+	}
+	return CodecIdentity
+}
 func (envelope Envelope) RowVersion() int64                     { return envelope.rowVersion }
 func (envelope Envelope) EventID() EventID                      { return envelope.event }
 func (envelope Envelope) Generation() golem.SchemaDigest        { return envelope.generation }
@@ -162,6 +174,9 @@ func (envelope Envelope) TransactionOrdinal() uint32            { return envelop
 func (envelope Envelope) WithTransactionOrdinal(ordinal uint32) (Envelope, error) {
 	if ordinal == 0 {
 		return Envelope{}, fmt.Errorf("P4_FACT_INPUT: transaction ordinal must be positive")
+	}
+	if envelope.history != nil && ordinal != envelope.ordinal {
+		return Envelope{}, fmt.Errorf("P5_POLICY_HISTORY: a sealed fact cannot change its transaction ordinal")
 	}
 	envelope.ordinal = ordinal
 	return envelope, nil

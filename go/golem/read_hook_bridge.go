@@ -110,6 +110,10 @@ func generatedReadBeforeBridge[M, Request any](operation HookOperation, invoke f
 				return RuntimeReadHookRequest{}, err
 			}
 		}
+		frozen, err = restoreReadHydration(erased.request, frozen)
+		if err != nil {
+			return RuntimeReadHookRequest{}, err
+		}
 		return RuntimeReadHookRequestFromFrozen(frozen)
 	}
 }

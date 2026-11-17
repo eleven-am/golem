@@ -4,19 +4,33 @@ import (
 	"fmt"
 	"sort"
 
+	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 type ListBounds struct {
 	entries map[string]int
+	fixed   map[string]bool
 }
 
+func generatedListBounds(entries map[string]graphqloperation.ListBound) ListBounds {
+	bounds := ListBounds{entries: make(map[string]int, len(entries)), fixed: make(map[string]bool, len(entries))}
+	for key, bound := range entries {
+		bounds.entries[key], bounds.fixed[key] = bound.Maximum, !bound.TakeBounded
+	}
+	return bounds
+}
+
+// NewListBounds snapshots fixed upper bounds for output lists. An application
+// argument named take does not establish an enforced output limit.
 func NewListBounds(entries map[string]int) ListBounds {
 	copied := make(map[string]int, len(entries))
+	fixed := make(map[string]bool, len(entries))
 	for key, bound := range entries {
 		copied[key] = bound
+		fixed[key] = true
 	}
-	return ListBounds{entries: copied}
+	return ListBounds{entries: copied, fixed: fixed}
 }
 
 func (bounds ListBounds) of(parent, field string) (int, bool) {
@@ -24,7 +38,7 @@ func (bounds ListBounds) of(parent, field string) (int, bool) {
 	return bound, ok
 }
 
-func undefaultedLists(schema *ast.Schema) map[string]bool {
+func undefaultedLists(schema *ast.Schema, compositeOnly bool) map[string]bool {
 	required := map[string]bool{}
 	for _, definition := range schema.Types {
 		if definition.Kind != ast.Object && definition.Kind != ast.Interface {
@@ -35,7 +49,7 @@ func undefaultedLists(schema *ast.Schema) map[string]bool {
 				continue
 			}
 			element := schema.Types[field.Type.Name()]
-			if element == nil || !element.IsCompositeType() {
+			if element == nil || compositeOnly && !element.IsCompositeType() {
 				continue
 			}
 			if take := field.Arguments.ForName("take"); take != nil && take.DefaultValue != nil {
@@ -52,7 +66,10 @@ func isIntrospectionName(name string) bool {
 }
 
 func validateListBounds(schema *ast.Schema, bounds ListBounds) error {
-	required := undefaultedLists(schema)
+	// Composite lists always need a bound. Scalar lists may also carry an
+	// explicit output bound, as declared custom and DTO fields do.
+	required := undefaultedLists(schema, true)
+	allowed := undefaultedLists(schema, false)
 	keys := make([]string, 0, len(required))
 	for key := range required {
 		keys = append(keys, key)
@@ -69,7 +86,7 @@ func validateListBounds(schema *ast.Schema, bounds ListBounds) error {
 	}
 	sort.Strings(declared)
 	for _, key := range declared {
-		if !required[key] {
+		if !allowed[key] {
 			return fmt.Errorf("GraphQL executor declares a list bound for %s, which is not a list without a take default", key)
 		}
 		if bounds.entries[key] < 1 {

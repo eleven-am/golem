@@ -116,14 +116,7 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 		if err != nil {
 			return "", err
 		}
-		left, right := column, argument
-		if leaf.Field.Type.Kind() == ir.ValueString || leaf.Field.Type.Kind() == ir.ValueEnum {
-			if leaf.Mode == ir.ComparisonASCIIInsensitive {
-				left, right = "golem_policy_ascii_fold("+left+")", "golem_policy_ascii_fold("+right+")"
-			} else {
-				left, right = "("+left+" COLLATE BINARY)", "("+right+" COLLATE BINARY)"
-			}
-		}
+		left, right := scalarComparisonOperands(column, argument, leaf.Field.Type.Kind(), leaf.Mode)
 		return left + " " + operator + " " + right, nil
 	}
 
@@ -139,6 +132,15 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 		values, _ := leaf.Operand.Many()
 		if len(values) == 0 {
 			return strconv.FormatBool(leaf.Operator == ir.OperatorNotIn), nil
+		}
+		argument, packed, err := binder.JSONScalarSet(values, leaf.Field.Type)
+		if err != nil {
+			return "", err
+		}
+		if packed {
+			left, right := scalarComparisonOperands(column, "value", leaf.Field.Type.Kind(), leaf.Mode)
+			predicate := left + " IN (SELECT " + right + " FROM json_each(" + argument + "))"
+			return nullClosedComparison(column, predicate, leaf.Operator == ir.OperatorNotIn), nil
 		}
 		predicates := make([]string, len(values))
 		for index, value := range values {
@@ -282,6 +284,16 @@ func (PolicyDialect) RenderJSON(leaf policysql.JSONLeaf, binder *policysql.Binde
 
 func policyColumn(column policysql.Column) string {
 	return quote(column.Alias) + "." + quote(column.Name)
+}
+
+func scalarComparisonOperands(column, argument string, kind ir.ValueKind, mode ir.ComparisonMode) (string, string) {
+	if kind == ir.ValueString || kind == ir.ValueEnum {
+		if mode == ir.ComparisonASCIIInsensitive {
+			return "golem_policy_ascii_fold(" + column + ")", "golem_policy_ascii_fold(" + argument + ")"
+		}
+		return "(" + column + " COLLATE BINARY)", "(" + argument + " COLLATE BINARY)"
+	}
+	return column, argument
 }
 
 func nullClosedComparison(column, predicate string, negated bool) string {

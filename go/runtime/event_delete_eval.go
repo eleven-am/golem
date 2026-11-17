@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
@@ -22,6 +21,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	"github.com/eleven-am/golem/go/internal/subscription"
 )
 
@@ -365,6 +365,9 @@ func (evaluator *deleteEvaluator) collectAt(condition policyir.Condition, positi
 		return
 	}
 	switch condition.Kind() {
+	case policyir.ConditionFact:
+		_, body, _ := condition.Fact()
+		evaluator.collectAt(body, positive)
 	case policyir.ConditionLogical:
 		op, children, ok := condition.Logical()
 		if !ok {
@@ -426,6 +429,9 @@ func deleteRelationTargets(condition policyir.Condition) []policyir.ModelID {
 	var walk func(policyir.Condition)
 	walk = func(condition policyir.Condition) {
 		switch condition.Kind() {
+		case policyir.ConditionFact:
+			_, body, _ := condition.Fact()
+			walk(body)
 		case policyir.ConditionLogical:
 			_, children, ok := condition.Logical()
 			if !ok {
@@ -667,7 +673,7 @@ func (app *App[P, A]) runDeleteFactChecks(ctx context.Context, caller *Caller[P,
 	defer rows.Close()
 	found := make([][]mutationfact.OutboxRow, len(checks))
 	for rows.Next() {
-		index, stored, err := app.scanDeleteFact(rows)
+		index, stored, err := app.scanOutboxFact(rows)
 		if err != nil {
 			return err
 		}
@@ -698,7 +704,7 @@ func (app *App[P, A]) deleteFactCheckStatement(causation string, checks []*delet
 		return "", nil, fmt.Errorf("delete fact lookup has no system namespace")
 	}
 	table := `"` + string(namespace) + `"."_golem_outbox"`
-	columns := `"event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","before_identity","after_identity","causation_id","transaction_ordinal","metadata","delete_snapshot","recorded_at"`
+	columns := runtimeOutboxFactColumns
 	var args []any
 	mark := func(value any) string {
 		args = append(args, value)
@@ -723,47 +729,6 @@ func (app *App[P, A]) deleteFactCheckStatement(causation string, checks []*delet
 		parts[index] = fmt.Sprintf(`SELECT * FROM (SELECT %d AS "golem_check",%s FROM %s WHERE %s ORDER BY "transaction_ordinal" LIMIT %d) AS "golem_c%d"`, index, columns, table, where, limit, index)
 	}
 	return strings.Join(parts, " UNION ALL "), args, nil
-}
-
-type deleteFactScan struct {
-	Check                 int64  `db:"golem_check"`
-	EventID               string `db:"event_id"`
-	FactVersion           int64  `db:"fact_version"`
-	CodecIdentity         string `db:"codec_identity"`
-	GenerationFingerprint string `db:"generation_fingerprint"`
-	ModelID               string `db:"model_id"`
-	Action                string `db:"action"`
-	BeforeIdentity        []byte `db:"before_identity"`
-	AfterIdentity         []byte `db:"after_identity"`
-	CausationID           string `db:"causation_id"`
-	TransactionOrdinal    int64  `db:"transaction_ordinal"`
-	Metadata              []byte `db:"metadata"`
-	DeleteSnapshot        []byte `db:"delete_snapshot"`
-}
-
-func (app *App[P, A]) scanDeleteFact(rows interface{ Scan(...any) error }) (int, mutationfact.OutboxRow, error) {
-	var value deleteFactScan
-	destinations := []any{&value.Check, &value.EventID, &value.FactVersion, &value.CodecIdentity, &value.GenerationFingerprint, &value.ModelID, &value.Action, &value.BeforeIdentity, &value.AfterIdentity, &value.CausationID, &value.TransactionOrdinal, &value.Metadata, &value.DeleteSnapshot}
-	var recorded time.Time
-	var micros int64
-	if app.provider == policyir.ProviderPostgreSQL {
-		destinations = append(destinations, &recorded)
-	} else {
-		destinations = append(destinations, &micros)
-	}
-	if err := rows.Scan(destinations...); err != nil {
-		return 0, mutationfact.OutboxRow{}, err
-	}
-	if app.provider != policyir.ProviderPostgreSQL {
-		recorded = time.UnixMicro(micros)
-	}
-	return int(value.Check), mutationfact.OutboxRow{
-		EventID: value.EventID, FactVersion: value.FactVersion, CodecIdentity: value.CodecIdentity,
-		GenerationFingerprint: value.GenerationFingerprint, ModelID: value.ModelID, Action: value.Action,
-		BeforeIdentity: value.BeforeIdentity, AfterIdentity: value.AfterIdentity, CausationID: value.CausationID,
-		TransactionOrdinal: value.TransactionOrdinal, Metadata: value.Metadata, DeleteSnapshot: value.DeleteSnapshot,
-		RecordedAt: recorded.UTC(),
-	}, nil
 }
 
 func deleteHopStale(condition policyir.Condition, positive bool) bool {
@@ -935,6 +900,10 @@ func (app *App[P, A]) runDeleteProbes(ctx context.Context, caller *Caller[P, A],
 	if maximum := app.readLimits.plan.MaxStatementParameters; maximum > 0 && len(args) > maximum {
 		return fmt.Errorf("delete probe statement exceeds the parameter limit")
 	}
+	statement := "SELECT " + strings.Join(columns, ", ")
+	if err := readsql.ValidateStatementComplexity(policyir.ModelID(pending[0].target), statement, app.readLimits.plan.MaxStatementBytes, app.readLimits.plan.MaxStatementAliases); err != nil {
+		return err
+	}
 	if err := caller.executor.requireAdmitted(ctx); err != nil {
 		return err
 	}
@@ -942,7 +911,7 @@ func (app *App[P, A]) runDeleteProbes(ctx context.Context, caller *Caller[P, A],
 	if err != nil {
 		return err
 	}
-	rows, err := queryer.QueryxContext(ctx, "SELECT "+strings.Join(columns, ", "), args...)
+	rows, err := queryer.QueryxContext(ctx, statement, args...)
 	if err != nil {
 		return err
 	}

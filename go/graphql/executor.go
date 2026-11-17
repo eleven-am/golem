@@ -34,7 +34,16 @@ type BeginCaller[P any] func(context.Context, P) (CallerExecution, error)
 // operations that select only __schema, __type or __typename roots.
 type AuthenticatePrincipal[P any] func(context.Context, P) error
 
+// DataIncarnationExecutor forwards the identity admitted by the actual App.
+// Wrappers around an opted generated executor must forward this capability.
+type DataIncarnationExecutor interface{ DataIncarnation() golem.DataIncarnation }
+
+type PrincipalAuthenticationExecutor[P any] interface {
+	AuthenticatePrincipal(context.Context, P) error
+}
+
 type GeneratedExecutorConfig[P any] struct {
+	DataIncarnationSource DataIncarnationExecutor
 	Bundle                golem.SchemaBundle
 	Limits                Limits
 	BeginCaller           BeginCaller[P]
@@ -45,6 +54,7 @@ type GeneratedExecutorConfig[P any] struct {
 }
 
 type generatedExecutor[P any] struct {
+	dataIncarnation  golem.DataIncarnation
 	compiler         *graphqloperation.Compiler
 	begin            BeginCaller[P]
 	authenticate     AuthenticatePrincipal[P]
@@ -52,6 +62,7 @@ type generatedExecutor[P any] struct {
 	compilation      compilerir.CompilationIR
 	computed         []ComputedBinding
 	maxComputedBatch int
+	maxHydratedRows  int
 	custom           *CustomRegistry
 	listBounds       ListBounds
 }
@@ -63,6 +74,13 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 	compilation, err := policyschema.DecodeActive(config.Bundle)
 	if err != nil {
 		return nil, err
+	}
+	var incarnation golem.DataIncarnation
+	if config.DataIncarnationSource != nil {
+		incarnation = config.DataIncarnationSource.DataIncarnation()
+	}
+	if (compilation.Contract.DataIncarnation != nil) != incarnation.Valid() || compilation.Contract.DataIncarnation != nil && config.AuthenticatePrincipal == nil {
+		return nil, fmt.Errorf("GraphQL generated executor requires the matching admitted App data identity and principal authenticator")
 	}
 	limits, err := NormalizeLimits(config.Limits)
 	if err != nil {
@@ -89,10 +107,28 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL list bounds: %w", err)
 	}
-	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom, listBounds: NewListBounds(bounds)}, nil
+	return &generatedExecutor[P]{dataIncarnation: incarnation, compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, maxHydratedRows: limits.MaxHydratedRows, custom: custom, listBounds: generatedListBounds(bounds)}, nil
+}
+
+func (executor *generatedExecutor[P]) DataIncarnation() golem.DataIncarnation {
+	return executor.dataIncarnation
+}
+func (executor *generatedExecutor[P]) AuthenticatePrincipal(ctx context.Context, principal P) error {
+	if executor == nil || executor.authenticate == nil {
+		return fmt.Errorf("GraphQL principal authenticator is unavailable")
+	}
+	return executor.authenticate(ctx, principal)
 }
 
 func (executor *generatedExecutor[P]) ListBounds() ListBounds { return executor.listBounds }
+
+func (executor *generatedExecutor[P]) ClientManifestVersion() int {
+	return executor.compilation.Contract.RequiredClientManifestVersion()
+}
+
+func (executor *generatedExecutor[P]) RequiredClientCapabilities() []string {
+	return executor.compilation.Contract.RequiredClientCapabilities()
+}
 
 func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, operation Operation) Response {
 	if executor == nil || executor.compiler == nil || executor.begin == nil {
@@ -102,7 +138,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	if err != nil {
 		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
-	if len(compiled.Order) == 0 && compiled.Event == nil && executor.authenticate != nil {
+	if len(compiled.Order) == 0 && compiled.Event == nil && compiled.Invalidation == nil && executor.authenticate != nil {
 		if err := executor.authenticate(ctx, principal); err != nil {
 			return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 		}
@@ -117,8 +153,8 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 	}
 	defer computed.close()
-	hydrator := resultHydrator{compiler: executor.compiler, caller: caller}
-	computed.hydrator = &hydrator
+	hydrator := executor.newHydrator(caller)
+	computed.hydrator = hydrator
 	var customCaller *CallerCustomExecution
 	if len(compiled.Custom) != 0 {
 		capability, ok := caller.(CustomCallerCapability)
@@ -181,7 +217,17 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 					data[root.ResponseName] = nil
 					continue
 				}
+				value, prepareErr := result.prepareValue(executor.compiler, root, value)
+				if prepareErr != nil {
+					finishGraphQLChild(observation, prepareErr)
+					response.Errors = append(response.Errors, PresentError(ctx, prepareErr, []any{root.ResponseName}, executor.report))
+					data[root.ResponseName] = nil
+					continue
+				}
 				encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, value, computed.resolve)
+				if encodeErr == nil && len(failures) == 0 {
+					encoded, encodeErr = result.finalizeValue(executor.compiler, root, encoded)
+				}
 				finishGraphQLChild(observation, encodeErr)
 				if encodeErr != nil {
 					response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
@@ -220,7 +266,7 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	return response
 }
 
-func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, hydrator resultHydrator, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
+func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, hydrator *resultHydrator, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {
 	response := Response{Data: map[string]any{}}
 	data := response.Data.(map[string]any)
 	for _, reference := range compiled.Order {

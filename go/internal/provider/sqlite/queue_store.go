@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -17,13 +16,13 @@ import (
 
 const (
 	sqliteQueueTable   = `"main"."golem_queue"`
-	sqliteQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
-	sqliteQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
+	sqliteQueueColumns = `"id","priority","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
+	sqliteQueueSummary = `"id","priority","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	sqliteQueueFence   = ` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">` + sqliteDatabaseMicros
 
 	sqliteQueueDedupeDefinition = `CREATE UNIQUE INDEX "golem_queue_dedupe" ON "golem_queue" ("dedupe_key") WHERE "status" IN ('pending','leased')`
 
-	sqliteQueueClaimDefinition     = `CREATE INDEX "golem_queue_claim" ON "golem_queue" ("status","available_at","type")`
+	sqliteQueueClaimDefinition     = `CREATE INDEX "golem_queue_claim" ON "golem_queue" ("status","priority","available_at","id","type")`
 	sqliteQueueExclusiveDefinition = `CREATE INDEX "golem_queue_exclusive" ON "golem_queue" ("exclusive_key") WHERE "status"='leased'`
 	sqliteQueueEnqueuedDefinition  = `CREATE INDEX "golem_queue_enqueued" ON "golem_queue" ("enqueued_at","id")`
 	sqliteQueueHistoryDefinition   = `CREATE INDEX "golem_queue_history" ON "golem_queue" ("status","enqueued_at","id")`
@@ -37,8 +36,8 @@ var sqliteQueueHistorySchema = []string{
 }
 
 var sqliteQueueSchema = []string{
-	`CREATE TABLE IF NOT EXISTS ` + sqliteQueueTable + ` ("id" TEXT PRIMARY KEY NOT NULL,"type" TEXT NOT NULL,"payload" BLOB NOT NULL,"status" TEXT NOT NULL,"attempt_count" INTEGER NOT NULL DEFAULT 0,"max_attempts" INTEGER NOT NULL,"available_at" INTEGER NOT NULL,"lease_token" TEXT,"lease_until" INTEGER,"resource_name" TEXT,"resource_cost" INTEGER,"resource_capacity" INTEGER,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" INTEGER,"last_code" TEXT,"enqueued_at" INTEGER NOT NULL,"finished_at" INTEGER,"updated_at" INTEGER NOT NULL)`,
-	`CREATE INDEX IF NOT EXISTS "main"."golem_queue_claim" ON "golem_queue" ("status","available_at","type")`,
+	`CREATE TABLE IF NOT EXISTS ` + sqliteQueueTable + ` ("id" TEXT PRIMARY KEY NOT NULL,"priority" INTEGER NOT NULL DEFAULT 0 CHECK ("priority" IN (0,1)),"type" TEXT NOT NULL,"payload" BLOB NOT NULL,"status" TEXT NOT NULL,"attempt_count" INTEGER NOT NULL DEFAULT 0,"max_attempts" INTEGER NOT NULL,"available_at" INTEGER NOT NULL,"lease_token" TEXT,"lease_until" INTEGER,"resource_name" TEXT,"resource_cost" INTEGER,"resource_capacity" INTEGER,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" INTEGER,"last_code" TEXT,"enqueued_at" INTEGER NOT NULL,"finished_at" INTEGER,"updated_at" INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS "main"."golem_queue_claim" ON "golem_queue" ("status","priority","available_at","id","type")`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS "main"."golem_queue_dedupe" ON "golem_queue" ("dedupe_key") WHERE "status" IN ('pending','leased')`,
 	`CREATE INDEX IF NOT EXISTS "main"."golem_queue_exclusive" ON "golem_queue" ("exclusive_key") WHERE "status"='leased'`,
 }
@@ -76,48 +75,49 @@ func (store *queueStore) indexedBy(name string) string {
 }
 
 func (store *queueStore) EnsureSchema(ctx context.Context) error {
+	connection, err := store.database.Connx(ctx)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	// Serialize inspection with bootstrap and explicit upgrades, including
+	// when the queue table does not yet exist.
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	defer func() {
+		cleanup, cancel := sqliteCleanupContext(ctx)
+		defer cancel()
+		_, _ = connection.ExecContext(cleanup, "ROLLBACK")
+	}()
+	before, err := inspectSQLiteQueueStorage(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if before.Version != queueprovider.StorageAbsent && before.Version != queueprovider.StoragePriorityV1 {
+		return queueprovider.ErrStorageUpgradeRequired
+	}
 	statements := sqliteQueueSchema
 	if store.history {
 		statements = append(append([]string(nil), sqliteQueueSchema...), sqliteQueueHistorySchema...)
 	}
 	for _, statement := range statements {
-		if _, err := store.database.ExecContext(ctx, statement); err != nil {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("QUEUE_SQLITE_STORE: create durable job storage: %w", err)
 		}
 	}
-	if err := store.ensureQueueLeaseColumns(ctx); err != nil {
+	after, err := inspectSQLiteQueueStorage(ctx, connection)
+	if err != nil {
 		return err
 	}
-	if err := store.verifyQueueGuarantees(ctx); err != nil {
-		return err
+	if after.Version != queueprovider.StoragePriorityV1 || after.HistoryIndexes != (before.HistoryIndexes || store.history) {
+		return queueprovider.ErrStorageUnrecognized
 	}
-	if _, err := store.database.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
+	if _, err := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
 		return fmt.Errorf("QUEUE_SQLITE_STORE: align existing lease eligibility: %w", err)
 	}
-	return nil
-}
-
-func (store *queueStore) verifyQueueGuarantees(ctx context.Context) error {
-	var keys []string
-	if err := store.database.SelectContext(ctx, &keys, `SELECT "name" FROM pragma_table_info('golem_queue','main') WHERE "pk">0`); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect queue identity: %w", err)
-	}
-	if len(keys) != 1 || keys[0] != "id" {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: existing golem_queue table has primary key %v, want [id]", keys)
-	}
-	var definition sql.NullString
-	if err := store.database.GetContext(ctx, &definition, `SELECT "sql" FROM "main"."sqlite_master" WHERE "type"='index' AND "name"='golem_queue_dedupe'`); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect golem_queue_dedupe: %w", err)
-	}
-	expected, err := parseDDL(sqliteQueueDedupeDefinition)
-	if err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: parse golem_queue_dedupe contract: %w", err)
-	}
-	actual, err := parseDDL(definition.String)
-	if err != nil || !reflect.DeepEqual(expected, actual) {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: existing golem_queue_dedupe index %q does not enforce %q; drop it so the queue can create its own", definition.String, sqliteQueueDedupeDefinition)
-	}
-	return store.verifyQueueIndexDefinitions(ctx)
+	_, err = connection.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 func sqliteQueueIndexDefinitions() map[string]string {
@@ -129,93 +129,6 @@ func sqliteQueueIndexDefinitions() map[string]string {
 		"golem_queue_history":   sqliteQueueHistoryDefinition,
 		"golem_queue_terminal":  sqliteQueueTerminalDefinition,
 	}
-}
-
-func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error {
-	var rows []struct {
-		Name string         `db:"name"`
-		SQL  sql.NullString `db:"sql"`
-	}
-	if err := store.database.SelectContext(ctx, &rows, `SELECT "name","sql" FROM "main"."sqlite_master" WHERE "type"='index' AND "tbl_name"='golem_queue' AND "sql" IS NOT NULL ORDER BY "name"`); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect queue indexes: %w", err)
-	}
-	definitions := sqliteQueueIndexDefinitions()
-	required := map[string]bool{"golem_queue_claim": true, "golem_queue_dedupe": true, "golem_queue_exclusive": true}
-	if store.history {
-		for _, object := range physical.QueueHistoryIndexes() {
-			required[string(object.Name)] = true
-		}
-	}
-	for _, row := range rows {
-		definition, known := definitions[row.Name]
-		if !known {
-			return fmt.Errorf("QUEUE_SQLITE_STORE: index %q on golem_queue was not created by golem; drop it", row.Name)
-		}
-		delete(required, row.Name)
-		expected, err := parseDDL(definition)
-		if err != nil {
-			return fmt.Errorf("QUEUE_SQLITE_STORE: parse %s contract: %w", row.Name, err)
-		}
-		actual, err := parseDDL(row.SQL.String)
-		if err != nil || !reflect.DeepEqual(expected, actual) {
-			return fmt.Errorf("QUEUE_SQLITE_STORE: existing %s index %q does not match %q; drop it so the queue can create its own", row.Name, row.SQL.String, definition)
-		}
-	}
-	for name := range required {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: golem index %q is absent from golem_queue; an object of that name elsewhere in the database blocks its creation, so drop that object and let the queue create its own", name)
-	}
-	return nil
-}
-
-func (store *queueStore) ensureQueueLeaseColumns(ctx context.Context) error {
-	connection, err := store.database.Connx(ctx)
-	if err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: reserve schema connection: %w", err)
-	}
-	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: begin queue schema upgrade: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			cleanup, cancel := sqliteCleanupContext(ctx)
-			defer cancel()
-			_, _ = connection.ExecContext(cleanup, "ROLLBACK")
-		}
-	}()
-	var columns []struct {
-		CID          int            `db:"cid"`
-		Name         string         `db:"name"`
-		Type         string         `db:"type"`
-		NotNull      int            `db:"notnull"`
-		DefaultValue sql.NullString `db:"dflt_value"`
-		PrimaryKey   int            `db:"pk"`
-	}
-	if err := connection.SelectContext(ctx, &columns, `PRAGMA main.table_info("golem_queue")`); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect queue storage: %w", err)
-	}
-	present := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		present[column.Name] = struct{}{}
-	}
-	for _, column := range []struct{ name, declaration string }{
-		{name: "resource_name", declaration: `"resource_name" TEXT`},
-		{name: "resource_cost", declaration: `"resource_cost" INTEGER`},
-		{name: "resource_capacity", declaration: `"resource_capacity" INTEGER`},
-	} {
-		if _, exists := present[column.name]; exists {
-			continue
-		}
-		if _, err := connection.ExecContext(ctx, `ALTER TABLE `+sqliteQueueTable+` ADD COLUMN `+column.declaration); err != nil {
-			return fmt.Errorf("QUEUE_SQLITE_STORE: add %s lease snapshot: %w", column.name, err)
-		}
-	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
-		return fmt.Errorf("QUEUE_SQLITE_STORE: commit queue schema upgrade: %w", err)
-	}
-	committed = true
-	return nil
 }
 
 func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (queueprovider.EnqueueResult, error) {
@@ -230,8 +143,8 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: read database time: %w", err)
 	}
 	if request.DedupeKey == "" {
-		result, err := executor.ExecContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-			request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), nil, optionalText(request.ExclusiveKey), now, now)
+		result, err := executor.ExecContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at","priority") VALUES (?,?,?,'pending',0,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+			request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), nil, optionalText(request.ExclusiveKey), now, now, request.Priority)
 		if err != nil {
 			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert job: %w", err)
 		}
@@ -245,8 +158,8 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 		return queueprovider.EnqueueResult{ID: request.ID, State: queueprovider.StatePending, Inserted: true}, nil
 	}
 	var stored queueprovider.EnqueueResult
-	err := executor.QueryRowContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=excluded."dedupe_key" RETURNING "id","status"`,
-		request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), request.DedupeKey, optionalText(request.ExclusiveKey), now, now).Scan(&stored.ID, &stored.State)
+	err := executor.QueryRowContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at","priority") VALUES (?,?,?,'pending',0,?,?,?,?,?,?,?) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=excluded."dedupe_key" RETURNING "id","status"`,
+		request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), request.DedupeKey, optionalText(request.ExclusiveKey), now, now, request.Priority).Scan(&stored.ID, &stored.State)
 	if err != nil {
 		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert or coalesce job: %w", err)
 	}
@@ -325,6 +238,8 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	if options.Resource != nil {
 		discoveryLimit = queueprovider.MaximumClaimJobs
 	}
+	typePredicate = `(` + typePredicate + `) AND job."priority"=?`
+	typeArguments = append(typeArguments, options.Priority)
 	discovery, arguments := sqliteClaimDiscovery(typePredicate, typeArguments, now, discoveryLimit)
 	var candidates []struct {
 		ID              string         `db:"id"`
@@ -834,6 +749,7 @@ func (store *queueStore) fenced(ctx context.Context, executor queueprovider.Exec
 
 type sqliteQueueRow struct {
 	ID                string         `db:"id"`
+	Priority          int            `db:"priority"`
 	Type              string         `db:"type"`
 	Payload           []byte         `db:"payload"`
 	Status            string         `db:"status"`
@@ -853,6 +769,7 @@ type sqliteQueueRow struct {
 
 type sqliteQueueSummaryRow struct {
 	ID                string         `db:"id"`
+	Priority          int            `db:"priority"`
 	Type              string         `db:"type"`
 	Status            string         `db:"status"`
 	AttemptCount      int64          `db:"attempt_count"`
@@ -866,7 +783,7 @@ type sqliteQueueSummaryRow struct {
 
 func (row sqliteQueueRow) record() queueprovider.Record {
 	return queueprovider.Record{
-		ID: row.ID, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
+		ID: row.ID, Priority: row.Priority, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
 		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 		AvailableAt: time.UnixMicro(row.AvailableAt).UTC(), LeaseToken: row.LeaseToken.String,
 		LeaseUntil: sqliteOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
@@ -878,7 +795,7 @@ func (row sqliteQueueRow) record() queueprovider.Record {
 
 func (row sqliteQueueSummaryRow) summary() queueprovider.Summary {
 	return queueprovider.Summary{
-		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
+		ID: row.ID, Priority: row.Priority, Type: row.Type, State: queueprovider.State(row.Status),
 		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 		AvailableAt: time.UnixMicro(row.AvailableAt).UTC(), CancelRequested: row.CancelRequestedAt.Valid,
 		LastCode: row.LastCode.String, EnqueuedAt: time.UnixMicro(row.EnqueuedAt).UTC(),

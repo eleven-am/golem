@@ -10,7 +10,7 @@ const (
 	MaxMutationNestedDepth             = 5
 	MaxMutationTouchedRows             = 1_000
 	MaxMutationFacts                   = eventprovider.MaximumCausationFacts
-	MaxMutationOutboxBytes             = 1 << 20
+	MaxMutationOutboxBytes             = eventprovider.MaximumCausationEvidenceBytes
 	MaxMutationStatementParameters     = 999
 	MaxMutationUpsertAttempts          = 3
 	MaxMutationDeleteSnapshotBytes     = 1 << 20

@@ -4,19 +4,23 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math"
+	"reflect"
 	"strconv"
 	"unicode/utf8"
 
+	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
+	"github.com/eleven-am/golem/go/internal/typedvalue"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func CoerceExtensionValue(compilation compilerir.CompilationIR, typ compilerir.GraphQLTypeIR, raw any, maxListItems int) (any, error) {
 	enums := extensionEnumValues(compilation)
-	value, _, err := coerceComputedValue(typ, raw, enums, maxListItems)
+	value, _, err := coerceComputedValue(typ, raw, enums, compilation.Contract.GraphQLTypes, maxListItems)
 	return value, err
 }
 
@@ -28,22 +32,17 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 	for _, argument := range field.Arguments {
 		declared[argument.Name] = argument
 	}
-	raw := make(map[string]any, len(supplied))
 	for _, argument := range supplied {
-		if _, duplicate := raw[argument.Name]; duplicate {
-			return nil, "", compileerr.New(compileerr.KindDuplicate, compileerr.DuplicateArgument, compileerr.Path(argument.Name), compileerr.Model(field.Name))
-		}
 		if _, known := declared[argument.Name]; !known {
 			return nil, "", compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableArgument, compileerr.Path(argument.Name), compileerr.Model(field.Name))
 		}
 		if argument.Value == nil {
 			return nil, "", compileerr.Invariantf("computed argument %s.%s has no value", field.Name, argument.Name)
 		}
-		value, err := argument.Value.Value(variables)
-		if err != nil {
-			return nil, "", compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape, compileerr.Path(argument.Name), compileerr.Model(field.Name))
-		}
-		raw[argument.Name] = value
+	}
+	raw, err := ArgumentValues(supplied, variables)
+	if err != nil {
+		return nil, "", compileerr.On(err, field.Name)
 	}
 
 	enums := extensionEnumValues(compilation)
@@ -57,9 +56,18 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 			}
 			value = nil
 		}
-		coerced, wire, err := coerceComputedValue(argument.Type, value, enums, maxListItems)
+		coerced, wire, err := coerceComputedValue(argument.Type, value, enums, compilation.Contract.GraphQLTypes, maxListItems)
 		if err != nil {
 			return nil, "", compileerr.On(compileerr.At(err, argument.Name), field.Name)
+		}
+		if argument.PresenceAware {
+			wire = struct {
+				Present bool `json:"present"`
+				Value   any  `json:"value"`
+			}{Present: present, Value: wire}
+			if !present {
+				coerced = golem.RuntimeOmittedInputValue()
+			}
 		}
 		encoded, err := json.Marshal(wire)
 		if err != nil {
@@ -75,7 +83,7 @@ func bindComputedArguments(compilation compilerir.CompilationIR, field compileri
 	return bound, key, nil
 }
 
-func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string]map[string]string, maxListItems int) (any, any, error) {
+func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string]map[string]string, definitions []compilerir.GraphQLTypeDefinitionIR, maxListItems int) (any, any, error) {
 	if raw == nil {
 		if !typ.Nullable {
 			return nil, nil, compileerr.New(compileerr.KindNullNotAllowed, compileerr.DetailNone)
@@ -86,17 +94,19 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 		if typ.Element == nil {
 			return nil, nil, compileerr.Invariantf("list type has no element")
 		}
-		items, ok := raw.([]any)
-		if !ok {
-			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+		items := reflect.ValueOf(raw)
+		if items.Kind() != reflect.Slice {
+			// GraphQL permits a non-null singleton at each list level. The
+			// variable validator can also supply typed slices after promotion.
+			items = reflect.ValueOf([]any{raw})
 		}
-		if len(items) > maxListItems {
+		if items.Len() > maxListItems {
 			return nil, nil, compileerr.New(compileerr.KindInputLimit, compileerr.DetailNone, compileerr.Limit("MaxListItems", maxListItems))
 		}
-		values := make([]any, len(items))
-		wire := make([]any, len(items))
-		for index, item := range items {
-			value, encoded, err := coerceComputedValue(*typ.Element, item, enums, maxListItems)
+		values := make([]any, items.Len())
+		wire := make([]any, items.Len())
+		for index := 0; index < items.Len(); index++ {
+			value, encoded, err := coerceComputedValue(*typ.Element, items.Index(index).Interface(), enums, definitions, maxListItems)
 			if err != nil {
 				return nil, nil, compileerr.At(err, compileerr.Index("", index))
 			}
@@ -111,6 +121,46 @@ func coerceComputedValue(typ compilerir.GraphQLTypeIR, raw any, enums map[string
 			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueUnknownEnum, compileerr.Type(typ.Name))
 		}
 		return wire, value, nil
+	}
+	if typ.Kind == compilerir.GraphQLTypeInputObject {
+		var definition *compilerir.GraphQLTypeDefinitionIR
+		for index := range definitions {
+			if definitions[index].Name == typ.Name && definitions[index].Kind == typ.Kind {
+				definition = &definitions[index]
+				break
+			}
+		}
+		if definition == nil {
+			return nil, nil, compileerr.Invariantf("input definition %s is absent", typ.Name)
+		}
+		fields, ok := raw.(map[string]any)
+		if !ok {
+			return nil, nil, compileerr.New(compileerr.KindInvalidValue, compileerr.ValueWrongShape)
+		}
+		if err := typedvalue.CheckOneOfInput(*definition, fields); err != nil {
+			return nil, nil, err
+		}
+		values, wire := make(map[string]any, len(fields)), make(map[string]any, len(fields))
+		for _, field := range definition.Fields {
+			rawField, present := fields[field.Name]
+			if !present {
+				if !field.Type.Nullable {
+					return nil, nil, compileerr.New(compileerr.KindRequired, compileerr.DetailNone, compileerr.Path(field.Name))
+				}
+				continue
+			}
+			value, encoded, err := coerceComputedValue(field.Type, rawField, enums, definitions, maxListItems)
+			if err != nil {
+				return nil, nil, compileerr.At(err, field.Name)
+			}
+			values[field.Name], wire[field.Name] = value, encoded
+		}
+		for name := range fields {
+			if _, known := values[name]; !known {
+				return nil, nil, compileerr.New(compileerr.KindFieldUnavailable, compileerr.UnavailableInput, compileerr.Path(name))
+			}
+		}
+		return values, wire, nil
 	}
 	if typ.Kind != compilerir.GraphQLTypeScalar {
 		return nil, nil, compileerr.Invariantf("unsupported computed argument type %s", typ.Kind)

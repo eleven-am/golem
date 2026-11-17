@@ -36,7 +36,7 @@ func (control operator) Inspect(ctx context.Context, id queue.JobID) (queue.Stat
 		return queue.Status{}, queue.Fail(queue.CodeStoreFailure, "inspect job %s: %v", id, err)
 	}
 	return statusFromSummary(queueprovider.Summary{
-		ID: record.ID, Type: record.Type, State: record.State,
+		ID: record.ID, Priority: record.Priority, Type: record.Type, State: record.State,
 		AttemptCount: record.AttemptCount, MaxAttempts: record.MaxAttempts,
 		AvailableAt: record.AvailableAt, LastCode: record.LastCode,
 		CancelRequested: record.CancelRequested, EnqueuedAt: record.EnqueuedAt,
@@ -197,7 +197,7 @@ func (control operator) RunRetention(ctx context.Context, policy queue.Retention
 
 func statusFromSummary(summary queueprovider.Summary) queue.Status {
 	return queue.Status{
-		ID: queue.JobID(summary.ID), Type: summary.Type, State: queue.State(summary.State),
+		ID: queue.JobID(summary.ID), Priority: queue.Priority(summary.Priority), Type: summary.Type, State: queue.State(summary.State),
 		Attempt: int(summary.AttemptCount), MaxAttempts: int(summary.MaxAttempts),
 		AvailableAt: summary.AvailableAt, LastCode: summary.LastCode,
 		CancelRequested: summary.CancelRequested, EnqueuedAt: summary.EnqueuedAt,

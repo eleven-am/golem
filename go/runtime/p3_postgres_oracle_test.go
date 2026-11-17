@@ -259,27 +259,3 @@ func postgresLiveSystemNameOrder(t *testing.T, dsn, label string) []string {
 	}
 	return result
 }
-
-func postgresRuntimeBundle(t *testing.T, fixture schematest.Fixture, postgresSchema physical.PhysicalSchema) golem.SchemaBundle {
-	t.Helper()
-	payload, err := physical.CanonicalEncode(postgresSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fingerprint, err := physical.PhysicalFingerprint(postgresSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	system, err := physical.SystemFingerprint(postgresSchema.Provider, postgresSchema.System)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postgresDocument := golem.GeneratedProviderSchemaDocument(golem.PostgreSQL, golem.SchemaDigest(system), golem.GeneratedSchemaDocument(postgresSchema.Version, postgresSchema.CanonicalVersion, golem.SchemaDigest(fingerprint), payload))
-	providers := fixture.Bundle.Providers()
-	for index := range providers {
-		if providers[index].Provider() == golem.PostgreSQL {
-			providers[index] = postgresDocument
-		}
-	}
-	return golem.GeneratedSchemaBundle(fixture.Bundle.GenerationDigest(), fixture.Bundle.GeneratorVersion(), fixture.Bundle.TemplateABIVersion(), fixture.Bundle.Model(), fixture.Bundle.Contract(), providers...)
-}

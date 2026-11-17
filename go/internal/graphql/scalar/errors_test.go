@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 )
 
 func TestScalarRefusalsAreTypedWithoutEchoingTheValue(t *testing.T) {

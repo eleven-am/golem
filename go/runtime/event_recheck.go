@@ -45,8 +45,10 @@ func (app *App[P, A]) startEventRecheck(stream *subscription.Stream[any], state 
 func subscriptionCheckContext(ctx, subscriber context.Context) (context.Context, func()) {
 	derived, cancel := context.WithCancel(context.WithoutCancel(subscriber))
 	stop := context.AfterFunc(ctx, cancel)
+	stopSubscriber := context.AfterFunc(subscriber, cancel)
 	return derived, func() {
 		stop()
+		stopSubscriber()
 		cancel()
 	}
 }
@@ -70,6 +72,10 @@ func (app *App[P, A]) revalidateEventSubscription(ctx context.Context, state *ca
 	}
 	if truth, constant := constraint.Constant(); constant && !truth {
 		return events.Failure(events.CodeSubscriptionForbidden)
+	}
+	if state.factObservation != nil {
+		_, err := app.recheckFactObservation(ctx, fresh, state)
+		return err
 	}
 	return app.recheckReadHooks(ctx, fresh, state)
 }

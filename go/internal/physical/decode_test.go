@@ -195,7 +195,7 @@ func TestCanonicalDecodeRejectsMalformedDocuments(t *testing.T) {
 		{name: "empty", payload: nil, contains: "truncated"},
 		{name: "malformed magic length", payload: append(bytes.Repeat([]byte{0xff}, 10), 2), contains: "malformed unsigned varint"},
 		{name: "wrong magic", payload: replaceCanonicalText(t, encoded, string(canonicalMagic), strings.Repeat("x", len(canonicalMagic))), contains: "unknown canonical document magic"},
-		{name: "unknown version", payload: mutateByte(t, encoded, 1+len(canonicalMagic), byte(CanonicalFormatVersion+1)), contains: "canonical format version"},
+		{name: "unknown version", payload: mutateByte(t, encoded, 1+len(canonicalMagic), byte(DataIncarnationFormatVersion+1)), contains: "canonical format version"},
 		{name: "unknown root tag", payload: mutateByte(t, encoded, rootOffset, 'x'), contains: "type tag"},
 		{name: "unknown struct type", payload: replaceCanonicalText(t, encoded, "PhysicalSchema", "PhysicalSchemX"), contains: "unknown struct type"},
 		{name: "unknown field", payload: replaceCanonicalText(t, encoded, "CanonicalVersion", "CanonicalVersioX"), contains: "unknown or out-of-order field"},

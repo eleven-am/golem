@@ -26,7 +26,7 @@ import (
 func TestSQLiteProviderAgreementLive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	corpus := SocialCorpus()
+	corpus := withFactProbes(SocialCorpus())
 	provider := sqlite.New()
 	database, _, err := provider.Open(ctx, filepath.Join(t.TempDir(), "p2-oracle.db"))
 	if err != nil {
@@ -79,7 +79,7 @@ func TestPostgreSQLProviderAgreementLiveProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	corpus := SocialCorpus()
+	corpus := withFactProbes(SocialCorpus())
 	records := make(map[string]map[string]SQLResult, len(profiles))
 	collations := make(map[string]postgresCollationObservation, len(profiles))
 	for _, profile := range profiles {
@@ -625,7 +625,10 @@ func scalarMatrixSQLType(provider ir.Provider, typ ir.TypeRef) string {
 		}
 	}
 	switch typ.Kind() {
-	case ir.ValueBool, ir.ValueInt16, ir.ValueInt32, ir.ValueInt64, ir.ValueDateTime:
+	// SQLite decimals use scaled INTEGER storage, as required by the physical
+	// schema and the provider codec. TEXT would introduce a different affinity
+	// contract and cannot represent the generated decimal column faithfully.
+	case ir.ValueBool, ir.ValueInt16, ir.ValueInt32, ir.ValueInt64, ir.ValueDecimal, ir.ValueDateTime:
 		return "INTEGER"
 	case ir.ValueFloat32, ir.ValueFloat64:
 		return "REAL"

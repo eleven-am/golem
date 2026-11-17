@@ -126,7 +126,7 @@ func validatePendingBackfill(value PendingBackfill) error {
 	if err != nil || root != value.Root || value.PublicationPath != path.Join(root, PublicationFilename) {
 		return fmt.Errorf("pending backfill root/publication path is invalid")
 	}
-	if value.MigrationID == "" || value.Provider != ir.PostgreSQL || value.Entry.ID != value.MigrationID || value.Entry.AfterSnapshot.Provider.Provider != value.Provider {
+	if value.MigrationID == "" || (value.Provider != ir.PostgreSQL && value.Provider != ir.SQLite) || value.Entry.ID != value.MigrationID || value.Entry.AfterSnapshot.Provider.Provider != value.Provider {
 		return fmt.Errorf("pending backfill has an invalid migration/provider identity")
 	}
 	if len(value.Entry.Files) != 0 || len(value.Entry.Manual) != 0 || len(value.Entry.Approvals) != 0 || value.Entry.ChainHash != "" {
@@ -245,7 +245,7 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 		return BackfillAttachResult{}, fmt.Errorf("pending backfill does not match requested migration %s", request.MigrationID)
 	}
 	if request.Render == nil {
-		return BackfillAttachResult{}, fmt.Errorf("pending backfill attach requires a PostgreSQL renderer")
+		return BackfillAttachResult{}, fmt.Errorf("pending backfill attach requires its provider renderer")
 	}
 	if err := migration.ValidateReviewedBackfillArtifact(request.SQL); err != nil {
 		return BackfillAttachResult{}, err
@@ -258,9 +258,9 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 	if err != nil || codegenmanifest.ContentHash(publicationBytes) != pending.ParentPublicationSHA256 {
 		return BackfillAttachResult{}, fmt.Errorf("pending backfill parent publication is stale")
 	}
-	history, ok := state.Histories[ir.PostgreSQL]
+	history, ok := state.Histories[pending.Provider]
 	if !ok || len(state.Histories) != 1 {
-		return BackfillAttachResult{}, fmt.Errorf("pending reviewed backfills require PostgreSQL-only history")
+		return BackfillAttachResult{}, fmt.Errorf("pending reviewed backfills require one matching provider history")
 	}
 	for _, entry := range history.Manifest.Entries {
 		if entry.ID == pending.MigrationID {
@@ -292,7 +292,7 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}
-	companionPath := path.Join(root, string(ir.PostgreSQL), string(entry.ID)+".backfill."+string(backfill.ID)+".sql")
+	companionPath := path.Join(root, string(pending.Provider), string(entry.ID)+".backfill."+string(backfill.ID)+".sql")
 	if _, err := os.Stat(filepath.Join(request.ModuleDir, filepath.FromSlash(companionPath))); err == nil {
 		return BackfillAttachResult{}, fmt.Errorf("reviewed backfill artifact %s already exists", companionPath)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -306,7 +306,7 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 	if err != nil {
 		return BackfillAttachResult{}, fmt.Errorf("render reviewed backfill migration: %w", err)
 	}
-	prefix := path.Join(root, string(ir.PostgreSQL), string(entry.ID))
+	prefix := path.Join(root, string(pending.Provider), string(entry.ID))
 	beforeBytes, err := historicalSnapshotBytes(entry.BeforeSnapshot)
 	if err != nil {
 		return BackfillAttachResult{}, err
@@ -347,7 +347,7 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 	for filename, content := range newFiles {
 		artifactByPath[filename] = codegenmanifest.Artifact{Path: filename, Kind: artifactKind(filename), Content: content, Immutable: true}
 	}
-	manifestPath := path.Join(root, string(ir.PostgreSQL), "manifest.json")
+	manifestPath := path.Join(root, string(pending.Provider), "manifest.json")
 	artifactByPath[manifestPath] = codegenmanifest.Artifact{Path: manifestPath, Kind: codegenmanifest.ArtifactMigrationManifest, Content: manifestBytes}
 	modelPrefix := path.Join(root, "models", string(entry.ID))
 	beforeModelBytes, err := reviewedBackfillBeforeModelSnapshotBytes(state, root, history)
@@ -361,11 +361,11 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 	for _, artifact := range artifactByPath {
 		artifacts = append(artifacts, artifact)
 	}
-	prospective, err := codegenmanifest.Build(codegenmanifest.Request{ModelFingerprint: pending.ModelFingerprint, ContractFingerprint: pending.ContractFingerprint, ProviderFingerprints: []codegenmanifest.ProviderFingerprint{{Provider: ir.PostgreSQL, Fingerprint: pending.ProviderFingerprint, SystemFingerprint: pending.SystemFingerprint}}, GeneratorVersion: GeneratorVersion, TemplateABIVersion: codegenmanifest.TemplateABIVersion, Artifacts: artifacts})
+	prospective, err := codegenmanifest.Build(codegenmanifest.Request{ModelFingerprint: pending.ModelFingerprint, ContractFingerprint: pending.ContractFingerprint, ProviderFingerprints: []codegenmanifest.ProviderFingerprint{{Provider: pending.Provider, Fingerprint: pending.ProviderFingerprint, SystemFingerprint: pending.SystemFingerprint}}, GeneratorVersion: GeneratorVersion, TemplateABIVersion: codegenmanifest.TemplateABIVersion, Artifacts: artifacts})
 	if err != nil {
 		return BackfillAttachResult{}, err
 	}
-	return BackfillAttachResult{Prospective: prospective, PublicationPath: pending.PublicationPath, PendingPath: pendingPath, PendingSHA256: codegenmanifest.ContentHash(pendingBytes), MigrationID: entry.ID, Provider: ir.PostgreSQL, Entry: entry, Report: report}, nil
+	return BackfillAttachResult{Prospective: prospective, PublicationPath: pending.PublicationPath, PendingPath: pendingPath, PendingSHA256: codegenmanifest.ContentHash(pendingBytes), MigrationID: entry.ID, Provider: pending.Provider, Entry: entry, Report: report}, nil
 }
 
 func reviewedBackfillBeforeModelSnapshotBytes(state State, root string, history History) ([]byte, error) {
@@ -462,7 +462,7 @@ func newPendingBackfill(moduleDir, root string, entry migration.ManifestEntry, m
 	if err != nil {
 		return PendingBackfill{}, fmt.Errorf("required-column backfill requires an existing reviewed parent publication: %w", err)
 	}
-	value := PendingBackfill{FormatVersion: PendingBackfillFormatVersion, Root: root, PublicationPath: publicationPath, ParentPublicationSHA256: codegenmanifest.ContentHash(publication), MigrationID: entry.ID, Provider: ir.PostgreSQL, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, ProviderFingerprint: providerFingerprint, SystemFingerprint: systemFingerprint, BeforeModel: beforeModel, AfterModel: model, Entry: entry}
+	value := PendingBackfill{FormatVersion: PendingBackfillFormatVersion, Root: root, PublicationPath: publicationPath, ParentPublicationSHA256: codegenmanifest.ContentHash(publication), MigrationID: entry.ID, Provider: entry.AfterSnapshot.Provider.Provider, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, ProviderFingerprint: providerFingerprint, SystemFingerprint: systemFingerprint, BeforeModel: beforeModel, AfterModel: model, Entry: entry}
 	if err := validatePendingBackfill(value); err != nil {
 		return PendingBackfill{}, err
 	}

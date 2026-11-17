@@ -19,8 +19,9 @@ import (
 )
 
 type cascadeEffects struct {
-	deleted []mutationdecode.Row
-	nulled  []mutationdecode.Row
+	deleted        []mutationdecode.Row
+	nulled         []mutationdecode.Row
+	historyApplied bool
 }
 
 func (effects *cascadeEffects) empty() bool {
@@ -147,6 +148,15 @@ func recordCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, regi
 			return err
 		}
 		for _, row := range current {
+			if len(registry.PolicyCaptureFields(golem.ModelID(model))) != 0 {
+				if !effects.historyApplied {
+					return fmt.Errorf("policy history: cascade was not captured at application")
+				}
+				image := row
+				if err := state.recordHistory(ctx, registry, provider, &image, &image, true); err != nil {
+					return err
+				}
+			}
 			key, err := mutationbatch.PrimaryKey(registry, provider, row)
 			if err != nil {
 				return err

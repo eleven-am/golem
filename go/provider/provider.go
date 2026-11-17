@@ -112,6 +112,13 @@ const (
 	CodeOpen        Code = "PROVIDER_OPEN"
 	CodeClose       Code = "PROVIDER_CLOSE"
 	CodeMaintenance Code = "PROVIDER_MAINTENANCE"
+	// CodeSnapshotPublished means the new snapshot destination exists, but
+	// final synchronization or staging cleanup failed. Do not blindly retry.
+	CodeSnapshotPublished Code = "PROVIDER_SNAPSHOT_PUBLISHED"
+	// CodeRestorePublished means restore replaced/published its destination,
+	// but final synchronization or cleanup failed. Keep serving stopped until
+	// the destination has been inspected; do not retry as an unpublished restore.
+	CodeRestorePublished Code = "PROVIDER_RESTORE_PUBLISHED"
 )
 
 func CodeOf(err error) (Code, bool) {

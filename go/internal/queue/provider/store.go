@@ -49,6 +49,7 @@ var canonicalName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 // token that fences this owner's transitions.
 type Record struct {
 	ID              string
+	Priority        int
 	Type            string
 	Payload         []byte
 	State           State
@@ -71,6 +72,7 @@ type Record struct {
 // a dedupe collision with active work returns the existing identity instead.
 type EnqueueRequest struct {
 	ID           string
+	Priority     int
 	Type         string
 	Payload      []byte
 	MaxAttempts  int
@@ -91,6 +93,8 @@ type EnqueueResult struct {
 // ClaimOptions bounds one claim. An empty Types list claims nothing, which is
 // how a worker whose every registered type is saturated stands down.
 type ClaimOptions struct {
+	// Priority is an exact lane, not a lower bound. Zero selects Normal.
+	Priority      int
 	Types         []string
 	Limit         int
 	LeaseDuration time.Duration
@@ -121,6 +125,7 @@ type RetentionPolicy struct {
 // Summary is the payload-free projection used by queue operators.
 type Summary struct {
 	ID              string
+	Priority        int
 	Type            string
 	State           State
 	AttemptCount    int64
@@ -228,13 +233,46 @@ type Store interface {
 	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
 	CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
 	Cancel(ctx context.Context, executor Executor, id string) (CancelResult, error)
+	Promote(ctx context.Context, executor Executor, id string, priority int, readyNow bool) (bool, error)
 	CancelMany(ctx context.Context, ids []string) (CancelBatch, error)
 	Requeue(ctx context.Context, id string) (bool, error)
 	RequeueFailed(ctx context.Context, ids []string) (int, error)
 	RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)
 }
 
+// StorageVersion identifies only complete, recognized provider-owned shapes.
+// Unknown or partially upgraded storage is an error, never another version.
+type StorageVersion string
+
+const (
+	StorageAbsent             StorageVersion = "absent"
+	StorageLegacyPreResources StorageVersion = "pre-resource"
+	StorageLegacyV088         StorageVersion = "v0.8.8"
+	StoragePriorityV1         StorageVersion = "priority-v1"
+)
+
+var (
+	ErrStorageUpgradeRequired = errors.New("QUEUE_STORAGE_UPGRADE_REQUIRED: stop all queue producers and workers and explicitly upgrade queue storage before startup")
+	ErrStorageUnrecognized    = errors.New("QUEUE_STORAGE_UNRECOGNIZED: queue storage is not a complete supported provider-owned shape")
+)
+
+type StorageInspection struct {
+	Version        StorageVersion `json:"version"`
+	HistoryIndexes bool           `json:"historyIndexes"`
+}
+
+// StorageMaintenance is deliberately separate from job transitions. Upgrade
+// is an explicit offline operation; callers must first drain every producer
+// and worker, including older binaries. It does not certify that fleet state.
+type StorageMaintenance interface {
+	InspectStorage(context.Context) (StorageInspection, error)
+	UpgradeStorage(context.Context) (StorageInspection, error)
+}
+
 func ValidateEnqueue(request EnqueueRequest) error {
+	if err := ValidatePriority(request.Priority); err != nil {
+		return err
+	}
 	if request.ID == "" || len(request.ID) > MaximumIdentityBytes {
 		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job identity must be within 1..%d bytes", MaximumIdentityBytes)
 	}
@@ -254,6 +292,9 @@ func ValidateEnqueue(request EnqueueRequest) error {
 }
 
 func ValidateClaim(options ClaimOptions) error {
+	if err := ValidatePriority(options.Priority); err != nil {
+		return err
+	}
 	if options.Limit <= 0 || options.Limit > MaximumClaimJobs {
 		return fmt.Errorf("QUEUE_CLAIM_LIMIT: claim limit must be within 1..%d", MaximumClaimJobs)
 	}

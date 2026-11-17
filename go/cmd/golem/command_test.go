@@ -57,7 +57,7 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "882ac439c32fb14ea29ff7f6cf561309b6f02678bcf07b34ee3e69df415282d0"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "94227c85155b818d8a7214b225ba3355acb1102b727878144c4ffd146bca5261"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
@@ -346,73 +346,92 @@ func TestMigrationBackfillAttachReadFailureRedactsAbsolutePath(t *testing.T) {
 }
 
 func TestMigrationBackfillAttachRendersReviewedTypedPlanBeforePublishing(t *testing.T) {
-	module := writeSocialModule(t, false)
-	schemaPath := filepath.Join(module, "schema.go")
-	content, err := os.ReadFile(schemaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content = bytes.Replace(content, []byte("golem.Providers(schema, golem.SQLite, golem.PostgreSQL)"), []byte("golem.Providers(schema, golem.PostgreSQL)"), 1)
-	if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	createInitialReviewedMigration(t, module)
+	for _, test := range []struct {
+		name      string
+		providers string
+		sql       string
+	}{
+		{
+			name:      "postgresql",
+			providers: "golem.Providers(schema, golem.PostgreSQL)",
+			sql:       "UPDATE \"public\".\"users\" SET \"slug\" = 'unknown' WHERE \"slug\" IS NULL;\n",
+		},
+		{
+			name:      "sqlite",
+			providers: "golem.Providers(schema, golem.SQLite)",
+			sql:       "UPDATE \"users\" SET \"slug\" = 'unknown' WHERE \"slug\" IS NULL;\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module := writeSocialModule(t, false)
+			schemaPath := filepath.Join(module, "schema.go")
+			content, err := os.ReadFile(schemaPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content = bytes.Replace(content, []byte("golem.Providers(schema, golem.SQLite, golem.PostgreSQL)"), []byte(test.providers), 1)
+			if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			createInitialReviewedMigration(t, module)
 
-	content, err = os.ReadFile(schemaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content = bytes.Replace(content,
-		[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`"),
-		[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`\n\tSlug string `db:\"slug\" golem:\"id=social.User.Slug\"`"), 1)
-	if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("pending migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	var pending migrationNewOutput
-	if err := json.Unmarshal(stdout.Bytes(), &pending); err != nil || !pending.Pending || pending.MigrationID != "0002_required_slug" {
-		t.Fatalf("pending output=%#v err=%v", pending, err)
-	}
-	reviewedPath := filepath.Join(module, "reviewed.sql")
-	if err := os.WriteFile(reviewedPath, []byte("UPDATE \"public\".\"users\" SET \"slug\" = 'unknown' WHERE \"slug\" IS NULL;\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	attachArgs := []string{
-		"migration", "backfill", "attach", "--migration", "0002_required_slug",
-		"--field", "User.Slug", "--file", reviewedPath,
-	}
-	beforeOutputFailure := treeSnapshot(t, module)
-	stderr.Reset()
-	if code := run(context.Background(), module, attachArgs, refusingWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "migration plan output could not be written") {
-		t.Fatalf("refused report output code=%d stderr=%s", code, stderr.String())
-	}
-	if afterOutputFailure := treeSnapshot(t, module); !reflect.DeepEqual(afterOutputFailure, beforeOutputFailure) {
-		t.Fatal("attach published or removed its draft after report output failed")
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := run(context.Background(), module, attachArgs, &stdout, &stderr); code != 0 {
-		t.Fatalf("attach code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if got := stdout.String(); !strings.Contains(got, "Migration plan: reviewed") || !strings.Contains(got, "reviewed backfill") || !strings.Contains(got, "manual data transform") {
-		t.Fatalf("attach omitted typed reviewed plan:\n%s", got)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("attach stderr=%s", stderr.String())
-	}
-	if _, err := os.Stat(filepath.Join(module, "migrations", ".golem-pending-backfill.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("pending draft remains after publication: %v", err)
-	}
-	manifestBytes, err := os.ReadFile(filepath.Join(module, "migrations", "postgresql", "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var history migration.Manifest
-	if err := json.Unmarshal(manifestBytes, &history); err != nil || len(history.Entries) != 2 || history.Entries[1].ID != "0002_required_slug" {
-		t.Fatalf("published history=%#v err=%v", history.Entries, err)
+			content, err = os.ReadFile(schemaPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content = bytes.Replace(content,
+				[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`"),
+				[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`\n\tSlug string `db:\"slug\" golem:\"id=social.User.Slug\"`"), 1)
+			if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run(context.Background(), module, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
+				t.Fatalf("pending migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			var pending migrationNewOutput
+			if err := json.Unmarshal(stdout.Bytes(), &pending); err != nil || !pending.Pending || pending.MigrationID != "0002_required_slug" {
+				t.Fatalf("pending output=%#v err=%v", pending, err)
+			}
+			reviewedPath := filepath.Join(module, "reviewed.sql")
+			if err := os.WriteFile(reviewedPath, []byte(test.sql), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			attachArgs := []string{
+				"migration", "backfill", "attach", "--migration", "0002_required_slug",
+				"--field", "User.Slug", "--file", reviewedPath,
+			}
+			beforeOutputFailure := treeSnapshot(t, module)
+			stderr.Reset()
+			if code := run(context.Background(), module, attachArgs, refusingWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "migration plan output could not be written") {
+				t.Fatalf("refused report output code=%d stderr=%s", code, stderr.String())
+			}
+			if afterOutputFailure := treeSnapshot(t, module); !reflect.DeepEqual(afterOutputFailure, beforeOutputFailure) {
+				t.Fatal("attach published or removed its draft after report output failed")
+			}
+			stdout.Reset()
+			stderr.Reset()
+			if code := run(context.Background(), module, attachArgs, &stdout, &stderr); code != 0 {
+				t.Fatalf("attach code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if got := stdout.String(); !strings.Contains(got, "Migration plan: reviewed") || !strings.Contains(got, "reviewed backfill") || !strings.Contains(got, "manual data transform") {
+				t.Fatalf("attach omitted typed reviewed plan:\n%s", got)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("attach stderr=%s", stderr.String())
+			}
+			if _, err := os.Stat(filepath.Join(module, "migrations", ".golem-pending-backfill.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("pending draft remains after publication: %v", err)
+			}
+			manifestBytes, err := os.ReadFile(filepath.Join(module, "migrations", test.name, "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var history migration.Manifest
+			if err := json.Unmarshal(manifestBytes, &history); err != nil || len(history.Entries) != 2 || history.Entries[1].ID != "0002_required_slug" {
+				t.Fatalf("published history=%#v err=%v", history.Entries, err)
+			}
+		})
 	}
 }
 

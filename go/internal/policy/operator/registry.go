@@ -363,6 +363,9 @@ func ValidateCondition(condition ir.Condition, providers ir.ProviderSet) error {
 			return fmt.Errorf("policy operator: constant carries requirements")
 		}
 		return nil
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return ValidateCondition(body, providers)
 	case ir.ConditionLogical:
 		_, children, _ := condition.Logical()
 		for _, child := range children {

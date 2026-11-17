@@ -420,7 +420,7 @@ func TestEvaluateDependencyRefusesNoticesItCannotTrust(t *testing.T) {
 			"other schema": &eventNoticeShared{},
 			"typed nil":    (*eventNoticeShared)(nil),
 		} {
-			_, err := fixture.app.evaluateDependency(member, shared)
+			_, err := fixture.app.evaluateDependency(context.Background(), member, shared)
 			if code, ok := events.CodeOf(err); !ok || code != events.CodeSubscriptionSourceClosed {
 				t.Fatalf("%s: error = %v, want %s", name, err, events.CodeSubscriptionSourceClosed)
 			}

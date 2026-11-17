@@ -199,11 +199,13 @@ func TestRootStatementRefusesProviderNeutralParameterOverflow(t *testing.T) {
 	fixture := schematest.New(t)
 	descriptor := golem.GeneratedModelDescriptor[renderUser](fixture.User, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
 	name := golem.GeneratedTextField[renderUser, string](fixture.UserName)
-	values := make([]string, MaxStatementParameters+1)
-	for index := range values {
-		values[index] = fmt.Sprintf("value-%04d", index)
+	// In sets use one compact bind. Independent substring predicates still
+	// require separate parameters and must retain the portable ceiling.
+	predicates := make([]golem.Predicate[renderUser], MaxStatementParameters+1)
+	for index := range predicates {
+		predicates[index] = name.Contains(fmt.Sprintf("value-%04d", index))
 	}
-	frozen, err := golem.FreezeFindMany(descriptor, golem.Where(name.In(values...)), golem.Select[renderUser](name))
+	frozen, err := golem.FreezeFindMany(descriptor, golem.Where(golem.Or(predicates...)), golem.Select[renderUser](name))
 	if err != nil {
 		t.Fatal(err)
 	}

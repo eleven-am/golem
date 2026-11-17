@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )

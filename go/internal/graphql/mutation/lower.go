@@ -5,7 +5,7 @@ package mutation
 
 import (
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 )

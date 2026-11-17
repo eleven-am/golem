@@ -518,6 +518,290 @@ func TestDeliverySystemObjectMigratesBackfillsAndDriftChecksSQLite(t *testing.T)
 	}
 }
 
+func TestSQLiteReviewedBackfillStagesFillsChecksAndRebuilds(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before, after := sqliteRequiredBackfillSchemas(t)
+	database := openMigrationFixture(t, provider, before, "reviewed-backfill.db")
+	seedSQLiteRequiredBackfill(t, database)
+	reviewed := []byte("UPDATE \"items\" SET \"removed\" = CASE WHEN \"name\" = 'retired' THEN 1 ELSE 0 END WHERE \"removed\" IS NULL;\n")
+	manifest, files := sqliteRequiredBackfillManifest(t, before, after, reviewed)
+	script := string(files["001_required_removed.sql"])
+	staging := `ALTER TABLE "items" ADD COLUMN "removed" INTEGER`
+	positions := []int{strings.Index(script, staging), strings.Index(script, "-- golem reviewed backfill companion "), strings.Index(script, "-- golem generated postcondition "), strings.Index(script, `INSERT INTO "_golem_tmp_`)}
+	for index, position := range positions {
+		if position < 0 || index > 0 && position <= positions[index-1] {
+			t.Fatalf("reviewed script must stage/fill/check before rebuilding, positions=%v:\n%s", positions, script)
+		}
+	}
+	stagedStatement := strings.SplitN(script[positions[0]:], ";", 2)[0]
+	if strings.Contains(stagedStatement, "NOT NULL") || strings.Contains(stagedStatement, "DEFAULT") || strings.Contains(script, string(reviewed)) {
+		t.Fatalf("staging must be nullable without an invented default; companion stays separate:\n%s", script)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatalf("reviewed required-column migration: %v", err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatalf("final schema, indexes and managed FTS differ from reviewed snapshot: %v", err)
+	}
+	var rows []struct {
+		ID      int64  `db:"id"`
+		Name    string `db:"name"`
+		Version int64  `db:"golem_version"`
+		Removed int64  `db:"removed"`
+	}
+	if err := database.SelectContext(ctx, &rows, `SELECT id,name,golem_version,removed FROM items ORDER BY id`); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != 7 || rows[0].Name != "retired" || rows[0].Version != 41 || rows[0].Removed != 1 || rows[1].ID != 9 || rows[1].Name != "mailbox" || rows[1].Version != 57 || rows[1].Removed != 0 {
+		t.Fatalf("backfill changed identity/version or derived wrong values: %#v", rows)
+	}
+	var counter, child int64
+	if err := database.GetContext(ctx, &counter, `SELECT value FROM golem_row_version`); err != nil || counter != 57 {
+		t.Fatalf("version source=%d error=%v", counter, err)
+	}
+	if err := database.GetContext(ctx, &child, `SELECT item_id FROM children WHERE id=1`); err != nil || child != 7 {
+		t.Fatalf("child identity=%d error=%v", child, err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO children(id,item_id) VALUES (2,999)`); err == nil {
+		t.Fatal("rebuilt FK accepted a missing parent")
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO items(id,name) VALUES (10,'missing removed')`); err == nil {
+		t.Fatal("final table accepted NULL in the required field")
+	}
+	assertSQLiteBackfillFTS(t, database, "mailbox", 1)
+	if _, err := database.ExecContext(ctx, `UPDATE items SET name='refreshed' WHERE id=9`); err != nil {
+		t.Fatal(err)
+	}
+	assertSQLiteBackfillFTS(t, database, "mailbox", 0)
+	assertSQLiteBackfillFTS(t, database, "refreshed", 1)
+	ledger, err := provider.ReadLedger(ctx, database)
+	if err != nil || len(ledger) != 1 {
+		t.Fatalf("ledger=%#v error=%v", ledger, err)
+	}
+	if err := migration.VerifyLedger(manifest, ledger); err != nil {
+		t.Fatal(err)
+	}
+	assertForeignKeysState(t, database, 1)
+}
+
+func TestSQLiteReviewedBackfillNoNullFailureRollsBackDataSchemaAndLedger(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before, after := sqliteRequiredBackfillSchemas(t)
+	database := openMigrationFixture(t, provider, before, "reviewed-backfill-rollback.db")
+	seedSQLiteRequiredBackfill(t, database)
+	// One row is filled and one remains NULL. The generated check must fail
+	// before rebuilding, rolling back both the staging column and its values.
+	reviewed := []byte("UPDATE \"items\" SET \"removed\"=1 WHERE \"id\"=7;\n")
+	manifest, files := sqliteRequiredBackfillManifest(t, before, after, reviewed)
+	err := provider.ApplyMigration(ctx, database, manifest, files)
+	if err == nil || !strings.Contains(err.Error(), "postcondition") || !strings.Contains(err.Error(), "failed") || strings.Contains(err.Error(), "UPDATE") {
+		t.Fatalf("want sanitized generated-postcondition failure, got %v", err)
+	}
+	if err := provider.Verify(ctx, database, before); err != nil {
+		t.Fatalf("failed fill changed original schema/indexes/FTS: %v", err)
+	}
+	var name string
+	if err := database.GetContext(ctx, &name, `SELECT name FROM items WHERE id=7`); err != nil || name != "retired" {
+		t.Fatalf("companion data escaped rollback: name=%q error=%v", name, err)
+	}
+	var versions []int64
+	if err := database.SelectContext(ctx, &versions, `SELECT golem_version FROM items ORDER BY id`); err != nil || !reflect.DeepEqual(versions, []int64{41, 57}) {
+		t.Fatalf("versions=%v error=%v", versions, err)
+	}
+	var staged, temporary, child, counter int64
+	for _, check := range []struct {
+		target    *int64
+		statement string
+		want      int64
+	}{
+		{&staged, `SELECT count(*) FROM pragma_table_info('items') WHERE name='removed'`, 0},
+		{&temporary, `SELECT count(*) FROM sqlite_schema WHERE name LIKE '_golem_tmp_%'`, 0},
+		{&child, `SELECT item_id FROM children WHERE id=1`, 7},
+		{&counter, `SELECT value FROM golem_row_version`, 57},
+	} {
+		if err := database.GetContext(ctx, check.target, check.statement); err != nil || *check.target != check.want {
+			t.Fatalf("rollback invariant %q=%d want=%d error=%v", check.statement, *check.target, check.want, err)
+		}
+	}
+	assertSQLiteBackfillFTS(t, database, "retired", 1)
+	assertSQLiteBackfillFTS(t, database, "mailbox", 1)
+	ledger, err := provider.ReadLedger(ctx, database)
+	if err != nil || len(ledger) != 0 {
+		t.Fatalf("failed migration advanced ledger=%#v error=%v", ledger, err)
+	}
+	assertForeignKeysState(t, database, 1)
+}
+
+func TestSQLiteReviewedBackfillRestrictsCompanionAuthorityAndRestoresConnection(t *testing.T) {
+	for _, test := range []struct{ name, sql string }{
+		{"multiple statements", `UPDATE items SET removed=0; COMMIT;`},
+		{"commit", `COMMIT;`},
+		{"rollback", `ROLLBACK;`},
+		{"savepoint", `SAVEPOINT private_savepoint;`},
+		{"pragma", `PRAGMA foreign_keys=OFF;`},
+		{"attach", `ATTACH DATABASE ':memory:' AS private_attached;`},
+		{"ddl", `CREATE TABLE private_extra(id INTEGER);`},
+		{"metadata write", `UPDATE golem_row_version SET value=0;`},
+		{"metadata read", `UPDATE items SET removed=(SELECT value FROM golem_row_version);`},
+		{"old column", `UPDATE items SET removed=0,name='private_rewrite';`},
+		{"other model", `UPDATE children SET item_id=999;`},
+		{"delete", `DELETE FROM items;`},
+		{"insert", `INSERT INTO items(id,name,removed) VALUES(10,'private_insert',0);`},
+		{"select", `SELECT 1;`},
+		{"explain", `EXPLAIN UPDATE items SET removed=0;`},
+		{"parameter", `UPDATE items SET removed=?;`},
+		{"returning", `UPDATE items SET removed=0 RETURNING id;`},
+		{"unsafe function", `UPDATE items SET removed=load_extension('private_extension');`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			provider := New()
+			before, after := sqliteRequiredBackfillSchemas(t)
+			database := openMigrationFixture(t, provider, before, "restricted-backfill.db")
+			// Reuse the same physical connection after the failed companion so
+			// leaking its authorizer cannot be hidden by borrowing another one.
+			database.SetMaxOpenConns(1)
+			database.SetMaxIdleConns(1)
+			seedSQLiteRequiredBackfill(t, database)
+			manifest, files := sqliteRequiredBackfillManifest(t, before, after, []byte(test.sql+"\n"))
+			err := provider.ApplyMigration(ctx, database, manifest, files)
+			if err == nil || !strings.Contains(err.Error(), "restricted UPDATE contract") || strings.Contains(err.Error(), "private_") || strings.Contains(err.Error(), test.sql) {
+				t.Fatalf("want sanitized restricted-companion refusal, got %v", err)
+			}
+			if err := provider.Verify(ctx, database, before); err != nil {
+				t.Fatalf("refused companion escaped rollback: %v", err)
+			}
+			var counter int64
+			if err := database.GetContext(ctx, &counter, `SELECT value FROM golem_row_version`); err != nil || counter != 57 {
+				t.Fatalf("metadata changed: counter=%d error=%v", counter, err)
+			}
+			ledger, err := provider.ReadLedger(ctx, database)
+			if err != nil || len(ledger) != 0 {
+				t.Fatalf("refused companion advanced ledger=%#v error=%v", ledger, err)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE items SET name='restored' WHERE id=9`); err != nil {
+				t.Fatalf("companion authorizer escaped its execution scope: %v", err)
+			}
+			assertSQLiteBackfillFTS(t, database, "restored", 1)
+			assertForeignKeysState(t, database, 1)
+		})
+	}
+}
+
+func TestSQLiteReviewedBackfillAllowsPureFunctionsAndApplicationSubqueries(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before, after := sqliteRequiredBackfillSchemas(t)
+	database := openMigrationFixture(t, provider, before, "backfill-expression.db")
+	seedSQLiteRequiredBackfill(t, database)
+	manifest, files := sqliteRequiredBackfillManifest(t, before, after, []byte("UPDATE items SET removed=(SELECT length(lower(source.name)) FROM items AS source WHERE source.id=items.id);\n"))
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	var values []int64
+	if err := database.SelectContext(ctx, &values, `SELECT removed FROM items ORDER BY id`); err != nil || !reflect.DeepEqual(values, []int64{7, 7}) {
+		t.Fatalf("reviewed application expression values=%v error=%v", values, err)
+	}
+}
+
+func TestSQLiteReviewedBackfillRefusesSemanticInputWithoutInvalidation(t *testing.T) {
+	before, after := sqliteRequiredBackfillSchemas(t)
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "removed", Space: "text", Dimensions: 3, Fields: []string{string(fixtureItemNoteField)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "70000000000000000000000000000003", Provider: ir.SQLite, Version: semanticcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload}, migrationFixtureTable(t, after, fixtureItemTable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.Extensions = append(after.Extensions, extension)
+	after = normalizeMigrationFixture(t, after)
+	plan, err := migration.Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := migration.ManifestEntry{ID: "001_semantic_backfill", BeforeSnapshot: before, AfterSnapshot: after, Operations: plan.Operations}
+	if _, err := planSQLiteReviewedBackfill(entry); err == nil || !strings.Contains(err.Error(), "semantic input") {
+		t.Fatalf("semantic input filled outside runtime invalidation was accepted: %v", err)
+	}
+}
+
+func sqliteRequiredBackfillSchemas(t *testing.T) (physical.PhysicalSchema, physical.PhysicalSchema) {
+	t.Helper()
+	before := foreignKeyMigrationFixtureSchema(t, false)
+	versioned := rowVersionFixtureSchema(t, true)
+	before.Unmanaged = versioned.Unmanaged
+	name := fixtureItemNameField
+	owner := migrationFixtureTable(t, versioned, fixtureItemTable)
+	owner.Indexes = []physical.PhysicalIndex{{ID: "30000000000000000000000000000002", Name: "idx_items_name", Method: physical.IndexBTree, Keys: []physical.IndexKey{{Column: &name, Direction: ir.SortAsc, Nulls: ir.NullsDefault}}, CreationMode: physical.IndexTransactional}}
+	for index := range before.Tables {
+		if before.Tables[index].ID == fixtureItemTable {
+			before.Tables[index] = owner
+		}
+	}
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: string(name), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := fulltextstorage.Lower(ir.ProviderExtensionIR{ID: "70000000000000000000000000000002", Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: fulltextcontract.IndexKind, Payload: payload}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.Extensions = []physical.Extension{extension}
+	before = normalizeMigrationFixture(t, before)
+	after := normalizeMigrationFixture(t, before)
+	for index := range after.Tables {
+		if after.Tables[index].ID == fixtureItemTable {
+			after.Tables[index].Columns = append(after.Tables[index].Columns, physical.PhysicalColumn{ID: fixtureItemNoteField, Name: "removed", Ordinal: uint32(len(after.Tables[index].Columns)), Storage: physical.StorageType{Kind: physical.StorageSQLiteInteger}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+		}
+	}
+	return before, normalizeMigrationFixture(t, after)
+}
+
+func sqliteRequiredBackfillManifest(t *testing.T, before, after physical.PhysicalSchema, reviewed []byte) (migration.Manifest, map[string][]byte) {
+	t.Helper()
+	plan, err := migration.Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operation migration.Operation
+	for _, value := range plan.Operations {
+		if value.Kind == migration.BackfillColumn {
+			operation = value
+		}
+	}
+	if operation.ID == "" {
+		t.Fatal("required-column fixture lacks a semantic backfill")
+	}
+	path := "001_required_removed.backfill.sql"
+	companion := migration.ManualCompanion{OperationID: operation.ID, File: migration.FileChecksum{Path: path, SHA256: migration.Checksum(reviewed)}, Postcondition: migration.BackfillPostcondition(fixtureItemTable, fixtureItemNoteField)}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_required_removed.sql", nil, companion)
+	files[path] = reviewed
+	if err := migration.VerifyManifest(manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	return manifest, files
+}
+
+func seedSQLiteRequiredBackfill(t *testing.T, database *sqlx.DB) {
+	t.Helper()
+	for _, statement := range []string{`INSERT INTO items(id,name,golem_version) VALUES (7,'retired',41),(9,'mailbox',57)`, `INSERT INTO children(id,item_id) VALUES (1,7)`, `UPDATE golem_row_version SET value=57`} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertSQLiteBackfillFTS(t *testing.T, database *sqlx.DB, query string, want int) {
+	t.Helper()
+	var count int
+	if err := database.Get(&count, `SELECT count(*) FROM "_golem_fulltext_70000000000000000000000000000002_fts" WHERE "_golem_fulltext_70000000000000000000000000000002_fts" MATCH ?`, query); err != nil || count != want {
+		t.Fatalf("FTS query=%q count=%d want=%d error=%v", query, count, want, err)
+	}
+}
+
 func TestSQLiteIncrementalRebuildUsesStableFieldMapping(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
@@ -1134,7 +1418,7 @@ func openMigrationFixture(t *testing.T, provider *Provider, schema physical.Phys
 	return database
 }
 
-func migrationFixtureManifest(t *testing.T, before, after physical.PhysicalSchema, filePath string, parent *migration.ManifestEntry) (migration.Manifest, map[string][]byte) {
+func migrationFixtureManifest(t *testing.T, before, after physical.PhysicalSchema, filePath string, parent *migration.ManifestEntry, companions ...migration.ManualCompanion) (migration.Manifest, map[string][]byte) {
 	t.Helper()
 	plan, err := migration.Diff(before, after)
 	if err != nil {
@@ -1154,6 +1438,7 @@ func migrationFixtureManifest(t *testing.T, before, after physical.PhysicalSchem
 		BeforeSnapshot:           before,
 		AfterSnapshot:            after,
 		UnmanagedAllowlistDigest: migration.Digest(allowlistFingerprint.String()),
+		Manual:                   append([]migration.ManualCompanion(nil), companions...),
 	}
 	if parent != nil {
 		entry.ParentID = parent.ID

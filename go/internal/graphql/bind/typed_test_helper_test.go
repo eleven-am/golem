@@ -3,7 +3,7 @@ package bind
 import (
 	"errors"
 
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 )
 
 func isKind(err error, kind compileerr.Kind) bool {

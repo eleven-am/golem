@@ -286,13 +286,17 @@ func executeScalarMutationProgramWithObservers(ctx context.Context, database *sq
 		return executeScalarProgramOnQueryerObserved(ctx, queryer, binding, registry, model, provider, program, observer, verified)
 	}
 
-	transaction, beginErr := database.BeginTxx(ctx, nil)
+	plan, planErr := planMutationTransaction(provider, registry, mutationTransactionDefaultIsolation(provider, registry))
+	if planErr != nil {
+		return scalarMutationExecution{}, planErr
+	}
+	transactionBinding, beginErr := beginMutationTransaction(ctx, database, plan)
 	if beginErr != nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationProviderFailureKind(beginErr), 0, 0, "transaction could not begin", beginErr)
 	}
+	transaction := transactionBinding.transaction
 	defer undoOnPanic(func() { _ = transaction.Rollback() })
 
-	transactionBinding := transactionExecution(database, transaction)
 	if err := transactionBinding.enableMutation(config); err != nil {
 		return scalarMutationExecution{}, rollbackScalarMutation(transaction, err)
 	}
@@ -414,6 +418,14 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 		if err := result.record(program, row); err != nil {
 			return scalarMutationExecution{}, err
 		}
+		if err := recordScalarHistory(ctx, binding, registry, model, program, result, row); err != nil {
+			return scalarMutationExecution{}, err
+		}
+		if row.role == mutationsql.ApplyDelete {
+			if err := recordAppliedScalarCascadeHistory(ctx, queryer, binding, registry, provider, cascade); err != nil {
+				return scalarMutationExecution{}, err
+			}
+		}
 		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {
 				return scalarMutationExecution{}, err
@@ -480,6 +492,14 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 		}
 		if err := result.record(program, row); err != nil {
 			return scalarMutationExecution{}, err
+		}
+		if err := recordScalarHistory(ctx, binding, registry, model, program, result, row); err != nil {
+			return scalarMutationExecution{}, err
+		}
+		if row.role == mutationsql.ApplyDelete {
+			if err := recordAppliedScalarCascadeHistory(ctx, queryer, binding, registry, provider, cascade); err != nil {
+				return scalarMutationExecution{}, err
+			}
 		}
 		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {

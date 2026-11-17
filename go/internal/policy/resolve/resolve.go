@@ -17,6 +17,14 @@ func RowConstraint(policy ir.Policy, action ir.Action, model ir.ModelID) (ir.Con
 	if err != nil {
 		return ir.Condition{}, err
 	}
+	condition, err = Condition(policy, condition)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	condition, err = gateFactScope(policy, condition)
+	if err != nil {
+		return ir.Condition{}, err
+	}
 	return normalize.Condition(condition)
 }
 
@@ -27,7 +35,58 @@ func FieldCondition(policy ir.Policy, action ir.Action, model ir.ModelID, field 
 	if err != nil {
 		return ir.Condition{}, err
 	}
+	condition, err = Condition(policy, condition)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	condition, err = gateFactScope(policy, condition)
+	if err != nil {
+		return ir.Condition{}, err
+	}
 	return normalize.Condition(condition)
+}
+
+// Condition resolves references in one policy-owned expression. Dependency
+// classification uses the same reference resolution as row and
+// field constraints, including conservative supporting rules that survive only
+// as dependency requirements. It does not normalize the outer expression, so
+// conservative authored dependencies are retained. Caller expressions must be
+// rejected by binding before they can enter this policy-only stage.
+func Condition(policy ir.Policy, condition ir.Condition) (ir.Condition, error) {
+	if err := condition.Validate(); err != nil {
+		return ir.Condition{}, err
+	}
+	if condition.ModelID() != policy.ModelID() {
+		return ir.Condition{}, fmt.Errorf("resolve policy condition: model mismatch")
+	}
+	return resolveFacts(policy, condition)
+}
+
+func gateFactScope(policy ir.Policy, resolved ir.Condition) (ir.Condition, error) {
+	if len(policy.Facts()) == 0 {
+		return resolved, nil
+	}
+	// This gate surrounds the completed rule algebra: negating an individual
+	// fact, an earlier denial, or an open baseline cannot authorize a source
+	// outside the policy's explicitly declared actor domain.
+	scope, err := ir.NewFactScopeCondition(policy.FactScope())
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	combined, err := ir.NewLogical(policy.ModelID(), ir.LogicalAnd, []ir.Condition{scope, resolved})
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	combined, err = normalize.Condition(combined)
+	if err != nil {
+		return ir.Condition{}, err
+	}
+	// Scope and data truth share one execution budget. Normalization first
+	// avoids charging an extra wrapper for an explicit unrestricted scope.
+	if err := ir.CheckFactExpansion(combined); err != nil {
+		return ir.Condition{}, err
+	}
+	return combined, nil
 }
 
 // ActionAllowed derives the action gate solely from the already-resolved row

@@ -30,6 +30,7 @@ func (Document) DefinePolicy(rules *golem.Rules[Document], actor Actor) {
 
 func DefineSchema(schema *golem.Schema) {
 	golem.SchemaName(schema, "semantic_benchmark")
+	golem.WithoutGraphQL(schema)
 	golem.Actor[Actor](schema)
 	golem.Model[Document](schema)
 	golem.Providers(schema, golem.SQLite)

@@ -1,6 +1,7 @@
 // Package codec owns the canonical, bounded golem.event.v1 transport envelope.
-// It wraps one already validated immutable golem.fact.v1 or golem.fact.v2 row;
-// it never reinterprets or rewrites the nested fact bytes.
+// It wraps one validated immutable fact. V3 retains its exact stored bytes;
+// V4 carries the graph reference and private before-image, while the graph
+// itself stays in the authoritative outbox's causation anchor.
 package codec
 
 import (
@@ -108,7 +109,7 @@ func EncodeStoredRow(row mutationfact.OutboxRow, resolver mutationfact.Historica
 	if err != nil {
 		return Envelope{}, fmt.Errorf("GOLEM_EVENT_CODEC: validate stored fact: %w", err)
 	}
-	canonicalRow, err := fact.OutboxRow(row.RecordedAt)
+	canonicalRow, err := fact.TransportRow(row.RecordedAt)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("GOLEM_EVENT_CODEC: canonical stored fact: %w", err)
 	}
@@ -169,11 +170,11 @@ func Decode(encoded []byte, resolver mutationfact.HistoricalSchemaResolver, limi
 	if decoder.remaining() != 0 {
 		return Envelope{}, decoder.failure("trailing bytes")
 	}
-	fact, err := mutationfact.DecodeOutboxWithResolver(metadata, snapshot, resolver)
+	fact, err := mutationfact.DecodeTransportOutboxWithResolver(metadata, snapshot, resolver)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("GOLEM_EVENT_CODEC: decode nested fact: %w", err)
 	}
-	canonicalRow, err := fact.OutboxRow(recordedAt)
+	canonicalRow, err := fact.TransportRow(recordedAt)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("GOLEM_EVENT_CODEC: canonical nested fact: %w", err)
 	}

@@ -11,13 +11,13 @@ import (
 
 func TestRetiredHistoricalContractFormatsAreRefusedWithTheDrainInstruction(t *testing.T) {
 	const drain = "deliver or drain undelivered events before upgrading, then remove this bundle from HistoricalEventBundles"
-	for _, test := range []struct {
-		version uint32
-		payload string
-	}{
-		{4, `{"formatVersion":4,"graphqlAbiVersion":3,"models":[],"enums":[],"methods":[],"customOperations":[]}`},
-		{5, `{"formatVersion":5,"graphqlAbiVersion":4,"models":[],"enums":[],"methods":[],"customOperations":[]}`},
-	} {
+	// P13 retains exact ContractIR 7. Formats 1 through 6 remain retired;
+	// neither an older format nor a relabelled current document gains admission.
+	for version := uint32(1); version <= 6; version++ {
+		test := struct {
+			version uint32
+			payload string
+		}{version, fmt.Sprintf(`{"formatVersion":%d,"graphqlAbiVersion":1,"models":[],"enums":[],"methods":[],"customOperations":[]}`, version)}
 		payload := []byte(test.payload)
 		_, err := decodeContract(historicalContractDocument(test.version, payload, historicalContractDigest(payload)), true)
 		want := fmt.Sprintf("historical contract format %d is not supported by this golem: %s", test.version, drain)
@@ -27,14 +27,14 @@ func TestRetiredHistoricalContractFormatsAreRefusedWithTheDrainInstruction(t *te
 	}
 }
 
-func TestHistoricalContractAcceptsOnlyTheExactCurrentFormat(t *testing.T) {
-	canonical := []byte(`{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
-	document := historicalContractDocument(7, canonical, historicalContractDigest(canonical))
+func TestHistoricalContractStillAcceptsCurrentAndRejectsFutureFormat(t *testing.T) {
+	canonical := []byte(`{"formatVersion":8,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
+	document := historicalContractDocument(8, canonical, historicalContractDigest(canonical))
 	if decoded, err := decodeContract(document, true); err != nil || decoded.FormatVersion != compilerir.ContractFormatVersion {
 		t.Fatalf("historical path rejected exact current contract: decode=%#v err=%v", decoded, err)
 	}
-	future := []byte(`{"formatVersion":8,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
-	if _, err := decodeContract(historicalContractDocument(8, future, historicalContractDigest(future)), true); err == nil {
+	future := []byte(`{"formatVersion":9,"graphqlAbiVersion":6,"models":[],"enums":[],"methods":[],"customOperations":[]}`)
+	if _, err := decodeContract(historicalContractDocument(9, future, historicalContractDigest(future)), true); err == nil {
 		t.Fatal("historical contract path accepted a future version")
 	}
 }

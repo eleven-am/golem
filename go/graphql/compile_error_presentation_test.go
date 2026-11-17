@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	"github.com/vektah/gqlparser/v2"

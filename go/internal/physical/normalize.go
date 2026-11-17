@@ -25,6 +25,9 @@ func Normalize(schema PhysicalSchema) (PhysicalSchema, error) {
 // the current ncruces driver. Callers must not use this function for active
 // generated provider documents.
 func NormalizeHistorical(schema PhysicalSchema) (PhysicalSchema, error) {
+	if schema.Version == DataIncarnationFormatVersion && schema.CanonicalVersion == DataIncarnationFormatVersion {
+		return Normalize(schema)
+	}
 	if schema.Version == 3 && schema.CanonicalVersion == 3 {
 		return NormalizeHistoricalV3(schema)
 	}

@@ -83,17 +83,17 @@ func (in *interpreter) interpretGraphQLModel() {
 	}
 }
 
-func interpretGraphQLSchema(config Config, loaded loaded) ([]graphqlextension.CustomOperationDeclaration, []ir.Diagnostic) {
+func interpretGraphQLSchema(config Config, loaded loaded) ([]graphqlextension.CustomOperationDeclaration, []ir.GraphQLTypeDefinitionIR, []ir.Diagnostic) {
 	packagePath := config.Compilation.Model.Schema.PackagePath
 	if packagePath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	pkg := loaded.packages[packagePath]
 	if pkg == nil {
-		return nil, []ir.Diagnostic{ir.NewError("P5_GRAPHQL_SCHEMA_PACKAGE", fmt.Sprintf("schema package %q was not loaded", packagePath), ir.SourceSpan{})}
+		return nil, nil, []ir.Diagnostic{ir.NewError("P5_GRAPHQL_SCHEMA_PACKAGE", fmt.Sprintf("schema package %q was not loaded", packagePath), ir.SourceSpan{})}
 	}
 	vocab, diagnostics := buildVocabulary(pkg, config.GolemImportPath)
-	entry := &interpreter{config: config, pkg: pkg, vocab: vocab}
+	entry := &interpreter{config: config, pkg: pkg, vocab: vocab, scopeIndex: &scopeIndex{model: config.Compilation.Model, manifest: loaded.overlay.Manifest}}
 	var declarations []*ast.FuncDecl
 	for _, file := range pkg.Syntax {
 		for _, declaration := range file.Decls {
@@ -104,54 +104,63 @@ func interpretGraphQLSchema(config Config, loaded loaded) ([]graphqlextension.Cu
 		}
 	}
 	if len(declarations) == 0 {
-		return nil, diagnostics
+		return nil, nil, diagnostics
 	}
 	if len(declarations) != 1 {
 		for _, declaration := range declarations {
 			entry.errorAt("P5_CUSTOM_DEFINE_DUPLICATE", "schema package has multiple DefineGraphQL declarations", declaration)
 		}
-		return nil, append(diagnostics, entry.diagnostics...)
+		return nil, nil, append(diagnostics, entry.diagnostics...)
 	}
 	declaration := declarations[0]
 	function, _ := pkg.TypesInfo.Defs[declaration.Name].(*types.Func)
 	signature, _ := function.Type().(*types.Signature)
 	if signature == nil || signature.Params().Len() != 1 || signature.Results().Len() != 0 || !isGraphQLSchemaPointer(signature.Params().At(0).Type(), config.GolemImportPath) {
 		entry.errorAt("P5_CUSTOM_DEFINE_SIGNATURE", "schema DefineGraphQL must have signature func(*golem.GraphQLSchema)", declaration.Type)
-		return nil, append(diagnostics, entry.diagnostics...)
+		return nil, nil, append(diagnostics, entry.diagnostics...)
 	}
 	if declaration.Body == nil {
 		entry.errorAt("P5_CUSTOM_DEFINE_BODY", "schema DefineGraphQL requires a direct declaration body", declaration)
-		return nil, append(diagnostics, entry.diagnostics...)
+		return nil, nil, append(diagnostics, entry.diagnostics...)
 	}
 	parameter := signature.Params().At(0)
+	definitions := entry.collectGraphQLTypes(declaration, parameter)
 	var result []graphqlextension.CustomOperationDeclaration
 	for _, statement := range declaration.Body.List {
 		expressionStatement, ok := statement.(*ast.ExprStmt)
 		if !ok {
-			entry.errorAt("P5_CUSTOM_DEFINE_STATEMENT", "schema DefineGraphQL permits only direct Query or Mutation calls", statement)
+			entry.errorAt("P5_CUSTOM_DEFINE_STATEMENT", "schema DefineGraphQL permits only direct type registrations, Query, PageQuery or Mutation calls", statement)
 			continue
 		}
 		call, ok := unparen(expressionStatement.X).(*ast.CallExpr)
 		if !ok {
-			entry.errorAt("P5_CUSTOM_DEFINE_STATEMENT", "schema DefineGraphQL permits only direct Query or Mutation calls", expressionStatement)
+			entry.errorAt("P5_CUSTOM_DEFINE_STATEMENT", "schema DefineGraphQL permits only direct type registrations, Query, PageQuery or Mutation calls", expressionStatement)
 			continue
 		}
 		kind := ir.CustomOperationKind("")
 		switch entry.callOperation(call) {
+		case "Output", "Input":
+			continue
+		case "PageQuery":
+			if operation, definition, valid := entry.evalPageOperation(call, parameter, definitions); valid {
+				result = append(result, operation)
+				definitions = append(definitions, definition)
+			}
+			continue
 		case "Query":
 			kind = ir.CustomOperationQuery
 		case "Mutation":
 			kind = ir.CustomOperationMutation
 		default:
-			entry.errorAt("P5_CUSTOM_DEFINE_CALL", "schema DefineGraphQL accepts only direct golem.Query or golem.Mutation calls", call)
+			entry.errorAt("P5_CUSTOM_DEFINE_CALL", "schema DefineGraphQL accepts only direct golem.Output, golem.Input, golem.Query, golem.PageQuery or golem.Mutation calls", call)
 			continue
 		}
-		if operation, valid := entry.evalCustomOperation(call, parameter, kind); valid {
+		if operation, valid := entry.evalCustomOperation(call, parameter, kind, definitions); valid {
 			result = append(result, operation)
 		}
 	}
 	diagnostics = append(diagnostics, entry.diagnostics...)
-	return result, diagnostics
+	return result, definitions, diagnostics
 }
 
 func (in *interpreter) evalComputedField(call *ast.CallExpr, parameter *types.Var, model *types.Named, batched, withCacheKey bool) {
@@ -254,7 +263,7 @@ func (in *interpreter) evalComputedField(call *ast.CallExpr, parameter *types.Va
 	}})
 }
 
-func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.Var, kind ir.CustomOperationKind) (graphqlextension.CustomOperationDeclaration, bool) {
+func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.Var, kind ir.CustomOperationKind, definitions []ir.GraphQLTypeDefinitionIR) (graphqlextension.CustomOperationDeclaration, bool) {
 	if len(call.Args) < 3 || !in.isParameter(call.Args[0], parameter) {
 		in.errorAt("P5_CUSTOM_ARITY", "custom operation requires the schema destination, name, and resolver", call)
 		return graphqlextension.CustomOperationDeclaration{}, false
@@ -309,10 +318,15 @@ func (in *interpreter) evalCustomOperation(call *ast.CallExpr, parameter *types.
 		in.diagnostics = append(in.diagnostics, *diagnostic)
 		return graphqlextension.CustomOperationDeclaration{}, false
 	}
-	return graphqlextension.CustomOperationDeclaration{Span: in.span(call), Operation: ir.CustomOperationContractIR{
+	operation := ir.CustomOperationContractIR{
 		ExtensionID: ir.ExtensionIDFrom(identity), Operation: kind, Name: name, Arguments: arguments, Result: result,
 		Resolver: callable, Capability: ir.CustomOperationCallerOnly,
-	}}, true
+	}
+	pending, valid := in.customInvalidations(call.Args[3:], &operation, signature.Params().At(2).Type(), definitions)
+	if !valid {
+		return graphqlextension.CustomOperationDeclaration{}, false
+	}
+	return graphqlextension.CustomOperationDeclaration{Span: in.span(call), Operation: operation, InvalidationTemplates: pending}, true
 }
 
 func (in *interpreter) customMaxima(options []ast.Expr) ([]uint32, bool, bool) {
@@ -320,6 +334,9 @@ func (in *interpreter) customMaxima(options []ast.Expr) ([]uint32, bool, bool) {
 	declared, valid := false, true
 	for _, option := range options {
 		call, ok := unparen(option).(*ast.CallExpr)
+		if ok && (in.callOperation(call) == "InvalidateRows" || in.callOperation(call) == "InvalidateFacts") {
+			continue
+		}
 		if !ok || in.callOperation(call) != "MaxItems" {
 			in.errorAt("P5_CUSTOM_OPTION", "custom operation options must be direct golem.MaxItems calls", option)
 			valid = false
@@ -425,9 +442,9 @@ func (in *interpreter) graphQLResultType(expression ast.Expr) (ir.GraphQLTypeIR,
 	if name := scalars[operation]; name != "" && len(call.Args) == 0 && witness != nil {
 		return ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: name, Nullable: true}, witness, true
 	}
-	if (operation == "GraphQLObject" || operation == "GraphQLEnum") && len(call.Args) == 0 && witness != nil {
+	if (operation == "GraphQLObject" || operation == "GraphQLOutput" || operation == "GraphQLEnum") && len(call.Args) == 0 && witness != nil {
 		value, valid := in.graphQLTypeFromGo(witness, graphQLCustomResult)
-		if valid && (operation != "GraphQLObject" || value.Kind == ir.GraphQLTypeModel) && (operation != "GraphQLEnum" || value.Kind == ir.GraphQLTypeEnum) {
+		if valid && (operation != "GraphQLObject" || value.Kind == ir.GraphQLTypeModel) && (operation != "GraphQLOutput" || value.Kind == ir.GraphQLTypeObject) && (operation != "GraphQLEnum" || value.Kind == ir.GraphQLTypeEnum) {
 			value.Nullable = true
 			return value, witness, true
 		}
@@ -491,7 +508,8 @@ func (in *interpreter) graphQLArguments(value types.Type, custom bool, node ast.
 			valid = false
 			continue
 		}
-		result = append(result, ir.GraphQLArgumentContractIR{Name: name, Type: fieldType})
+		_, presence := graphQLInputValueElement(field.Type(), in.config.GolemImportPath)
+		result = append(result, ir.GraphQLArgumentContractIR{Name: name, Type: fieldType, PresenceAware: presence})
 	}
 	return result, valid
 }
@@ -515,6 +533,17 @@ func graphQLArgumentName(goName, rawTag string) (string, bool) {
 
 func (in *interpreter) graphQLTypeFromGo(value types.Type, use graphQLGoTypeUse) (ir.GraphQLTypeIR, bool) {
 	value = types.Unalias(value)
+	if element, wrapped := graphQLInputValueElement(value, in.config.GolemImportPath); wrapped {
+		if use == graphQLCustomResult {
+			return ir.GraphQLTypeIR{}, false
+		}
+		result, valid := in.graphQLTypeFromGo(element, use)
+		if !valid || result.Nullable {
+			return ir.GraphQLTypeIR{}, false
+		}
+		result.Nullable = true
+		return result, result.CanTrackInputPresence()
+	}
 	nullable := false
 	if pointer, ok := value.(*types.Pointer); ok {
 		nullable, value = true, types.Unalias(pointer.Elem())
@@ -604,7 +633,23 @@ func (in *interpreter) graphQLTypeFromGo(value types.Type, use graphQLGoTypeUse)
 			}
 		}
 	}
+	kind := ir.GraphQLTypeObject
+	if use != graphQLCustomResult {
+		kind = ir.GraphQLTypeInputObject
+	}
+	if registered, ok := in.objectTypes[graphQLRegistrationKey(named, kind)]; ok {
+		registered.Nullable = nullable
+		return registered, true
+	}
 	return ir.GraphQLTypeIR{}, false
+}
+
+func graphQLInputValueElement(value types.Type, golemPath string) (types.Type, bool) {
+	named, ok := types.Unalias(value).(*types.Named)
+	if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != golemPath || named.Origin().Obj().Name() != "InputValue" || named.TypeArgs().Len() != 1 {
+		return nil, false
+	}
+	return named.TypeArgs().At(0), true
 }
 
 func (in *interpreter) graphQLModelContractName(modelID ir.ModelID) string {

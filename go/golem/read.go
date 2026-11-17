@@ -1091,6 +1091,7 @@ const (
 	ReasonValuePrecision        Reason = "VALUE_PRECISION"
 	ReasonValueRange            Reason = "VALUE_RANGE"
 	ReasonInvalidValue          Reason = "INVALID_VALUE"
+	ReasonContinuationExpired   Reason = "CONTINUATION_EXPIRED"
 	ReasonLimitExceeded         Reason = "LIMIT_EXCEEDED"
 	ReasonNotGranted            Reason = "NOT_GRANTED"
 	ReasonFieldNotReadable      Reason = "FIELD_NOT_READABLE"
@@ -1107,10 +1108,13 @@ const (
 	LimitTouchedRows         Limit = "touched_rows"
 	LimitFacts               Limit = "facts"
 	LimitOutboxBytes         Limit = "outbox_bytes"
+	LimitPolicyHistoryBytes  Limit = "policy_history_bytes"
+	LimitPolicyHistoryNodes  Limit = "policy_history_nodes"
 	LimitTransactionOrdinal  Limit = "transaction_ordinal"
 	LimitNestedDepth         Limit = "nested_depth"
 	LimitStatementParameters Limit = "statement_parameters"
 	LimitStatementSize       Limit = "statement_size"
+	LimitScalarSetBytes      Limit = "scalar_set_bytes"
 	LimitStatementAliases    Limit = "statement_aliases"
 	LimitBatchRows           Limit = "batch_rows"
 	LimitTake                Limit = "take"
@@ -1118,6 +1122,8 @@ const (
 	LimitSelectedFields      Limit = "selected_fields"
 	LimitDepth               Limit = "depth"
 	LimitListItems           Limit = "list_items"
+	LimitHydratedRows        Limit = "hydrated_rows"
+	LimitResultBytes         Limit = "result_bytes"
 )
 
 // Error is the transport-neutral public operation error. Cause is retained for
@@ -1272,6 +1278,7 @@ type FrozenReadRequest struct {
 	omit       []FieldID
 	selector   *FrozenUniqueSelector
 	cursor     *FrozenReadCursor
+	hydration  *frozenIdentityHydration
 }
 
 type FrozenUniqueSelector struct {
@@ -1301,6 +1308,17 @@ func (cursor FrozenReadCursor) Predicate() FrozenPredicate { return cursor.predi
 
 func (request FrozenReadRequest) Operation() ReadOperation { return request.operation }
 func (request FrozenReadRequest) ModelID() ModelID         { return request.model }
+
+// RuntimeIdentityCorrelation is the generated hydration bridge. The binder
+// must validate these fields against the active model's complete primary key;
+// RuntimeRowIdentity construction alone does not establish schema authority.
+func (request FrozenReadRequest) RuntimeIdentityCorrelation() (FrozenPredicate, []FieldID, bool) {
+	if request.hydration == nil {
+		return FrozenPredicate{}, nil, false
+	}
+	return request.hydration.predicate, append([]FieldID(nil), request.hydration.fields...), true
+}
+
 func (request FrozenReadRequest) Where() (FrozenPredicate, bool) {
 	if request.where == nil {
 		return FrozenPredicate{}, false
@@ -1353,6 +1371,9 @@ func (request FrozenReadRequest) Selector() (FrozenUniqueSelector, bool) {
 
 func (request FrozenReadRequest) clone() FrozenReadRequest {
 	result := request
+	if request.hydration != nil {
+		result.hydration = &frozenIdentityHydration{predicate: request.hydration.predicate, fields: append([]FieldID(nil), request.hydration.fields...)}
+	}
 	result.orders = request.OrderBy()
 	result.distinct = request.Distinct()
 	result.selection = request.Selection()

@@ -1,7 +1,8 @@
 # Semantic indexes
 
-Declaring a semantic index gives a model two capabilities: search by text, and
-find rows like this row. Neither needs a resolver.
+Declaring a semantic index gives a model search by text, search by a prepared
+vector, rows like this row, and authorized stored-vector reads. None needs a
+resolver.
 
 The program on this page is executed by `TestSemanticApplicationRuns`.
 
@@ -21,16 +22,19 @@ func DefineSchema(schema *golem.Schema) {
 }
 ```
 
-Generation emits two methods per index, on the caller, system and transaction
+Generation emits four methods per index, on the caller, system and transaction
 clients:
 
 ```go
 caller.Notes.SearchRelated(ctx, "flour water", 3)
 caller.Notes.SimilarRelated(ctx, notes.Notes.ByID.Value(id), 2)
+caller.Notes.SearchByVectorRelated(ctx, queryVector, 3)
+caller.Notes.VectorsRelated(ctx, notes.Notes.ByID.Value(id))
 ```
 
-Both accept optional predicates, take a `take` between 1 and 1000, and return
-`SemanticResult` values carrying `Row()`, `Distance()` and `Similarity()`.
+The three search methods accept optional predicates, take a `take` between 1
+and 1000, and return `SemanticResult` values carrying `Row()`, `Distance()` and
+`Similarity()`. `VectorsRelated` accepts unique selectors, as described below.
 
 GraphQL normally receives the corresponding search and similarity roots. When
 a custom operation owns the public search semantics, keep the semantic index
@@ -109,6 +113,66 @@ the neighbourhood.
 
 Predicates you pass narrow that set further; they cannot widen it.
 
+## Searching with a prepared vector
+
+`SearchByVectorRelated` accepts an `embedding.QueryVector`. Build it with
+`embedding.NewQueryVector(specification, vector)`, where `specification` is the
+registered embedding provider's `Specification` and `vector` is an immutable
+`embedding.Vector`. The full specification must match the selected index:
+provider, model, revision, dimensions and batch contract. A matching width alone
+is insufficient. The application is responsible for this provenance claim when
+it builds a derived vector, such as the mean of previously read vectors.
+
+The constructor rejects missing specifications, dimension mismatches, nonfinite
+components and zero cosine norm. Ranking also applies the existing exact-cosine
+norm bounds. It authorizes rows and every indexed source field through the same
+candidate planner as text search, then hydrates the ranked rows through ordinary
+authorized reads. Row readability alone does not authorize hidden indexed text.
+Wholly denied fields can refuse the request; conditionally unreadable indexed
+fields exclude those rows from candidacy.
+
+Prepared-vector ranking makes no embedding-provider call, including on caller
+and system transaction clients. Prepare textual queries before opening the
+transaction: construct an `embedding.NewQueryInput`, call your provider, check
+its result with `embedding.ValidateResult`, and wrap the resulting vector with
+`embedding.NewQueryVector`. Pass that value to the transaction client's
+`SearchByVectorRelated`. Text search refuses to call a provider while a
+single-connection transaction is open, since the provider could need the same
+connection. Ordinary text search outside a transaction is unchanged.
+
+These Go methods require regenerated clients. Vector input is not exposed as a
+generated GraphQL search root.
+
+## Reading stored vectors
+
+`VectorsRelated(ctx, selectors...)` returns a
+`[]golem.ReadValue[embedding.QueryVector]` with one cell per selector, in input
+order. Duplicate selectors retain their own cells. Use `Get()` to check whether
+a vector is available. Missing rows, unreadable rows, denied
+indexed fields, pending vectors, and obsolete embedding-space revisions expose
+no vector. These unavailable cases have the same null cell; they do not disclose
+which check failed. Normal model/selector authorization refusals, invalid
+selectors and ambiguous unique lookups remain errors.
+
+The caller must be allowed to read the source row, its identity and every
+indexed source field. Other fields are not selected. An internal field is
+hidden from GraphQL, but still needs its own Go read permission before its
+derived vector can be disclosed. There is no separate permission that bypasses
+these checks.
+
+The source count uses the existing semantic result ceiling of 1,000. Normal
+model/read `take` limits can lower it. Retrieval uses bounded SQL batches and
+can split them further to fit parameter or statement-size limits. A policy that
+cannot fit even one source still fails with the applicable capacity error.
+Each statement joins source selection, authorization, readiness and the current
+embedding-space fingerprint in one database snapshot. Use a transaction client
+when every batch must share that transaction's snapshot.
+
+Vector reads make no embedding-provider call and do not wait for indexing.
+Present cells carry the registered specification and can be passed directly to
+`SearchByVectorRelated`, or used to prepare a derived vector in that same space.
+These methods are Go APIs; no generated GraphQL vector-read root is added.
+
 ## Similarity requires reading the source
 
 `SimilarRelated` resolves its source through an ordinary authorized read
@@ -138,6 +202,23 @@ Golem marks a row stale on every write that touches it, whatever the write
 changed. The drain recomputes the content hash of the embedded columns and
 re-embeds only a row whose hash differs; an unchanged row is flipped back to
 ready without a provider call.
+
+Inside an open transaction, semantic reads also exclude rows in that
+transaction's pending mark buffer. Ranking, similarity and vector retrieval
+therefore cannot use the previous ready vector after the transaction changes
+its source row. Durable marks and drain jobs still flush with the transaction's
+other commit work. A rollback leaves the previous ready vector available.
+
+For a document derived from related credits or companies, maintain an explicit
+internal text column on the indexed model. The application command that changes
+those related rows must recompute that column from its source facts and update
+it in the same transaction. Golem then marks the indexed owner stale atomically;
+the drain embeds its new document after commit. Updating only a related row does
+not automatically recompute or invalidate this application-owned document.
+Granting read access to the document column authorizes its composed content.
+Reflect any restrictions on the contributing fields in that column's policy,
+or keep differently authorized content in separate documents/indexes. Golem
+cannot infer the field permissions of application-owned text composition.
 
 **A stale row does not rank.** It is excluded until re-embedded, and a
 similarity request whose source is stale fails with the same "unavailable"
@@ -475,3 +556,29 @@ func main() {
 search returned 3
 similar returned 2
 ```
+
+## Local exact-ranking characterization (unreleased)
+
+The [generated public-API benchmark](../../go/internal/semantic/runtime/rank_public_benchmark_test.go)
+measured 3,864 rows with 1,024-dimensional vectors on 2026-11-15. The fixture's
+generated-code identity check passed in the same run. Environment: Apple M3 Pro,
+18 GiB RAM, macOS/arm64, Go 1.26.10, `GOMAXPROCS=1`, low CPU priority, one SQLite
+connection, DELETE journal, and the network-filesystem durability policy on
+local temporary storage. The embedding provider is deterministic; no remote
+embedding request is included.
+
+All durations below are milliseconds. Each case retains 25 warm-query samples;
+percentiles use nearest rank, so p99 equals the observed maximum at this sample
+size. The first observed query is recorded separately. Neither the OS nor
+SQLite caches were flushed.
+
+| Operation | First observed | Warm p50 | Warm p95 | Warm p99 / max |
+|---|---:|---:|---:|---:|
+| Search, unfiltered | 30.364 | 23.120 | 38.996 | 47.275 |
+| Search, 0.1% selective predicate | 0.806 | 0.543 | 0.991 | 1.130 |
+| Similar, unfiltered | 30.069 | 27.969 | 47.125 | 51.133 |
+| Similar, 0.1% selective predicate | 0.578 | 0.633 | 0.896 | 0.942 |
+
+This is a synthetic local measurement. Cold-cache latency, NAS latency, the
+application baseline, and the combined scan/job/playback workload remain
+unmeasured; these results establish no production latency guarantee.

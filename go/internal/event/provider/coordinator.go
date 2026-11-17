@@ -27,8 +27,12 @@ const (
 	DefaultClaimBytes     = 16 << 20
 	MaximumClaimBytes     = 64 << 20
 	MaximumCausationFacts = 1000
-	MaximumRetentionRows  = 4096
-	MaximumFailureCode    = 128
+	// Mutation-derived evidence includes the V4 graph once on ordinal 1.
+	// Keep the released whole-causation byte ceiling shared by producers,
+	// historical consumers and V4 publication admission.
+	MaximumCausationEvidenceBytes = 1 << 20
+	MaximumRetentionRows          = 4096
+	MaximumFailureCode            = 128
 )
 
 var failureCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)

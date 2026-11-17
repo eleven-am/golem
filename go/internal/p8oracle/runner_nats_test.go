@@ -32,14 +32,22 @@ func TestOrder7NATSLiveAuthorityIsExact(t *testing.T) {
 func TestOrder7RequiredNATSEnvironmentFailsClosed(t *testing.T) {
 	missingDocker := func(string) (string, error) { return "", errors.New("missing") }
 	docker := func(string) (string, error) { return "/usr/bin/docker", nil }
-	missingImage := func(string) bool { return false }
-	image := func(value string) bool { return value == order7NATSImage }
+	missingImage := func(string) (bool, error) { return false, nil }
+	image := func(value string) (bool, error) { return value == order7NATSImage, nil }
+	inspectionFailure := errors.New("local Docker inspection deadline")
+	failedInspection := func(string) (bool, error) { return false, inspectionFailure }
 
 	if available, err := order7NATSAvailable("1", "1", missingDocker, image); available || err == nil {
 		t.Fatalf("required missing Docker availability=(%t,%v)", available, err)
 	}
 	if available, err := order7NATSAvailable("1", "1", docker, missingImage); available || err == nil {
 		t.Fatalf("required missing image availability=(%t,%v)", available, err)
+	}
+	if available, err := order7NATSAvailable("1", "1", docker, failedInspection); available || !errors.Is(err, inspectionFailure) {
+		t.Fatalf("required inspection lost its cause=(%t,%v)", available, err)
+	}
+	if available, err := order7NATSAvailable("0", "", docker, failedInspection); available || err != nil {
+		t.Fatalf("optional inspection failure availability=(%t,%v)", available, err)
 	}
 	if available, err := order7NATSAvailable("0", "", missingDocker, image); available || err != nil {
 		t.Fatalf("optional missing Docker availability=(%t,%v)", available, err)
@@ -57,14 +65,17 @@ func TestOrder7RequiredNATSRequiresMandatoryPostgreSQL(t *testing.T) {
 		t.Fatal("inspected Docker before mandatory PostgreSQL mode")
 		return "", nil
 	}
-	unexpectedImage := func(string) bool { t.Fatal("inspected image before mandatory PostgreSQL mode"); return false }
+	unexpectedImage := func(string) (bool, error) {
+		t.Fatal("inspected image before mandatory PostgreSQL mode")
+		return false, nil
+	}
 	for _, value := range []string{"", "0", "required"} {
 		if available, err := order7NATSAvailable("1", value, unexpectedDocker, unexpectedImage); available || err == nil {
 			t.Fatalf("NATS-required PostgreSQL mode %q availability=(%t,%v)", value, available, err)
 		}
 	}
 	docker := func(string) (string, error) { return "/usr/bin/docker", nil }
-	image := func(string) bool { return true }
+	image := func(string) (bool, error) { return true, nil }
 	if available, err := order7NATSAvailable("", "", docker, image); !available || err != nil {
 		t.Fatalf("optional NATS/PostgreSQL availability=(%t,%v)", available, err)
 	}

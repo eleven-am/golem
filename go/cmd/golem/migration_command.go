@@ -62,6 +62,12 @@ func runMigration(ctx context.Context, directory string, args []string, stdout, 
 	switch args[0] {
 	case "new":
 		return runMigrationNew(ctx, directory, args[1:], stdout, stderr)
+	case "data":
+		if len(args) < 2 || args[1] != "new" {
+			writeError(stderr, errors.New(usage))
+			return 2
+		}
+		return runMigrationNewMode(ctx, directory, args[2:], stdout, stderr, true)
 	case "plan":
 		return runMigrationPlan(ctx, directory, args[1:], stdout, stderr)
 	case "apply":
@@ -79,15 +85,24 @@ func runMigration(ctx context.Context, directory string, args []string, stdout, 
 }
 
 func runMigrationNew(ctx context.Context, directory string, args []string, stdout, stderr io.Writer) int {
+	return runMigrationNewMode(ctx, directory, args, stdout, stderr, false)
+}
+
+func runMigrationNewMode(ctx context.Context, directory string, args []string, stdout, stderr io.Writer, dataOnly bool) int {
 	flags := flag.NewFlagSet("migration new", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	name := flags.String("name", "", "canonical migration slug")
 	schemaPattern := flags.String("schema", ".", "Go package pattern containing the schema root")
 	rootName := flags.String("root", "DefineSchema", "schema root function name")
 	migrations := flags.String("migrations", workflow.DefaultRoot, "module-relative migration history root")
+	var field, filename string
+	if dataOnly {
+		flags.StringVar(&field, "field", "", "existing Model.Field correction target")
+		flags.StringVar(&filename, "file", "", "reviewed provider UPDATE companion")
+	}
 	var approvals approvalFlags
 	flags.Var(&approvals, "approve", "exact destructive operation ID to approve (repeatable)")
-	if err := flags.Parse(args); err != nil || *name == "" || *schemaPattern == "" || flags.NArg() != 0 {
+	if err := flags.Parse(args); err != nil || *name == "" || *schemaPattern == "" || flags.NArg() != 0 || dataOnly && (field == "" || filename == "") {
 		writeError(stderr, errors.New(usage))
 		return 2
 	}
@@ -125,11 +140,31 @@ func runMigrationNew(ctx context.Context, directory string, args []string, stdou
 	for index, value := range approvals {
 		approved[index] = migration.OperationID(value)
 	}
-	prepared, err := workflow.PrepareNew(ctx, workflow.NewRequest{
+	newRequest := workflow.NewRequest{
 		ModuleDir: module.directory, Root: migrationRoot, Name: *name,
 		ModelFingerprint: result.ModelFingerprint, ContractFingerprint: result.ContractFingerprint,
 		Model: result.Compilation.Model, PreviousModel: previousModel, Providers: providers, Approvals: approved,
-	})
+	}
+	var prepared workflow.NewResult
+	if dataOnly {
+		if !filepath.IsAbs(filename) {
+			filename = filepath.Join(directory, filename)
+		}
+		file, openErr := os.Open(filename)
+		if openErr != nil {
+			writeError(stderr, errors.New("reviewed data correction file could not be read"))
+			return 1
+		}
+		reviewed, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil {
+			writeError(stderr, errors.New("reviewed data correction file could not be read"))
+			return 1
+		}
+		prepared, err = workflow.PrepareDataCorrection(ctx, workflow.DataCorrectionRequest{NewRequest: newRequest, Field: field, SQL: reviewed})
+	} else {
+		prepared, err = workflow.PrepareNew(ctx, newRequest)
+	}
 	if err != nil {
 		writeError(stderr, err)
 		return 1
@@ -166,7 +201,7 @@ func runMigrationBackfillAttach(ctx context.Context, directory string, args []st
 	flags.SetOutput(stderr)
 	migrationID := flags.String("migration", "", "exact pending migration ID")
 	field := flags.String("field", "", "exact Model.Field backfill target")
-	filename := flags.String("file", "", "reviewed PostgreSQL SQL file")
+	filename := flags.String("file", "", "reviewed provider SQL file")
 	migrations := flags.String("migrations", workflow.DefaultRoot, "module-relative migration history root")
 	if err := flags.Parse(args); err != nil || *migrationID == "" || *field == "" || *filename == "" || flags.NArg() != 0 {
 		writeError(stderr, errors.New(usage))
@@ -195,10 +230,12 @@ func runMigrationBackfillAttach(ctx context.Context, directory string, args []st
 		writeError(stderr, errors.New("reviewed backfill file could not be read"))
 		return 1
 	}
-	render, err := providerRenderer(ir.PostgreSQL)
-	if err != nil {
-		writeError(stderr, err)
-		return 1
+	render := func(entry migration.ManifestEntry) ([]byte, error) {
+		providerRender, err := providerRenderer(entry.AfterSnapshot.Provider.Provider)
+		if err != nil {
+			return nil, err
+		}
+		return providerRender(entry)
 	}
 	prepared, err := workflow.PrepareBackfillAttach(ctx, workflow.BackfillAttachRequest{ModuleDir: module.directory, Root: migrationRoot, MigrationID: migration.MigrationID(*migrationID), Field: *field, SQL: reviewed, Render: render})
 	if err != nil {

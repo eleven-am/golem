@@ -80,19 +80,19 @@ func TestCanonicalContractSortsAndFingerprintsOptimisticConcurrencyProjection(t 
 	}
 }
 
-func TestOptimisticConcurrencyContractFormatIsV6AndCurrentIsV7(t *testing.T) {
+func TestOptimisticConcurrencyContractFormatIsV6AndCurrentIsV8(t *testing.T) {
 	if OptimisticConcurrencyContractFormatVersionRequired != 6 {
 		t.Fatalf("required optimistic concurrency ContractIR version = %d, want reviewed v6", OptimisticConcurrencyContractFormatVersionRequired)
 	}
-	if ContractFormatVersion != 7 {
-		t.Fatalf("current ContractIR version = %d, want v7", ContractFormatVersion)
+	if ContractFormatVersion != 8 {
+		t.Fatalf("current ContractIR version = %d, want v8", ContractFormatVersion)
 	}
 }
 
-func TestContractV7CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
+func TestContractV8CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
 	const (
-		wantBytes       = `{"formatVersion":7,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`
-		wantFingerprint = Fingerprint("3562ed2ecea99b14b957f0657bfb8856a0b25fd32ab473d5c9a0417e755feb3a")
+		wantBytes       = `{"formatVersion":8,"graphqlAbiVersion":5,"models":[],"enums":[],"methods":[],"customOperations":[]}`
+		wantFingerprint = Fingerprint("5eb46fd8f5993c6744d445acbdf822d7a7a3832d31adec954792b0e19c90747c")
 	)
 	contract := ContractIR{FormatVersion: ContractFormatVersion, GraphQLABIVersion: 5}
 	encoded, err := CanonicalContract(contract)
@@ -100,7 +100,7 @@ func TestContractV7CanonicalEmptyBytesAndFingerprintAreExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(encoded) != wantBytes {
-		t.Fatalf("canonical v7 bytes changed:\n got %s\nwant %s", encoded, wantBytes)
+		t.Fatalf("canonical v8 bytes changed:\n got %s\nwant %s", encoded, wantBytes)
 	}
 	fingerprint, err := ContractFingerprint(contract)
 	if err != nil {

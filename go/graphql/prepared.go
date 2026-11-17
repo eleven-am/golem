@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
+	"github.com/eleven-am/golem/go/golem"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -166,7 +167,32 @@ func coercePrepared[T any](value any) (T, error) {
 	return result, nil
 }
 
+type preparedScalarRangeError struct{ target reflect.Type }
+
+func (err *preparedScalarRangeError) Error() string {
+	return fmt.Sprintf("prepared numeric value exceeds %s range", err.target)
+}
+
 func coercePreparedValue(value any, target reflect.Type) (reflect.Value, error) {
+	source := reflect.ValueOf(value)
+	if source.IsValid() && source.Type().AssignableTo(target) && target.Kind() != reflect.Slice && target.Kind() != reflect.Map && target.Kind() != reflect.Interface {
+		return source, nil
+	}
+	if target.Kind() == reflect.Struct {
+		result := reflect.New(target)
+		recognized, err := golem.RuntimeDecodeInputValue(result.Interface(), value, func(raw, into any) error {
+			destination := reflect.ValueOf(into).Elem()
+			converted, err := coercePreparedValue(raw, destination.Type())
+			if err != nil {
+				return err
+			}
+			destination.Set(converted)
+			return nil
+		})
+		if recognized {
+			return result.Elem(), err
+		}
+	}
 	if value == nil {
 		switch target.Kind() {
 		case reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -175,12 +201,10 @@ func coercePreparedValue(value any, target reflect.Type) (reflect.Value, error) 
 			return reflect.Value{}, fmt.Errorf("prepared non-null %s is null", target)
 		}
 	}
-	source := reflect.ValueOf(value)
-	if source.Type().AssignableTo(target) {
-		return source, nil
-	}
 	if target.Kind() == reflect.Interface && source.Type().Implements(target) {
-		return source, nil
+		// An interface may contain an already-typed mutable list/map. Decode
+		// through its concrete type so it shares the same ownership boundary.
+		return coercePreparedValue(value, source.Type())
 	}
 	if target.Kind() == reflect.Pointer {
 		item, err := coercePreparedValue(value, target.Elem())
@@ -191,7 +215,43 @@ func coercePreparedValue(value any, target reflect.Type) (reflect.Value, error) 
 		pointer.Elem().Set(item)
 		return pointer, nil
 	}
+	if target.Kind() == reflect.Struct {
+		result := reflect.New(target)
+		if recognized, err := golem.RuntimeDecodeJSONInput(result.Interface(), value); recognized {
+			return result.Elem(), err
+		}
+		if fields, ok := value.(map[string]any); ok {
+			result := reflect.New(target).Elem()
+			known := make(map[string]bool, target.NumField())
+			for index := 0; index < target.NumField(); index++ {
+				field := target.Field(index)
+				if !field.IsExported() || field.Anonymous {
+					return reflect.Value{}, fmt.Errorf("prepared object %s has an unsupported field", target)
+				}
+				name := generatedArgumentName(field)
+				known[name] = true
+				item, present := fields[name]
+				if !present {
+					continue
+				}
+				converted, err := coercePreparedValue(item, field.Type)
+				if err != nil {
+					return reflect.Value{}, fmt.Errorf("prepared field %s: %w", name, err)
+				}
+				result.Field(index).Set(converted)
+			}
+			for name := range fields {
+				if !known[name] {
+					return reflect.Value{}, fmt.Errorf("prepared object %s has unknown field %s", target, name)
+				}
+			}
+			return result, nil
+		}
+	}
 	if target.Kind() == reflect.Slice && (source.Kind() == reflect.Slice || source.Kind() == reflect.Array) {
+		if source.Kind() == reflect.Slice && source.IsNil() {
+			return reflect.Zero(target), nil
+		}
 		result := reflect.MakeSlice(target, source.Len(), source.Len())
 		for index := 0; index < source.Len(); index++ {
 			item, err := coercePreparedValue(source.Index(index).Interface(), target.Elem())
@@ -203,6 +263,9 @@ func coercePreparedValue(value any, target reflect.Type) (reflect.Value, error) 
 		return result, nil
 	}
 	if target.Kind() == reflect.Map && source.Kind() == reflect.Map && target.Key().Kind() == reflect.String {
+		if source.IsNil() {
+			return reflect.Zero(target), nil
+		}
 		result := reflect.MakeMapWithSize(target, source.Len())
 		iterator := source.MapRange()
 		for iterator.Next() {
@@ -219,6 +282,21 @@ func coercePreparedValue(value any, target reflect.Type) (reflect.Value, error) 
 		return result, nil
 	}
 	if source.Type().ConvertibleTo(target) && samePreparedScalarFamily(source.Kind(), target.Kind()) {
+		// Convert narrows silently. The Go witness can be narrower than its
+		// GraphQL scalar (for example int16 under Int), so check before casting.
+		destination := reflect.Zero(target)
+		overflow := false
+		switch source.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			overflow = destination.OverflowInt(source.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			overflow = destination.OverflowUint(source.Uint())
+		case reflect.Float32, reflect.Float64:
+			overflow = destination.OverflowFloat(source.Float())
+		}
+		if overflow {
+			return reflect.Value{}, &preparedScalarRangeError{target: target}
+		}
 		return source.Convert(target), nil
 	}
 	return reflect.Value{}, fmt.Errorf("prepared GraphQL value %T cannot become %s", value, target)

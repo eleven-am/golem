@@ -2,18 +2,14 @@ package runtime
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	publicgraphql "github.com/eleven-am/golem/go/graphql"
-	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
@@ -123,70 +119,6 @@ func newP5OracleHarness(t *testing.T, indexed bool) p5OracleHarness {
 		t.Fatal(err)
 	}
 	return p5OracleHarness{database: app, server: server, fixture: fixture, users: users, userID: userID, userName: userName, posts: posts, postID: postID, postTitle: postTitle, userPosts: userPosts, captured: captured}
-}
-
-func p5GraphQLBundle(t testing.TB, bundle golem.SchemaBundle) (golem.SchemaBundle, compilerir.CompilationIR) {
-	t.Helper()
-	var compilation compilerir.CompilationIR
-	if err := json.Unmarshal(bundle.Model().Bytes(), &compilation.Model); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(bundle.Contract().Bytes(), &compilation.Contract); err != nil {
-		t.Fatal(err)
-	}
-	models := make(map[compilerir.ModelID]compilerir.ModelDeclIR, len(compilation.Model.Models))
-	for _, model := range compilation.Model.Models {
-		models[model.ID] = model
-	}
-	for index := range compilation.Contract.Models {
-		contract := &compilation.Contract.Models[index]
-		model := models[contract.ModelID]
-		contract.GraphQLName, contract.Exposed = model.LogicalName, true
-		fieldByID := make(map[compilerir.FieldID]compilerir.FieldIR, len(model.Fields))
-		for _, field := range model.Fields {
-			fieldByID[field.ID] = field
-		}
-		for fieldIndex := range contract.Fields {
-			field := fieldByID[contract.Fields[fieldIndex].FieldID]
-			contract.Fields[fieldIndex].GraphQLName = graphqlcontract.LowerCamel(field.GoName)
-		}
-		keys := make([]compilerir.KeyIR, 0, 1+len(model.Uniques))
-		if model.PrimaryKey != nil {
-			keys = append(keys, *model.PrimaryKey)
-		}
-		keys = append(keys, model.Uniques...)
-		for _, key := range keys {
-			if len(key.Fields) == 0 {
-				continue
-			}
-			parts := make([]string, len(key.Fields))
-			for i, fieldID := range key.Fields {
-				parts[i] = graphqlcontract.LowerCamel(fieldByID[fieldID].GoName)
-			}
-			contract.Selectors = append(contract.Selectors, compilerir.SelectorContractIR{KeyID: key.ID, Kind: key.Kind, Name: strings.Join(parts, "_"), Fields: append([]compilerir.FieldID(nil), key.Fields...)})
-		}
-	}
-	for _, diagnostic := range graphqlcontract.Normalize(&compilation, nil) {
-		if diagnostic.Severity == compilerir.SeverityError {
-			t.Fatalf("normalize GraphQL fixture: %s: %s", diagnostic.Code, diagnostic.Message)
-		}
-	}
-	payload, err := compilerir.CanonicalContract(compilation.Contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fingerprint, err := compilerir.ContractFingerprint(compilation.Contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := hex.DecodeString(string(fingerprint))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var digest golem.SchemaDigest
-	copy(digest[:], decoded)
-	contractDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest, payload)
-	return golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), contractDocument, bundle.Providers()...), compilation
 }
 
 func (h p5OracleHarness) seed(t testing.TB, users [][2]string, posts [][3]string) {

@@ -18,6 +18,14 @@ When the client patches and when it refetches:
 
 License: GPL-3.0.
 
+## Client 0.3.0
+
+Adds generated DTO/input metadata, static queries, custom continuation pages and
+declared invalidation. Recovery generations fence stale responses across stream
+replacement, and authenticated data-identity discovery resets old cache and
+mutation state after restore or a session change. Use the matching generated
+manifest from go/v0.9.0 for these capabilities.
+
 ## Install
 
 ```sh
@@ -80,7 +88,7 @@ const observer = new QueryObserver(queryClient, golem.queryOptions(POSTS, { tag:
 observer.subscribe((result) => render(result.data))
 ```
 
-`client.live.start()` needs no React. `golem.queryOptions`, `golem.infiniteQueryOptions` and `golem.staticQueryOptions` return plain TanStack options; `golem.mutate(document, variables)` runs a mutation. A document holds exactly one operation; a document with several is refused with `GolemMultipleOperationsError`, so split it into one document per operation.
+`client.live.start()` needs no React. `golem.queryOptions`, `golem.infiniteQueryOptions`, `golem.staticQueryOptions`, `golem.staticInfiniteQueryOptions` and `golem.staticContinuationQueryOptions` return plain TanStack options; `golem.mutate(document, variables)` runs a mutation. A document holds exactly one operation; a document with several is refused with `GolemMultipleOperationsError`, so split it into one document per operation.
 
 ## Hooks
 
@@ -90,9 +98,11 @@ Every hook takes a GraphQL document, as a string or as a gql.tada typed document
 |---|---|
 | `useGolemQuery(doc, variables?, options?)` | `useQuery` over `client.queryOptions`. The query is live: its streams are open while the component is mounted, and the cache follows the server. |
 | `useGolemInfiniteQuery(doc, variables?, options?)` | `useInfiniteQuery` over a list query with a `take`. Pages stay live. You never write `cursor` or `skip`; the client adds them from the manifest. `hasNextPage` is true while the last page is full. |
+| `useGolemStaticInfiniteQuery(doc, variables?, options?)` | The same generated-list cursor pagination without event streams. Works for models without subscriptions. Normal TanStack refetch options still apply. |
+| `useGolemStaticContinuationQuery(doc, variables?, options?)` | Static custom `PageQuery` pagination using opaque `next` tokens. Empty pages can continue; `next: null` ends traversal. The client owns `after`. Reset the whole chain after continuation expiry or a profile change. |
 | `useGolemMutation(doc, options?)` | `useMutation` over `client.mutate`. A committed mutation marks every cached query over the models it touches as stale, so the live event or the refetch brings it up to date; the mutation result is never written into the cache. |
 | `useGolemStatus(doc, variables?, { infinite? })` | The live status of a query (below), or `undefined` before the query exists. |
-| `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` for a document you want fetched once and never refreshed. Counts and aggregates are live through `useGolemQuery`. |
+| `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` without event streams, preserving authored model field selections. Normal TanStack refetch options still apply. Counts and aggregates can be live through `useGolemQuery`. |
 
 ```tsx
 function Posts({ tag }: { tag: string }) {

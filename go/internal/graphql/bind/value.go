@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/golem"
+	compileerr "github.com/eleven-am/golem/go/internal/bindingerr"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	"github.com/eleven-am/golem/go/internal/graphql/compileerr"
 	graphqlscalar "github.com/eleven-am/golem/go/internal/graphql/scalar"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
@@ -214,9 +214,16 @@ func (s *inputState) value(logical compilerir.LogicalTypeIR, raw any) (policyir.
 		if !ok {
 			return policyir.Value{}, compileerr.Invariantf("enum %s is absent", *logical.EnumID)
 		}
+		allowed := make([]string, 0, len(enum.Values))
+		for _, value := range enum.Values {
+			allowed = append(allowed, value.GraphQLName)
+		}
+		enumError := func(detail compileerr.Detail) error {
+			return invalid(detail, enum.GraphQLName, compileerr.ExpectedType(enum.GraphQLName), compileerr.AllowedValues(allowed))
+		}
 		name, ok := raw.(string)
 		if !ok {
-			return policyir.Value{}, invalid(compileerr.ValueWrongKind, enum.GraphQLName)
+			return policyir.Value{}, enumError(compileerr.ValueWrongKind)
 		}
 		var valueID compilerir.EnumValueID
 		for _, value := range enum.Values {
@@ -226,7 +233,7 @@ func (s *inputState) value(logical compilerir.LogicalTypeIR, raw any) (policyir.
 			}
 		}
 		if valueID == "" {
-			return policyir.Value{}, invalid(compileerr.ValueUnknownEnum, enum.GraphQLName)
+			return policyir.Value{}, enumError(compileerr.ValueUnknownEnum)
 		}
 		enumID, enumErr := fixedID(string(*logical.EnumID))
 		if enumErr != nil {

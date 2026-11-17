@@ -3,14 +3,15 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/eleven-am/golem/go/golem"
 	publicgraphql "github.com/eleven-am/golem/go/graphql"
-	"github.com/eleven-am/golem/go/internal/testenv"
+	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
+	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
 const compileErrorMarker = "private-driver-token"
@@ -41,7 +42,7 @@ func compileErrorCases() []compileErrorCase {
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "take"}},
 		{name: "skip-negative", query: `{ users(skip: -1) { id } }`, message: "Argument skip on User must be at least 0", path: []any{"users"},
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "reason": "INVALID_VALUE", "argument": "skip"}},
-		{name: "skip-variable-omitted", query: `query($k: Int) { users(skip: $k) { id } }`, message: "Argument skip on User cannot be null", path: []any{"users"},
+		{name: "skip-variable-null", query: `query($k: Int) { users(skip: $k) { id } }`, variables: map[string]any{"k": nil}, message: "Argument skip on User cannot be null", path: []any{"users"},
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "skip"}},
 		{name: "where-null", query: `{ users(where: null) { id } }`, message: "Argument where on User cannot be null", path: []any{"users"},
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "where"}},
@@ -78,8 +79,8 @@ func compileErrorCases() []compileErrorCase {
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "distinct"}},
 		{name: "distinct-empty", query: `{ users(distinct: []) { id } }`, message: "Argument distinct on User must not be empty", path: []any{"users"},
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "distinct"}},
-		{name: "relation-filter-empty", query: `{ users(where: {friendshipsFrom: {some: {}}}) { id } }`, message: "Input where.friendshipsFrom.some on User must not be empty", path: []any{"users"},
-			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "where.friendshipsFrom.some"}},
+		{name: "relation-filter-empty", query: `{ users(where: {friendshipsFrom: {}}) { id } }`, message: "Input where.friendshipsFrom on User must not be empty", path: []any{"users"},
+			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "where.friendshipsFrom"}},
 		{name: "relation-filter-null", query: `{ users(where: {posts: {some: null}}) { id } }`, message: "Input where.posts.some on User cannot be null", path: []any{"users"},
 			extensions: map[string]any{"code": "BAD_USER_INPUT", "argument": "where.posts.some"}},
 		{name: "relation-count-where-empty", query: `{ users { _count { posts(where: {}) } } }`, message: "Argument where on Post must not be empty", path: []any{"users"},
@@ -105,28 +106,38 @@ func compileErrorCases() []compileErrorCase {
 	}
 }
 
+// These are pre-execution refusals: use the real generated compiler/server,
+// with no database or mutation executor that could hide an accidental begin.
 func TestGraphQLCompileErrorsAreTypedAndPrecise(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		assertCompileErrorCases(t, newSocialMutationFixture(t, golem.ModelID{}, nil))
-	})
-	for _, profile := range postgresAcceptanceProfiles() {
-		profile := profile
-		t.Run("postgresql-"+profile.name, func(t *testing.T) {
-			if profile.dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
-			}
-			assertCompileErrorCases(t, newPostgresSocialMutationFixture(t, profile, golem.ModelID{}, nil))
-		})
-	}
-}
-
-func assertCompileErrorCases(t *testing.T, fixture socialMutationFixture) {
-	t.Helper()
 	var begins atomic.Int64
-	harness := newP5SocialGraphQLHarnessWith(t, fixture, compileErrorLimits, func() { begins.Add(1) }, nil)
+	fixture := schematest.NewSubscribedSocialMutation(t)
+	bundle, compilation := p5GraphQLBundle(t, fixture.Bundle)
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := publicgraphql.NewGeneratedExecutor(publicgraphql.GeneratedExecutorConfig[int]{
+		Bundle: bundle, Limits: compileErrorLimits,
+		BeginCaller: func(context.Context, int) (publicgraphql.CallerExecution, error) {
+			begins.Add(1)
+			return nil, fmt.Errorf("compile refusal unexpectedly began caller execution")
+		},
+		ReportInternalError: func(_ context.Context, err error) { t.Error(err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := publicgraphql.NewServer(document.SDL, publicgraphql.Config[int]{
+		PrincipalFromContext: func(context.Context) (int, bool) { return 1, true },
+		ContractFingerprint:  bundle.Contract().Fingerprint(),
+		ReportInternalError:  func(_ context.Context, err error) { t.Error(err) },
+	}, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range allCompileErrorCases() {
 		t.Run(test.name, func(t *testing.T) {
-			response := harness.server.Execute(context.Background(), graphMutationPrincipal{}, publicgraphql.Request{Query: test.query, Variables: test.variables})
+			response := server.Execute(context.Background(), 1, publicgraphql.Request{Query: test.query, Variables: test.variables})
 			if response.Data != nil || len(response.Errors) != 1 {
 				t.Fatalf("response=%#v want exactly one error and no data", response)
 			}

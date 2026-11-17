@@ -105,20 +105,23 @@ describe('single slots', () => {
     const view = await mount(maybeFeatured, '{ featuredPost { title } }', () => ({ featuredPost: deleted ? post('b', '3') : post('a', '1') }))
     deleted = true
     view.emit('postEvents', { version: '2', type: 'DELETED', id: 'a', entity: null }, 0)
-    expect(view.query.state.data).toEqual({ featuredPost: post('a', '1') })
+    expect(view.query.state.data).toBeUndefined()
+    expect(view.live.statusOf(view.query)?.state).toBe('RECOVERING')
     await until(() => view.transport.executes === 2)
-    await until(() => (view.query.state.data as { featuredPost: unknown }).featuredPost !== null)
+    await until(() => (view.query.state.data as { featuredPost?: { id: string } } | undefined)?.featuredPost?.id === 'b')
     expect(view.query.state.data).toEqual({ featuredPost: post('b', '3') })
+    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
   })
 
-  it('keeps a custom single root LIVE and refetches it when its row exits', async () => {
+  it('invalidates a custom single root immediately and returns LIVE after its refetch', async () => {
     let held = true
     const view = await mount(featured, '{ featuredPost { title } }', () => (held ? { featuredPost: post('a', '1') } : { featuredPost: post('b', '3') }))
     held = false
     view.emit('postEvents', { version: '2', type: 'EXITED', id: 'a', entity: null }, 0)
-    expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
+    expect(view.query.state.data).toBeUndefined()
+    expect(view.live.statusOf(view.query)?.state).toBe('RECOVERING')
     await until(() => view.transport.executes === 2)
-    await until(() => (view.query.state.data as { featuredPost: { id: string } }).featuredPost.id === 'b')
+    await until(() => (view.query.state.data as { featuredPost?: { id: string } } | undefined)?.featuredPost?.id === 'b')
     expect(view.live.statusOf(view.query)?.state).toBe('LIVE')
   })
 

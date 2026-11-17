@@ -11,6 +11,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/bind"
+	"github.com/eleven-am/golem/go/internal/policy/capture"
 	"github.com/eleven-am/golem/go/internal/policy/imply"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
@@ -428,7 +429,17 @@ type BuildRequest[A any] struct {
 	Capabilities policysql.CapabilityProof
 }
 
+// BuildHistorical is the internal admission boundary for a runtime with
+// historical writers and consumers installed. Ordinary Build remains gated.
+func BuildHistorical[A any](request BuildRequest[A]) (*Set, error) {
+	return build(request, true)
+}
+
 func Build[A any](request BuildRequest[A]) (*Set, error) {
+	return build(request, false)
+}
+
+func build[A any](request BuildRequest[A], historical bool) (*Set, error) {
 	if request.Registry == nil {
 		return nil, fmt.Errorf("P2_RUNTIME_SCHEMA: registry is nil")
 	}
@@ -453,10 +464,10 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 	for _, model := range models {
 		policies[ir.ModelID(model)] = &lazyPolicy{
 			build: func() (builtPolicy, error) {
-				return buildModelPolicy(shared, resolver, providers, model)
+				return buildModelPolicy(shared, resolver, providers, model, historical)
 			},
 			bind: func(frozen golem.FrozenPolicy) (ir.Policy, error) {
-				return buildPolicy(shared, resolver, providers, model, frozen)
+				return buildPolicy(shared, resolver, providers, model, frozen, historical)
 			},
 		}
 	}
@@ -465,7 +476,7 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 	return set, nil
 }
 
-func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID) (builtPolicy, error) {
+func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID, historical bool) (builtPolicy, error) {
 	frozen, frozenOperations, err := golem.BuildGeneratedModelPolicy(request.Bindings, model, request.Actor)
 	if err != nil {
 		return builtPolicy{}, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
@@ -474,13 +485,13 @@ func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolv
 	if err != nil {
 		return builtPolicy{}, fmt.Errorf("P2_RUNTIME_FACTORY: %w", err)
 	}
-	policy, err := buildPolicy(request, resolver, providers, model, frozen)
+	policy, err := buildPolicy(request, resolver, providers, model, frozen, historical)
 	if err != nil {
 		return builtPolicy{}, err
 	}
 	operations := make(map[golem.OperationID]ir.Policy, len(frozenOperations))
 	for operation, scopedFrozen := range frozenOperations {
-		scoped, scopedErr := buildPolicy(request, resolver, providers, model, scopedFrozen)
+		scoped, scopedErr := buildPolicy(request, resolver, providers, model, scopedFrozen, historical)
 		if scopedErr != nil {
 			return builtPolicy{}, scopedErr
 		}
@@ -489,10 +500,31 @@ func buildModelPolicy[A any](request *BuildRequest[A], resolver policysql.Resolv
 	return builtPolicy{policy: policy, operations: operations, aggregates: aggregates}, nil
 }
 
-func buildPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID, frozen golem.FrozenPolicy) (ir.Policy, error) {
+func buildPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, model golem.ModelID, frozen golem.FrozenPolicy, historical bool) (ir.Policy, error) {
 	bound, bindErr := bind.Policy(frozen, request.Registry, providers)
 	if bindErr != nil {
 		return ir.Policy{}, fmt.Errorf("P2_RUNTIME_BIND: model %x: %w", model, bindErr)
+	}
+	// Named facts are a historical-writer feature, including local, unused
+	// and operation-only definitions. A scalar body can still be observed
+	// through another policy's ordinary relationship path; inspecting only
+	// related scopes or surviving normalized rules cannot prove safe routing.
+	if len(bound.Facts()) != 0 && !historical {
+		return ir.Policy{}, &ir.FactScopeEvidenceError{ModelID: bound.ModelID()}
+	}
+	if err := requireFactObservability(bound, request.Registry); err != nil {
+		return ir.Policy{}, err
+	}
+	if bound.FactScope().UsesRelations() {
+		if _, present := bound.FactScope().Binding(); !present {
+			return ir.Policy{}, &ir.FactScopeEvidenceError{ModelID: bound.ModelID()}
+		}
+	}
+	// Static capture coverage is an authoring contract, not a promise to fail
+	// closed later when a dependency event lacks its historical evidence.
+	// Validate the raw inventory before normalization can erase dead paths.
+	if err := capture.ValidatePolicy(request.Registry, bound); err != nil {
+		return ir.Policy{}, err
 	}
 	normalized, normalizeErr := normalize.Policy(bound)
 	if normalizeErr != nil {
@@ -501,25 +533,132 @@ func buildPolicy[A any](request *BuildRequest[A], resolver policysql.Resolver, p
 	if normalized.ModelID() != ir.ModelID(model) {
 		return ir.Policy{}, fmt.Errorf("P2_RUNTIME_POLICY: model %x policy is bound to %x", model, normalized.ModelID())
 	}
-	for _, rule := range normalized.Rules() {
-		condition, ok := rule.Condition()
-		if !ok {
-			continue
+	if normalized.FactScope().UsesRelations() {
+		if _, bound := normalized.FactScope().Binding(); !historical || !bound {
+			return ir.Policy{}, &ir.FactScopeEvidenceError{ModelID: normalized.ModelID()}
+		}
+	}
+	facts := normalized.Facts()
+	validate := func(condition ir.Condition, context string) error {
+		if len(facts) != 0 {
+			resolved, err := resolve.Condition(normalized, condition)
+			if err != nil {
+				return fmt.Errorf("P2_RUNTIME_AGREEMENT: model %x %s: %w", model, context, err)
+			}
+			condition = resolved
 		}
 		for _, requirement := range condition.Requirements() {
 			if requirement.Providers().Contains(request.Provider) && (!resolver.Capability(request.Provider, requirement.Capability()) || !request.Capabilities.Has(requirement.Capability())) {
-				return ir.Policy{}, fmt.Errorf("P2_RUNTIME_CAPABILITY: model %x rule %d requires capability %d", model, rule.Position(), requirement.Capability())
+				return fmt.Errorf("P2_RUNTIME_CAPABILITY: model %x %s requires capability %d", model, context, requirement.Capability())
 			}
 		}
 		if err := requireConditionAgreement(condition, providers); err != nil {
-			return ir.Policy{}, fmt.Errorf("P2_RUNTIME_AGREEMENT: model %x rule %d: %w", model, rule.Position(), err)
+			return fmt.Errorf("P2_RUNTIME_AGREEMENT: model %x %s: %w", model, context, err)
+		}
+		return nil
+	}
+	for _, rule := range normalized.Rules() {
+		if condition, present := rule.Condition(); present {
+			if err := validate(condition, fmt.Sprintf("rule %d", rule.Position())); err != nil {
+				return ir.Policy{}, err
+			}
+		}
+	}
+	if len(facts) != 0 {
+		if err := validate(normalized.FactScope().Condition(), "fact scope"); err != nil {
+			return ir.Policy{}, err
+		}
+		for _, definition := range facts {
+			reference, _ := ir.NewFactReference(normalized.ModelID(), definition.ID())
+			if err := validate(reference, fmt.Sprintf("fact %q", definition.Name())); err != nil {
+				return ir.Policy{}, err
+			}
 		}
 	}
 	return normalized, nil
 }
 
+// The first fact release requires configured subscriptions for the complete
+// authored authority/body inventory. Validate the bound declarations before
+// normalization can erase a dead branch, independently of which definitions
+// are used by a surviving grant. Ordinary policies retain their prior contract.
+func requireFactObservability(policy ir.Policy, registry *schema.Registry) error {
+	facts := policy.Facts()
+	if len(facts) == 0 {
+		return nil
+	}
+	seen := make(map[ir.ModelID]bool)
+	require := func(model ir.ModelID) error {
+		if seen[model] {
+			return nil
+		}
+		metadata, present := registry.Model(golem.ModelID(model))
+		if !present || !metadata.SubscriptionsEnabled() {
+			return fmt.Errorf("P2_RUNTIME_FACT_OBSERVABILITY: model %x fact participant %x requires configured subscriptions", policy.ModelID(), model)
+		}
+		seen[model] = true
+		return nil
+	}
+	if err := require(policy.ModelID()); err != nil {
+		return err
+	}
+	walk := func(condition ir.Condition) error {
+		// Apply the existing physical-question bound to authored branches too;
+		// a large dead subtree must not become unbounded admission work.
+		if err := ir.CheckFactExpansion(condition); err != nil {
+			return fmt.Errorf("P2_RUNTIME_FACT_OBSERVABILITY: model %x declaration inventory: %w", policy.ModelID(), err)
+		}
+		pending := []ir.Condition{condition}
+		for len(pending) != 0 {
+			current := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if err := require(current.ModelID()); err != nil {
+				return err
+			}
+			switch current.Kind() {
+			case ir.ConditionConstant, ir.ConditionScalar, ir.ConditionList, ir.ConditionJSON:
+			case ir.ConditionFactReference:
+				// Binding has validated the complete, acyclic definition table.
+				// Visit each definition below instead of expanding shared refs.
+			case ir.ConditionLogical:
+				_, children, _ := current.Logical()
+				pending = append(pending, children...)
+			case ir.ConditionRelation:
+				_, _, target, _, child, _ := current.Relation()
+				// Presence operations and empty quantifiers still observe their
+				// target model even when they have no scalar child question.
+				if err := require(target); err != nil {
+					return err
+				}
+				if child != nil {
+					pending = append(pending, *child)
+				}
+			case ir.ConditionFact:
+				_, body, _ := current.Fact()
+				scope, _ := current.FactScope()
+				pending = append(pending, scope.Condition(), body)
+			default:
+				return fmt.Errorf("P2_RUNTIME_FACT_OBSERVABILITY: model %x has an unsupported declaration condition", policy.ModelID())
+			}
+		}
+		return nil
+	}
+	if err := walk(policy.FactScope().Condition()); err != nil {
+		return err
+	}
+	for _, definition := range facts {
+		if err := walk(definition.Body()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func requireConditionAgreement(condition ir.Condition, providers ir.ProviderSet) error {
 	switch condition.Kind() {
+	case ir.ConditionFact:
+		_, body, _ := condition.Fact()
+		return requireConditionAgreement(body, providers)
 	case ir.ConditionConstant:
 		return nil
 	case ir.ConditionLogical:

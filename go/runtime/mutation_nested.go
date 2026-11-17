@@ -377,6 +377,12 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	if err != nil {
 		return mutationnested.ApplyResult{}, err
 	}
+	if err := recordBatchHistory(ctx, state, app.registry, app.provider, verification); err != nil {
+		return mutationnested.ApplyResult{}, err
+	}
+	if err := recordAppliedCascadeHistory(ctx, queryer, app.registry, app.provider, app.mutationLimits, state, cascade); err != nil {
+		return mutationnested.ApplyResult{}, err
+	}
 	if program.SemanticIndexed() {
 		if markErr := markBatchSemanticRecords(ctx, state, node.ModelID(), program.PrimaryKey(), verification); markErr != nil {
 			return mutationnested.ApplyResult{}, markErr
@@ -1219,11 +1225,15 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 				return errors.Join(err, connection.Close())
 			}}, nil
 	}
-	transaction, err := boundary.app.database.BeginTxx(ctx, nil)
+	plan, err := planMutationTransaction(boundary.app.provider, boundary.app.registry, mutationTransactionDefaultIsolation(boundary.app.provider, boundary.app.registry))
 	if err != nil {
 		return nil, err
 	}
-	binding := transactionExecution(boundary.app.database, transaction)
+	binding, err := beginMutationTransaction(ctx, boundary.app.database, plan)
+	if err != nil {
+		return nil, err
+	}
+	transaction := binding.transaction
 	if err := binding.enableMutation(mutationConfig(boundary.app, boundary.source)); err != nil {
 		_ = transaction.Rollback()
 		return nil, err
@@ -2481,6 +2491,7 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 		ordered[index].Metadata = metadata
 	}
 	copy(state.facts[checkpoint.start:], ordered)
+	state.factEpoch++
 	state.ordinal = checkpoint.ordinal + uint32(len(ordered))
 	return nil
 }

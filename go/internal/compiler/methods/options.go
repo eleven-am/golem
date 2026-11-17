@@ -87,8 +87,16 @@ func (in *interpreter) evalSubscriptionOptions(call *ast.CallExpr) *[]ir.FieldID
 	var declared *[]ir.FieldID
 	for _, expression := range call.Args {
 		option, ok := unparen(expression).(*ast.CallExpr)
+		if ok && in.callOperation(option) == "ScopeTemplate" {
+			in.evalScopeTemplate(option)
+			continue
+		}
+		if ok && in.callOperation(option) == "FactTemplate" {
+			in.evalFactTemplate(option)
+			continue
+		}
 		if !ok || in.callOperation(option) != "DeleteSnapshot" {
-			in.errorAt("P7_SUBSCRIPTIONS_OPTION", "Subscriptions accepts only DeleteSnapshot options", expression)
+			in.errorAt("P7_SUBSCRIPTIONS_OPTION", "Subscriptions accepts DeleteSnapshot, ScopeTemplate and FactTemplate options", expression)
 			continue
 		}
 		if declared != nil {

@@ -1243,7 +1243,7 @@ func MalformedDedupeIndexIsRefused(t testing.TB, fixture Fixture) {
 			t.Fatal(err)
 		}
 		err := fixture.Store.EnsureSchema(ctx)
-		if err == nil || !strings.Contains(err.Error(), "golem_queue_dedupe") {
+		if !errors.Is(err, queueprovider.ErrStorageUnrecognized) {
 			t.Fatalf("bootstrap accepted malformed dedupe index %#v: %v", shape, err)
 		}
 	}

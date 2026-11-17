@@ -442,7 +442,3 @@ func (fixture mutationResultFixture) updateTitle(title string) golem.UpdateInput
 func (fixture mutationResultFixture) target(id byte) golem.MutationTarget[mutationResultPost] {
 	return golem.GeneratedUniqueSelectorValue[mutationResultPost](fixture.schema.Post, fixture.schema.PostKey, golem.GeneratedSelectorComponent(fixture.schema.PostID, golem.UUID{15: id}))
 }
-
-func mutationResultUUIDText(last byte) string {
-	return fmt.Sprintf("00000000-0000-0000-0000-%012x", last)
-}

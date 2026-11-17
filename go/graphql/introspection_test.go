@@ -181,10 +181,12 @@ func TestIntrospectionIsChargedOnePerFieldAndNeverAsAPaginatedRead(t *testing.T)
 		{"nested introspection lists", `{ __schema { types { name fields { name args { name } } } } }`, 7, false},
 		{"nested introspection lists one over", `{ __schema { types { name fields { name args { name } } } } }`, 6, true},
 		{"introspection lists at default complexity", `{ __schema { types { name fields { name args { name type { name } } } inputFields { name } enumValues { name } interfaces { name } possibleTypes { name } } directives { name locations args { name } } } }`, 0, false},
-		{"data at its exact cost", `{ nodes(take: 3) { id } }`, 4, false},
-		{"data one over its exact cost", `{ nodes(take: 3) { id } }`, 3, true},
-		{"data beside introspection at the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 7, false},
-		{"data beside introspection one over the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 6, true},
+		// This executor declares a fixed maximum of 500. Its take argument
+		// has no planner enforcement and cannot reduce that cost.
+		{"fixed data bound at its exact cost", `{ nodes(take: 3) { id } }`, 501, false},
+		{"fixed data bound one over its exact cost", `{ nodes(take: 3) { id } }`, 500, true},
+		{"fixed data beside introspection at the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 504, false},
+		{"fixed data beside introspection one over the exact sum", `{ __schema { queryType { name } } nodes(take: 3) { id } }`, 503, true},
 		{"data typename beside a data root", `{ __typename nodes(take: 3) { id } }`, 4, true},
 		{"lists without a take are charged their declared bound", `{ nodes { children { id } } }`, 0, true},
 		{"unbounded data lists beside introspection", `{ __schema { types { name } } nodes { children { id } } }`, 0, true},

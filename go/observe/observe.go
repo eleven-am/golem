@@ -165,6 +165,7 @@ const (
 	OperationSemanticRefresh             Operation = "semantic.refresh"
 	OperationSemanticProvider            Operation = "semantic.provider"
 	OperationSemanticRank                Operation = "semantic.rank"
+	OperationSemanticVectors             Operation = "semantic.vectors"
 	OperationQueryPlanExplain            Operation = "query_plan.explain"
 	OperationQueueExecute                Operation = "queue.execute"
 )
@@ -305,7 +306,7 @@ func validOperation(value Operation) bool {
 		OperationSubscriptionDeleteCoverage, OperationEventDeleteSnapshotOversize,
 		OperationCDCAcknowledge, OperationMigrationInspect, OperationShutdownHTTP,
 		OperationShutdownPublisher, OperationSemanticRefresh, OperationSemanticProvider,
-		OperationSemanticRank, OperationQueryPlanExplain, OperationQueueExecute:
+		OperationSemanticRank, OperationSemanticVectors, OperationQueryPlanExplain, OperationQueueExecute:
 		return true
 	default:
 		return false

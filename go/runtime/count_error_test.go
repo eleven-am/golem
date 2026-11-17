@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,12 +12,14 @@ import (
 
 func TestCountParameterLimitIsAPublicLimitExceeded(t *testing.T) {
 	harness := newOracleHarness(t)
-	values := make([]string, 1_000)
-	for index := range values {
-		values[index] = "name"
+	// In now uses one compact parameter; independent substring comparisons
+	// still exercise the unchanged provider-neutral 999-bind ceiling.
+	predicates := make([]golem.Predicate[oracleUser], 1_000)
+	for index := range predicates {
+		predicates[index] = harness.userName.Contains(fmt.Sprintf("name-%04d", index))
 	}
 	count, err := SystemCount(context.Background(), harness.app.System(), harness.users,
-		golem.Where(harness.userName.In(values...)),
+		golem.Where(golem.Or(predicates...)),
 	)
 	var failure *golem.Error
 	if count != 0 || !errors.As(err, &failure) {

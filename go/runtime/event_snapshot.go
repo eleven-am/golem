@@ -33,6 +33,10 @@ type eventNoticeShared struct {
 	snapshotErr error
 	beforeOnce  sync.Once
 	before      *eventSnapshot
+	historyMu   sync.Mutex
+	historyRead bool
+	history     *eventPolicyHistory
+	historyErr  error
 }
 
 type eventSnapshot struct {

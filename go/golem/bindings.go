@@ -497,9 +497,11 @@ type PackageBindings[A any] struct {
 }
 
 type ApplicationBindings[A any] struct {
-	generation SchemaDigest
-	packages   []PackageBindings[A]
-	operations map[uintptr]generatedOperation
+	generation    SchemaDigest
+	packages      []PackageBindings[A]
+	operations    map[uintptr]generatedOperation
+	pages         map[uintptr]GeneratedPageQuery
+	invalidations map[invalidationBindingKey]GeneratedInvalidationBinding[A]
 }
 
 func GeneratedPolicyBinding[A, M any](model ModelID, build PolicyFactory[A]) PolicyBinding[A] {
@@ -755,7 +757,7 @@ func (set GeneratedPolicySet) GenerationDigest() SchemaDigest { return set.gener
 func (set GeneratedPolicySet) Policies() []FrozenPolicy {
 	result := make([]FrozenPolicy, len(set.policies))
 	for index, policy := range set.policies {
-		result[index] = FrozenPolicy{model: policy.model, rules: make([]frozenRule, len(policy.rules)), canonical: append([]byte(nil), policy.canonical...)}
+		result[index] = FrozenPolicy{model: policy.model, rules: make([]frozenRule, len(policy.rules)), canonical: append([]byte(nil), policy.canonical...), scope: policy.scope, scopeBinding: policy.scopeBinding, facts: append([]frozenFact(nil), policy.facts...)}
 		for ruleIndex, rule := range policy.rules {
 			result[index].rules[ruleIndex] = cloneFrozenRule(rule)
 		}

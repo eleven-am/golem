@@ -226,6 +226,7 @@ type RequestInput struct {
 	Selector   *Selector
 	Cursor     *Cursor
 	Unordered  bool
+	Hydration  *IdentityHydration
 }
 
 type Request struct {
@@ -242,6 +243,7 @@ type Request struct {
 	selector   *Selector
 	cursor     *Cursor
 	unordered  bool
+	hydration  *IdentityHydration
 }
 
 func NewRequest(input RequestInput) (Request, error) {
@@ -267,6 +269,13 @@ func NewRequest(input RequestInput) (Request, error) {
 		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: an unordered request is a findMany without order, window, distinct, or cursor")
 	}
 	result := Request{operation: input.Operation, model: input.Model, projection: projection, unordered: input.Unordered}
+	if input.Hydration != nil {
+		value := input.Hydration.clone()
+		if input.Operation != FindMany || value.count < 1 || value.condition.ModelID() != input.Model || input.Take == nil || *input.Take != value.count || len(input.OrderBy) != 0 || input.Skip != nil || len(input.Distinct) != 0 || input.Cursor != nil || input.Selector != nil || input.Unordered {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: identity hydration requires an exact bounded lookup without ordering, skip, distinct, or cursor")
+		}
+		result.hydration = &value
+	}
 	if input.Where != nil {
 		where := *input.Where
 		result.where = &where
@@ -389,6 +398,12 @@ func (request Request) Selection() []Selection {
 }
 func (request Request) ProjectionMode() ProjectionMode { return request.projection }
 func (request Request) Unordered() bool                { return request.unordered }
+func (request Request) IdentityHydration() (IdentityHydration, bool) {
+	if request.hydration == nil {
+		return IdentityHydration{}, false
+	}
+	return request.hydration.clone(), true
+}
 func (request Request) Omitted() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), request.omit...)
 }
@@ -405,7 +420,7 @@ func (request Request) Cursor() (Cursor, bool) {
 	return Cursor{selector: request.cursor.Selector(), predicate: request.cursor.Predicate()}, true
 }
 func (request Request) clone() Request {
-	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection, Projection: request.projection, Omit: request.omit, Selector: request.selector, Cursor: request.cursor, Unordered: request.unordered}
+	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection, Projection: request.projection, Omit: request.omit, Selector: request.selector, Cursor: request.cursor, Unordered: request.unordered, Hydration: request.hydration}
 	result, _ := NewRequest(input)
 	return result
 }

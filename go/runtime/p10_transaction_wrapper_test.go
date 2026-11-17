@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/queue"
@@ -198,8 +199,113 @@ func semanticSource(fixture mutationResultFixture) golem.UniqueSelectorValue[mut
 	return golem.GeneratedUniqueSelectorValue[mutationResultPost](fixture.schema.Post, fixture.schema.PostKey, golem.GeneratedSelectorComponent(fixture.schema.PostID, golem.UUID{15: 65}))
 }
 
+func preparedWrapperVector(t *testing.T) embedding.QueryVector {
+	t.Helper()
+	specification, err := embedding.NewSpecification("test", "model", "v1", 3, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector, err := embedding.NewVector([]float32{1, 0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := embedding.NewQueryVector(specification, vector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return query
+}
+
 func transactionWrapperRuns() map[string]func(*testing.T, *transactionWrapperEnvironment) {
 	runs := map[string]func(*testing.T, *transactionWrapperEnvironment){
+		"CallerTxSearchByVector": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.semantic(t).plain
+			query := preparedWrapperVector(t)
+			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
+				rows, err := CallerTxSearchByVector(ctx, tx, fixture.postDescriptor, schematest.SemanticIndexName, query, 10)
+				if err == nil && len(rows) != 2 {
+					return fmt.Errorf("vector search rows=%d want2", len(rows))
+				}
+				return err
+			})
+		},
+		"CallerTxVectors": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.semantic(t).plain
+			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
+				cells, err := CallerTxVectors(ctx, tx, fixture.postDescriptor, schematest.SemanticIndexName, semanticSource(fixture))
+				if err == nil && (len(cells) != 1 || !cells[0].IsPresent()) {
+					return fmt.Errorf("vector cells=%v want one present vector", cells)
+				}
+				return err
+			})
+		},
+		"SystemTxSearchByVector": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.semantic(t).plain
+			query := preparedWrapperVector(t)
+			inWrapperSystemTransaction(t, fixture, func(ctx context.Context, tx *wrapperSystemTx) error {
+				rows, err := SystemTxSearchByVector(ctx, tx, fixture.postDescriptor, schematest.SemanticIndexName, query, 10)
+				if err == nil && len(rows) != 2 {
+					return fmt.Errorf("vector search rows=%d want2", len(rows))
+				}
+				return err
+			})
+		},
+		"SystemTxVectors": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture := environment.semantic(t).plain
+			inWrapperSystemTransaction(t, fixture, func(ctx context.Context, tx *wrapperSystemTx) error {
+				cells, err := SystemTxVectors(ctx, tx, fixture.postDescriptor, schematest.SemanticIndexName, semanticSource(fixture))
+				if err == nil && (len(cells) != 1 || !cells[0].IsPresent()) {
+					return fmt.Errorf("vector cells=%v want one present vector", cells)
+				}
+				return err
+			})
+		},
+		"CallerTxPromoteJob": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture, jobType := environment.queued(t)
+			ctx := context.Background()
+			id, err := fixture.app.Enqueue(ctx, newQueueGatePending(t, jobType))
+			if err != nil {
+				t.Fatal(err)
+			}
+			caller, err := fixture.app.ForPrincipal(ctx, testPrincipal{Allow: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CallerTransaction(ctx, caller, func(tx *CallerTx[testPrincipal, testActor]) error {
+				changed, err := CallerTxPromoteJob(ctx, tx, id, queue.PriorityInteractive)
+				if err == nil && !changed {
+					return fmt.Errorf("pending job was not promoted")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status, err := fixture.app.QueueOperator().Inspect(ctx, id)
+			if err != nil || status.Priority != queue.PriorityInteractive || status.Attempt != 0 {
+				t.Fatalf("promotion status=%#v err=%v", status, err)
+			}
+		},
+		"SystemTxPromoteJob": func(t *testing.T, environment *transactionWrapperEnvironment) {
+			fixture, jobType := environment.queued(t)
+			ctx := context.Background()
+			id, err := fixture.app.Enqueue(ctx, newQueueGatePending(t, jobType))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := SystemTransaction(ctx, fixture.app.System(), func(tx *SystemTx[testPrincipal, testActor]) error {
+				changed, err := SystemTxPromoteJob(ctx, tx, id, queue.PriorityInteractive)
+				if err == nil && !changed {
+					return fmt.Errorf("pending job was not promoted")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status, err := fixture.app.QueueOperator().Inspect(ctx, id)
+			if err != nil || status.Priority != queue.PriorityInteractive || status.Attempt != 0 {
+				t.Fatalf("promotion status=%#v err=%v", status, err)
+			}
+		},
 		"CallerTxFindMany": func(t *testing.T, environment *transactionWrapperEnvironment) {
 			fixture := environment.semantic(t).plain
 			inWrapperCallerTransaction(t, fixture, func(ctx context.Context, tx *wrapperCallerTx) error {
