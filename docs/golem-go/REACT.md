@@ -254,10 +254,33 @@ Custom query roots whose result holds model rows behave the same way: they
 refetch on any event and are never patched. The many-row mutations
 (`updateMany`, `deleteMany`) are mutations, not queries, so no hook applies.
 
-`useGolemStaticQuery` stays available when you want a count fetched once and
-never refreshed. A document is still not live, and `useGolemQuery` throws
-`GolemNotLiveError` naming the root and the reason, when a model it reaches has
-no events or a custom root's result holds no model rows.
+`useGolemStaticQuery` runs without event streams; ordinary TanStack refetch
+options and own-write invalidation still apply. Automatically inferred row
+streams require models with events. A scalar/DTO custom root can instead
+declare operation invalidation; without an applicable observation contract,
+`useGolemQuery` throws `GolemNotLiveError` naming the root and reason.
+
+### Typed DTOs and custom pages in client 0.3.0
+
+Use the generated go/v0.9.0 SDL/manifest for nested DTO results and inputs.
+gql.tada infers ordinary nested selections; server authorization still owns
+embedded model rows, while the resolver owns the sensitivity of DTO scalars.
+Preserve omitted input members separately from explicit null and supply one
+non-null member for an exactly-one input.
+
+`useGolemStaticInfiniteQuery` retains generated-list cursor pagination without
+subscriptions. Custom `PageQuery` roots instead use
+`useGolemStaticContinuationQuery`, or `useGolemContinuationQuery` when the root
+declares operation invalidation. Continuations are opaque `string | null`
+parameters; an empty visible page can still have a next token. Invalidation,
+expiry or a principal/profile change discards the whole chain. Keep query
+functions, page parameters and structural sharing under the client coordinator.
+
+Initialize an opted data-identity client with `golem.ready()` before mutations,
+and call `golem.resetSession()` after changing the credential/profile source.
+This fences old cache, reads and mutation results across logout or restore.
+See the [hook reference](../../client/react/README.md#usegolemcontinuationquery)
+and [session lifecycle](../../client/core/README.md#initialization-and-authenticated-data-incarnation).
 
 ## 8. What the server must be
 

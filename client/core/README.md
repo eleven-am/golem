@@ -183,13 +183,34 @@ Custom DTO/scalar queries become live only when their generated root declares `i
 
 Such manifests remain format 3 and require `operation-invalidation-v1`. Matching clients advertise that capability on HTTP and WebSocket initialization, including static requests. Unknown required capabilities are a configuration error; an old client cannot silently infer returned-row streams against an opted server. Manifests without required capabilities retain their existing handshake bytes. Manually wrapped generated Go servers must pass the exact active `Config.Bundle` so capability requirements cannot be lost behind an executor wrapper.
 
-The capability requirement applies to the whole opted server schema: older clients are rejected for ordinary/static queries and mutations too, not only for the new subscription. Upgrade the client and regenerate its manifest with that server contract. These APIs require the matching development contract; the minimum server version listed below for older client features does not imply support for operation invalidation.
+The capability requirement applies to the whole opted server schema: older clients are rejected for ordinary/static queries and mutations too, not only for the new subscription. Upgrade the client and regenerate its manifest with that server contract. These APIs require the matching go/v0.9.0 contract; the minimum server version listed below for older client features does not imply support for operation invalidation.
 
 Live admission remains a server authorization and coverage check. Readable dependencies currently require local ordinary row/filter/field-mask conditions and declared before-image coverage of the watched and controlling scalars. Ordinary related-row paths are refused; hidden policy facts require genuine bound scope authority and the certified historical writer, which the default V3 writer does not supply. The client does not fall back to broader model streams or infer authority from DTO values. Use `staticQueryOptions` or `staticContinuationQueryOptions` when live observation is unavailable; static mode skips subscriptions but still sends required capabilities. See [the supported server contract](../../docs/golem-go/GUIDE.md#declared-operation-invalidation).
 
 ## The manifest
 
 GraphQL does not say which subscription root carries a model's events, what its primary key is, whether a root returns rows or a count, whether a single-row root can be `null`, which unique input a cursor uses, or which contract the server was built from. The manifest carries those facts. It has one owner, the server's generator: `golem generate` writes `zz_golem_client.gen.ts` beside your schema, and `golem check` fails when it falls behind. The client reads it and never guesses. Regenerate it after every schema change; never edit it. See [The client manifest](https://github.com/eleven-am/golem/blob/main/docs/golem-go/GUIDE.md#the-client-manifest).
+
+## Typed DTO results and nested inputs
+
+go/v0.9.0 registers named output/input structs and generates their GraphQL
+shapes and manifest metadata. Ordinary GraphQL selections and gql.tada typing
+apply to nested DTO fields too; select the nested fields your UI needs. DTO
+members named `id` or `_version` are ordinary result values, not model patch
+identities. Embedded model rows are authorized and hydrated by the server.
+The resolver remains responsible for the sensitivity of ordinary DTO scalars.
+
+JavaScript object omission and explicit `null` keep their GraphQL meanings.
+Server argument fields using `golem.InputValue[T]` can distinguish them; do not
+replace omitted members with null while preparing variables. An exactly-one
+input accepts one supplied non-null choice and is validated before the server
+resolver runs. Client document typing does not replace that runtime check.
+
+Static APIs work without event streams. A scalar/DTO result becomes live only
+through declared operation invalidation, rather than by guessing dependencies
+from its fields. Custom infinite pages use the continuation APIs, not the
+generated-list cursor APIs. See the [server DTO/input contract](../../docs/golem-go/GUIDE.md#named-output-objects-and-embedded-model-rows)
+and [React continuation hooks](../react/README.md#usegolemcontinuationquery).
 
 ## How live queries work
 
@@ -214,7 +235,7 @@ The client reads your query document and opens one subscription per (model, filt
 | Two lists, both `posts(where: { published: { equals: true } })` | 1 |
 | `posts(where: { published: { equals: true } })` and `posts(where: { published: { equals: false } })` | 2 |
 
-A model without events (no `golem.Subscriptions`) makes the document not live: `useGolemQuery` throws `GolemNotLiveError`.
+Automatically inferred row streams require `golem.Subscriptions` on their models. Custom roots can instead use declared operation invalidation; without an applicable observation contract, `useGolemQuery` throws `GolemNotLiveError`.
 
 #### Filtering is automatic
 

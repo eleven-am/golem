@@ -67,8 +67,8 @@ work and establishes a fresh durable identity. Client discovery fences old
 reads, mutations, cached rows and continuations across that boundary. These
 APIs require the documented offline ownership conditions.
 
-The guide sections still labeled `unreleased` document the APIs introduced in
-this release; V4 writer activation remains deferred as described above. Local
+The guides document these APIs as go/v0.9.0 features. V4 writer activation
+remains deferred as described above. Local
 Go/provider/race and actual-client acceptance results are recorded in
 [`go/compatibility/README.md`](../../go/compatibility/README.md). NAS performance
 and durability are explicitly unverified. This tag does not certify a deployment.

@@ -557,7 +557,9 @@ search returned 3
 similar returned 2
 ```
 
-## Local exact-ranking characterization (unreleased)
+<a id="local-exact-ranking-characterization-unreleased"></a>
+
+## Local exact-ranking characterization (go/v0.9.0)
 
 The [generated public-API benchmark](../../go/internal/semantic/runtime/rank_public_benchmark_test.go)
 measured 3,864 rows with 1,024-dimensional vectors on 2026-11-15. The fixture's

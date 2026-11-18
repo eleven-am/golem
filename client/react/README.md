@@ -73,7 +73,7 @@ function Posts() {
 }
 ```
 
-Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. It throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom root whose result holds no model rows. Use `useGolemStaticQuery` for those. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
+Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. It throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom scalar/DTO root without declared operation invalidation. A declared invalidation stream can make a rowless custom result live; otherwise use `useGolemStaticQuery`. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
 
 ### useGolemStatus
 
@@ -205,6 +205,14 @@ Expired tokens fail with reason `CONTINUATION_EXPIRED`; discard the accumulated
 chain and start at its first page. Clear cached pages when the principal or
 selected profile changes. Normal TanStack refetch options still apply.
 
+<a id="declared-live-continuation-pages"></a>
+
+### useGolemContinuationQuery
+
+`useGolemContinuationQuery(document, variables, options)` exposes the same generated result and `string | null` page types as the static continuation hook. It requires a generated operation invalidation subscription; it never infers observability from the returned rows. Invalidations discard accumulated pages and restart after replacement acknowledgement. Use `useGolemStaticContinuationQuery` when the root has no invalidation declaration. Query functions, continuation parameters and structural sharing remain coordinator-owned options.
+
+The server may refuse live admission when the declared source lacks snapshot coverage or uses unsupported ordinary relation paths. `useGolemStaticContinuationQuery` remains available without subscribing; it does not bypass query authorization or the schema's required capability handshake. Operation-invalidation schemas require a matching client for every request, including static queries and mutations. See [the server's supported invalidation contract](../../docs/golem-go/GUIDE.md#declared-operation-invalidation).
+
 ### useGolemStaticQuery
 
 `useQuery` without event streams, including for a model without events or a custom root with no model rows. Authored model field selections are preserved; normal TanStack refetch options still apply. Counts and aggregates can be live through `useGolemQuery`.
@@ -259,7 +267,7 @@ The client reads your query document and opens one subscription per (model, filt
 | Two lists, both `posts(where: { published: { equals: true } })` | 1 |
 | `posts(where: { published: { equals: true } })` and `posts(where: { published: { equals: false } })` | 2 |
 
-A model without events (no `golem.Subscriptions`) makes the document not live: `useGolemQuery` throws `GolemNotLiveError`.
+Automatically inferred row streams require `golem.Subscriptions` on their models. Custom roots can instead use declared operation invalidation; without an applicable observation contract, `useGolemQuery` throws `GolemNotLiveError`.
 
 #### Filtering is automatic
 
@@ -342,10 +350,3 @@ Client-side failures: `GolemConfigurationError` (bad setup), `GolemDocumentError
 - [Client workspace overview](https://github.com/eleven-am/golem/blob/main/client/README.md)
 
 License: GPL-3.0.
-
-
-### Declared live continuation pages
-
-`useGolemContinuationQuery(document, variables, options)` exposes the same generated result and `string | null` page types as the static continuation hook. It requires a generated operation invalidation subscription; it never infers observability from the returned rows. Invalidations discard accumulated pages and restart after replacement acknowledgement. Use `useGolemStaticContinuationQuery` when the root has no invalidation declaration. Query functions, continuation parameters and structural sharing remain coordinator-owned options.
-
-The server may refuse live admission when the declared source lacks snapshot coverage or uses unsupported ordinary relation paths. `useGolemStaticContinuationQuery` remains available without subscribing; it does not bypass query authorization or the schema's required capability handshake. Operation-invalidation schemas require a matching client for every request, including static queries and mutations. See [the server's supported invalidation contract](../../docs/golem-go/GUIDE.md#declared-operation-invalidation).

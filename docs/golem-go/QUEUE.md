@@ -6,9 +6,9 @@ no broker, and no window where the row committed but the job did not.
 
 The program on this page is executed by `TestQueueApplicationRuns`.
 
-**Unreleased P11:** the development tree adds the priority, promotion and
+**go/v0.9.0 P11:** go/v0.9.0 adds the priority, promotion and
 explicit storage-upgrade sections below. These APIs and commands are not in
-go/v0.8.8. Use matching development CLI/library builds and regenerate the
+go/v0.8.8. Use matching v0.9.0 CLI/library builds and regenerate the
 application for `PromoteJob`; the existing runnable recipe remains separate.
 
 ## Registering a job type
@@ -136,7 +136,9 @@ returns that job's ID rather than creating a second; once the job is terminal
 the key is free again. Keys are at most 256 bytes. `New` returns the error for
 an option it refuses.
 
-## Priority and promotion (unreleased P11)
+<a id="priority-and-promotion-unreleased-p11"></a>
+
+## Priority and promotion (go/v0.9.0 P11)
 
 There are exactly two lanes: `queue.PriorityNormal` (`0`, the default) and
 `queue.PriorityInteractive` (`1`). Set a job's lane when constructing it:
@@ -325,7 +327,7 @@ operator calls `RunRetention`.
 
 ## The queue's own tables
 
-The following describes the released storage checks. The unreleased P11
+The following describes the released storage checks. The go/v0.9.0 P11
 upgrade below requires a complete recognized shape before startup proceeds.
 
 Golem creates `golem_queue` and its indexes when the application opens with
@@ -344,9 +346,11 @@ system namespace, `_golem` unless your schema names another.
 If you added your own index to `golem_queue`, startup now refuses it. Golem
 owns this table, so move that index to a table you own.
 
-### Explicit storage upgrade (unreleased P11)
+<a id="explicit-storage-upgrade-unreleased-p11"></a>
 
-The development worker requires the `priority-v1` storage shape. Startup
+### Explicit storage upgrade (go/v0.9.0 P11)
+
+The go/v0.9.0 worker requires the `priority-v1` storage shape. Startup
 creates current storage only when the queue is absent; it refuses recognized
 legacy storage with `QUEUE_STORAGE_UPGRADE_REQUIRED`. It does not add the
 priority column or replace the claim index automatically. Unknown or partial
@@ -424,7 +428,7 @@ chooses.
 **Golem creates them only when your generated schema admits them.** That
 happens when you regenerate and author the migration that records them, so a
 released library upgrade for these history indexes on its own changes nothing
-and stays reversible. This is separate from the unreleased priority storage
+and stays reversible. This is separate from the go/v0.9.0 priority storage
 upgrade above. Until you
 regenerate, the queue behaves exactly as it did before, with no speedup. The
 same regeneration also delivers the semantic strike column, so one action
@@ -452,18 +456,20 @@ protect you.
 - **Recurring or cron scheduling.** A loop calling `Enqueue` with `Dedupe` is a
   few lines; building it in drags timezones, drift and leader election into a
   queue that has none of them.
-- **Arbitrary priority levels or preemption.** The unreleased two-lane policy
+- **Arbitrary priority levels or preemption.** The go/v0.9.0 two-lane policy
   above does not interrupt busy workers or provide a fleet scheduler.
 
-## Application reference: bounded removal (unreleased P10)
+<a id="application-reference-bounded-removal-unreleased-p10"></a>
 
-The development-tree [bounded maintenance application](../../go/internal/compiler/compile/testdata/boundedmaintenance/schema.go)
+## Application reference: bounded removal (go/v0.9.0 P10)
+
+The [bounded maintenance application](../../go/internal/compiler/compile/testdata/boundedmaintenance/schema.go)
 and its [generated acceptance tests](../../go/internal/generate/pipeline/maintenance_acceptance_test.go)
 show how to remove a large root using existing transactions and the durable
 queue. `Maintenance`, `RequestRemoval`, `ProcessPage`, `IngestCaller`,
 `IngestSystem` and their `IntoTx` variants are **application functions in that
 fixture**, not new public Golem APIs. This reference requires matching
-unreleased CLI/library builds and fresh generation.
+v0.9.0 CLI/library builds and fresh generation.
 
 The caller command authorizes the root, marks it logically removed, creates
 a persistent removal task, and enqueues its first page in one transaction.

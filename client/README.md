@@ -100,6 +100,7 @@ Every hook takes a GraphQL document, as a string or as a gql.tada typed document
 | `useGolemInfiniteQuery(doc, variables?, options?)` | `useInfiniteQuery` over a list query with a `take`. Pages stay live. You never write `cursor` or `skip`; the client adds them from the manifest. `hasNextPage` is true while the last page is full. |
 | `useGolemStaticInfiniteQuery(doc, variables?, options?)` | The same generated-list cursor pagination without event streams. Works for models without subscriptions. Normal TanStack refetch options still apply. |
 | `useGolemStaticContinuationQuery(doc, variables?, options?)` | Static custom `PageQuery` pagination using opaque `next` tokens. Empty pages can continue; `next: null` ends traversal. The client owns `after`. Reset the whole chain after continuation expiry or a profile change. |
+| `useGolemContinuationQuery(doc, variables?, options?)` | Live custom pages with a declared operation invalidation subscription. Invalidations discard the page chain and restart after replacement acknowledgement. |
 | `useGolemMutation(doc, options?)` | `useMutation` over `client.mutate`. A committed mutation marks every cached query over the models it touches as stale, so the live event or the refetch brings it up to date; the mutation result is never written into the cache. |
 | `useGolemStatus(doc, variables?, { infinite? })` | The live status of a query (below), or `undefined` before the query exists. |
 | `useGolemStaticQuery(doc, variables?, options?)` | `useQuery` without event streams, preserving authored model field selections. Normal TanStack refetch options still apply. Counts and aggregates can be live through `useGolemQuery`. |
@@ -117,7 +118,7 @@ function Posts({ tag }: { tag: string }) {
 }
 ```
 
-Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. `useGolemQuery` throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom root whose result holds no model rows. Use `useGolemStaticQuery` for those. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
+Aggregates, group-by, relation group-by and custom roots that return model rows are live: any event on a model they come from refetches the document through the coalescer, and they are never patched. Put counts in their own query. `useGolemQuery` throws `GolemNotLiveError` (naming the reason and the root) for a document that reaches a model without events or a custom scalar/DTO root without declared operation invalidation. A declared invalidation stream can make a rowless custom result live; otherwise use `useGolemStaticQuery`. Relation group-by needs a go/v0.8.3 manifest to refetch on events of the models it groups by.
 
 ## Live status
 
@@ -158,7 +159,7 @@ The client reads your query document and opens one subscription per (model, filt
 | Two lists, both `posts(where: { published: { equals: true } })` | 1 |
 | `posts(where: { published: { equals: true } })` and `posts(where: { published: { equals: false } })` | 2 |
 
-A model without events (no `golem.Subscriptions`) makes the document not live: `useGolemQuery` throws `GolemNotLiveError`.
+Automatically inferred row streams require `golem.Subscriptions` on their models. Custom roots can instead use declared operation invalidation; without an applicable observation contract, `useGolemQuery` throws `GolemNotLiveError`.
 
 ### Filtering is automatic
 

@@ -553,6 +553,38 @@ A row the caller cannot read is indistinguishable from one that does not
 exist, in every position. That is what lets golem compile a negative check
 without revealing anything through it.
 
+### Named policy facts and their release boundary
+
+go/v0.9.0 includes the declaration/compiler contract and V3/V4 history readers,
+but its automatic writer remains V3. Named-fact policies require both a
+registered capture inventory and the actual V4 writer; the ordinary release
+refuses their runtime admission. This includes definitions that are unused or
+have a scalar-only body. Do not enable them by changing application settings or
+by fabricating capture metadata. Writer activation is a later release step
+after deploying and verifying compatible readers.
+
+The declaration API is distinct from ordinary readable relations:
+
+| Declaration | Meaning |
+| --- | --- |
+| `rules.FactScope(predicate)` | Declares the policy's one actor domain, including negative facts, field rules and operation grants. Scalar predicates and positive `Is`/`Some` witnesses define the supported scope vocabulary. It grants no permission to read dependency rows. |
+| `rules.Fact(name, predicate)` | Defines a named physical predicate and returns a policy-only reference owned by that rules builder. Its relationship hops do not require target readability. |
+| `golem.ScopeTemplate` / `golem.FactTemplate` | Register static scope/capture descriptions in a model's subscription declaration. Generated model scope/fact helpers bind their scalar or set arguments to that registered description. |
+| `rules.BindFactScope(scope)` / `rules.BindFact(fact)` | Bind the generated template instances to the policy. A bound scope/fact is not an ordinary caller predicate. |
+
+Facts must have distinct names and an acyclic dependency graph. A reference
+cannot be used in caller `where`, ordering, selection or count expressions, or
+borrowed from another rules builder. Visibility of the source can disclose the
+Boolean result of a hidden dependency, so that disclosure must be intentional.
+Ordinary relation predicates retain the target-readable semantics above.
+
+Historical observation must retain complete committed before/after evidence
+and recheck current actor scope. Missing, partial, stale or unsupported evidence
+fails closed; a current relationship cannot replace a historical audience.
+See the [compiled fact example](../../go/internal/compiler/compile/testdata/policyfacts/schema.go),
+the [scope/template example](../../go/internal/compiler/compile/testdata/policyscopes/schema.go)
+and the [reader-first release requirements](RELEASE-NOTES.md#gov090).
+
 ### Field masks
 
 `CanReadFields` and `CannotReadFields` make a field readable on some rows and
@@ -688,6 +720,29 @@ Predicates compose with `.Or(...)`, `.And(...)`, and `golem.All[T]()` matches
 everything the policy already permits. `Where` requires a predicate — there is
 no argument-free form, because "no filter" and "everything I may see" are
 different statements and golem makes you write the second one.
+
+### Large scalar sets and relation existence
+
+The existing typed `In` and `NotIn` operators compact supported scalar values
+into one bounded provider parameter. SQLite uses `json_each`; PostgreSQL uses
+typed set conversion. The original physical scalar codecs and indexed-column
+comparisons are preserved, including full-width integers, decimals, UUIDs,
+dates/times, enum wire values and text comparison modes. Empty, duplicate,
+nullable and negated sets retain their ordinary predicate semantics.
+
+Binary values keep individual binds because JSON base64 is not a native binary
+comparison value. Unsupported compact encodings retain the existing binding
+path and its capacity checks. Compaction does not raise SQLite's statement
+parameter ceiling or SQL-text budget. One encoded compact set is limited to
+1 MiB (`scalar_set_bytes`); large actor grants still need explicit bounded
+inputs and the correct actor snapshot/cache identity.
+
+In generated GraphQL filters, `attachments: {some: {}}` means that a related
+attachment exists. The related row still has to be readable by the caller;
+no invented scalar condition is needed, so rows with null scalar values are
+not silently excluded. Empty `none`/`every` use their corresponding quantified
+semantics. This exception does not allow an empty root `where`, logical list,
+or arbitrary empty scalar condition.
 
 ## Writing
 
@@ -1106,7 +1161,7 @@ close the verified provider handle, call `sqlite.CheckpointForBackup(ctx, db)`,
 then copy the database. Do not copy a live database file or its journal
 separately.
 
-**Unreleased — Snapshot Work A (copy only).** The development API is
+**go/v0.9.0 — Snapshot Work A (copy only).** The API is
 `sqlite.Snapshot(ctx, db, expectedBundle, destination) error`, where `db` is an
 open verified `*provider.Database` from local `sqlite.Open` and
 `expectedBundle` is the expected generated `golem.SchemaBundle` with its exact
@@ -1138,12 +1193,14 @@ Snapshot does not restore or replace a database, rotate client identity, or
 reconcile copied jobs and events. It starts no workers or publishers. Opening
 the copy for application use remains an explicit operation; safely restoring
 it or running copied background work requires a separate operational contract.
-For a schema using the unreleased durable data identity below, verification
+For a schema using the go/v0.9.0 durable data identity below, verification
 also requires the copied singleton to be valid and preserves its exact value.
 A copy therefore shares its source identity. Snapshot never manufactures a
 missing identity and does not establish a fresh identity for a restored copy.
 
-### Offline SQLite restore (unreleased)
+<a id="offline-sqlite-restore-unreleased"></a>
+
+### Offline SQLite restore (go/v0.9.0)
 
 `sqlite.PrepareRestore` creates a private local copy for reviewed migrations
 and explicit application reconciliation. Stop the old fleet first and prevent
@@ -1152,7 +1209,7 @@ and processes that may still finish external work must all be stopped. A
 worker's shutdown grace returning, or one database handle closing, does not
 establish that condition. The deployment owns process shutdown, archive
 extraction and application assets. Restore owns the SQLite staging and
-publication sequence. This development API has no NAS support guarantee.
+publication sequence. This API has no NAS support guarantee.
 
 Pass immutable standalone archive and destination file paths, an explicit
 `ArchiveBundle`, an explicit `TargetBundle`, and one of these modes:
@@ -1343,8 +1400,8 @@ cancels one, both committing or rolling back with the transaction. Cancel only a
 job ID you read, in the same transaction, from a row the caller's policy allowed,
 never an ID taken from arguments. See [the queue](QUEUE.md#inspecting-and-operating).
 
-**Unreleased P10 — bounded maintenance application reference.** For a removal
-that exceeds one transaction's limits, see [bounded removal](QUEUE.md#application-reference-bounded-removal-unreleased-p10).
+**go/v0.9.0 P10 — bounded maintenance application reference.** For a removal
+that exceeds one transaction's limits, see [bounded removal](QUEUE.md#application-reference-bounded-removal-gov090-p10).
 The generated reference commits logical removal with a task and first job,
 then uses 32-leaf pages, transactional progress/successors and a shared root
 compare-and-write fence for every caller/System ingest or reparent. Its
@@ -1354,7 +1411,7 @@ identity are explicit application decisions. Local acceptance verifies ordinary
 cleanup on both providers and semantic rollback/convergence on SQLite and
 PostgreSQL with pgvector. NAS latency remains unmeasured.
 
-**Unreleased P11 — queue priority and promotion.** The development version
+**go/v0.9.0 P11 — queue priority and promotion.** go/v0.9.0
 adds `queue.WithPriority(queue.PriorityInteractive)`; the default remains
 `queue.PriorityNormal`. Generated caller/system transactions expose
 `tx.PromoteJob(ctx, jobID, queue.PriorityInteractive)`, with
@@ -1369,10 +1426,10 @@ Interactive admissions then a Normal opportunity when capacity permits.
 `queue.Limits.ReservedInteractive` reserves local slots only (default `0`,
 strictly below `Concurrency`); it never preempts handlers or bypasses shared
 resource caps. These APIs and new public struct fields require the matching
-development library/CLI and regeneration; prefer keyed literals. Existing
+v0.9.0 library/CLI and regeneration; prefer keyed literals. Existing
 queue storage requires an explicit offline upgrade after stopping all
-producers and workers. See [priority and promotion](QUEUE.md#priority-and-promotion-unreleased-p11)
-and [storage inspection and upgrade](QUEUE.md#explicit-storage-upgrade-unreleased-p11)
+producers and workers. See [priority and promotion](QUEUE.md#priority-and-promotion-gov090-p11)
+and [storage inspection and upgrade](QUEUE.md#explicit-storage-upgrade-gov090-p11)
 for exact commands, supported shapes and the limits of old-worker refusal.
 
 #### What a custom operation returns
@@ -1433,6 +1490,65 @@ through a `golem.Within` grant, still gets a `golem.Row` back with no readable
 cells. It carries the new row's primary key privately, so golem can report it as
 `RESULT_NOT_READABLE` instead of treating it as a fault. A create without a
 projection returns a row with no key and cannot be returned as a model result.
+
+#### Named output objects and embedded model rows
+
+Register each published named struct in `DefineGraphQL` with
+`golem.Output[T](schema, "GraphQLName", options...)`. Custom queries/mutations
+can then return that struct, a pointer, or bounded lists of it. Register nested
+output structs explicitly too. Scalar/enum fields, nullable pointer members,
+nested objects/lists and embedded `golem.Row[M]` members share the same generated
+contract. `golem:"graphql=name"` selects a field's wire name. Recursive DTO
+definitions, maps, interfaces and unsupported embedded/generic struct shapes
+are refused during generation.
+
+Every DTO list field declares its bound with
+`golem.ObjectFieldMaxItems("GoFieldName", outerMaximum, nestedMaximum...)`;
+the option uses the Go field name and requires one positive maximum per list
+level. Root list results still use `golem.MaxItems`. A resolver argument named
+`take` does not enforce a DTO list's output bound. Total response and model
+hydration budgets also apply across the operation before descendant work.
+
+| Member or option | Authorization and result behavior |
+| --- | --- |
+| Ordinary scalar/enum/DTO member | Resolver-owned output. Golem does not infer its sensitivity from a neighboring model row. DTO fields named `id` or `_version` remain ordinary DTO values, not model identity/version metadata. |
+| `golem.Row[M]` member | Reloaded through the caller with its exact selected projection and policy scope. Rows are batched/deduplicated for hydration and then restored to resolver order; supplied model cells are never trusted for serialization. |
+| Nullable `*golem.Row[M]` member | Missing and unreadable rows both become null. A required unreadable row produces an error and normal GraphQL non-null propagation. |
+| `golem.ObjectRowGate("GoRowField")` | Omits the containing item when that row is missing or unreadable, even when the client does not select the gate field. Use this when sibling DTO scalars must disappear with the row. |
+
+Computed and batched computed fields reuse the registered DTO through
+`golem.GraphQLOutput[T]()`, optionally `.NonNull()` and/or a bounded
+`golem.GraphQLList`. A non-null computed DTO cannot return nil. Existing custom
+mutation commit reporting still applies: a post-commit hydration/encoding
+failure must not look like an uncommitted mutation.
+
+The [compiled DTO/input schema](../../go/internal/compiler/compile/testdata/objecttypes/schema.go)
+and [embedded-row/gate schema](../../go/internal/compiler/compile/testdata/objectrows/schema.go)
+are exercised by the generated HTTP acceptance fixtures.
+
+#### Named inputs, omission and exactly-one choices
+
+Register nested input structs with `golem.Input[T](schema, "GraphQLName")`.
+Use `golem.InputValue[T]` when a resolver must distinguish omission from an
+explicit null. Its zero value is omitted; `T` is non-pointer because the
+wrapper owns nullability. This works in root resolver arguments, nested input
+objects and computed-field arguments.
+
+| Input state | `IsSet()` | `IsNull()` | `Get()` has a value |
+| --- | --- | --- | --- |
+| Omitted | false | false | false |
+| Explicit null | true | true | false |
+| Present non-null value, including zero/false | true | false | true |
+
+Direct Go callers construct these states with the zero value,
+`golem.NullInputValue[T]()` or `golem.InputValueOf(value)`. Do not collapse
+omission and explicit null while adapting arguments or choosing defaults.
+
+Add `golem.InputOneOf()` to a registered input to require exactly one supplied,
+non-null member. All members must be nullable; zero choices, multiple choices
+and a null choice are rejected before the resolver runs. This is separate from
+ordinary nullable input semantics. The compiled DTO/input schema linked above
+includes nested patches and an exactly-one playback target.
 
 #### How many items a list may hold
 
@@ -1520,9 +1636,11 @@ the resolver as it does over GraphQL, and calls the resolver with `caller`. It
 adds no grants and no transaction. Calling a query resolver directly skips the
 actor. `Query` is generated only for a schema that declares a custom query.
 
-### Durable data identity (unreleased)
+<a id="durable-data-identity-unreleased"></a>
 
-This development API requires matching CLI and library builds and regenerated
+### Durable data identity (go/v0.9.0)
+
+This API requires matching CLI and library builds and regenerated
 application code and client manifests. Opt in explicitly in `DefineSchema`:
 
 ```go
@@ -1568,7 +1686,7 @@ explicit server commit errors retain their commit evidence. Per-call mutation
 callbacks detach from the new UI after a reset, while the returned promise and
 hook-global commit reconciliation retain responsibility for the sent work.
 
-The [offline restore workflow](#offline-sqlite-restore-unreleased) establishes a
+The [offline restore workflow](#offline-sqlite-restore-gov090) establishes a
 fresh identity in a verified private copy after caller-owned fleet shutdown.
 This prerequisite does not fence old running processes or implement data-only
 corrections. It provides no NAS support guarantee.
@@ -1583,7 +1701,7 @@ and nullable `next`; the root adds `take` and `after` arguments. The page item
 can be a registered output object or a model row. Page declarations are
 separate from ordinary custom queries and cannot carry `Within` grants.
 Page declarations require `golem.WithDataIncarnation(schema)` and the matching
-unreleased migration, regeneration and client setup described above.
+go/v0.9.0 migration, regeneration and client setup described above.
 
 The request exposes admitted `Arguments()`, `Take()`, `CandidateLimit()`,
 cumulative `Consumed()`, private `State()` and the chain's absolute `Expires()`.
@@ -1614,7 +1732,7 @@ decrypt keys through the maximum token lifetime and rotate before 2^32 token
 encryptions across instances sharing a key. There is no startup-generated key
 or default expiry. `PageConfig.Incarnation` has been removed: the runtime uses
 the provider identity admitted at startup. Stop old instances before using the
-[offline restore workflow](#offline-sqlite-restore-unreleased), then open fresh
+[offline restore workflow](#offline-sqlite-restore-gov090), then open fresh
 instances against the newly published identity.
 
 Tokens bind the contract, operation, page revision, data incarnation, actor
@@ -2348,12 +2466,27 @@ It exports `golemClientManifest` (`as const`) and its type
   - `groupBy`: the `groupBy` and `relationGroupBy` roots' result;
   - `updateMany` and `deleteMany`: the many-row mutations' counts;
   - `value`: a custom root whose result is neither a model nor a list of one.
+  - `object`: a registered DTO result, whose `result` type tree and the manifest's
+    named `types` describe its nested object/model occurrences.
 
   `nullable` is `true` when the root's schema type is nullable (`findOne` is, a
   mutation's row is not). A client sets a single-row slot to `null` only when it
   is `nullable`.
 
-Unreleased: mutation roots can additionally carry `mutationScope`, which tells
+go/v0.9.0 also emits versioned transport-type metadata when required:
+
+| Manifest format | Metadata and compatibility |
+| --- | --- |
+| 1, including omitted `formatVersion` | The legacy row manifest. |
+| 2 | Registered output/input `types`, typed root `result` and model `computedResults`. A type definition has named `fields` and object/input-object kind; exactly-one inputs also set `oneOf`. Recursive result trees retain nullability and list `maxItems`. |
+| 3 | Continuation `pagination` metadata. Required `operation-invalidation-v1` or `data-incarnation-v1` capabilities also use this format. The client must recognize and send every required capability. |
+
+These manifest formats are independent of event fact codecs: format 3 does not
+activate the V4 writer. Reject unknown formats/capabilities rather than ignoring
+them. The generated manifest is the authority; do not manufacture or edit its
+type, page or invalidation metadata.
+
+Mutation roots can additionally carry `mutationScope`, which tells
 the client which caches may need refreshing after its own write. The closed
 choices are `{ kind: "models", models: ["Invite", "Team"] }`, with nonempty,
 sorted public model names, and `{ kind: "unscoped" }`. Generated roots use a
@@ -2509,12 +2642,11 @@ derives constraint names from both) and making a column optional.
   cannot reorder columns in place, so a new field is always appended
   physically and a reorder changes no DDL. Physical column order is not part
   of PostgreSQL drift checking; the set of columns and their definitions is.
-- In the released version, a required field with no default cannot be added while SQLite is a
-  provider: declare a default or make the field optional. Only when
-  PostgreSQL is the schema's sole provider can one required field per
-  migration be added with a reviewed backfill.
+- A single-provider SQLite or PostgreSQL schema can add one required field
+  without a default per reviewed backfill migration. SQLite uses the restricted
+  contract below; multi-provider companions remain unsupported.
 
-**Unreleased — SQLite required-column backfills.** The development version
+**go/v0.9.0 — SQLite required-column backfills.** go/v0.9.0
 extends the existing `migration new` → `migration backfill attach` →
 `migration apply` workflow to a schema whose sole provider is SQLite. It
 stages one new column as nullable, fills it from the reviewed SQL companion,
@@ -2539,7 +2671,7 @@ backfill. Multi-provider companion publication remains unsupported. Data-only
 corrections use the separate workflow below; neither workflow is an online
 backfill or a historical Go callback.
 
-**Unreleased — PostgreSQL reviewed backfill execution.** Companions remain
+**go/v0.9.0 — PostgreSQL reviewed backfill execution.** Companions remain
 one parameter-free, preparable statement. Golem executes that statement in
 PostgreSQL's atomic procedural context, preserving the outer migration
 transaction as the sole commit owner. Direct transaction commands and nested
@@ -2554,7 +2686,7 @@ sequence changes or external effects from privileged functions rollbackable.
 This backfill execution rule is separate from reviewed data corrections below
 and the offline SQLite restore workflow described above.
 
-**Unreleased — reviewed data-only corrections.** A schema whose sole declared
+**go/v0.9.0 — reviewed data-only corrections.** A schema whose sole declared
 provider is SQLite or PostgreSQL can append a correction without changing its
 model or physical schema. First enable reviewed durable data identity with
 `golem.WithDataIncarnation`; the correction refuses older physical profiles.
@@ -2636,7 +2768,7 @@ bundle generated by an older golem is refused in `HistoricalEventBundles` when
 its contract format is no longer supported; the release notes of the release
 that drops a format give the exact drain steps.
 
-**Unreleased retained-reader window:** the development version verifies
+**go/v0.9.0 retained-reader window:** go/v0.9.0 verifies
 v0.8.8 Contract7 metadata through a frozen historical reader for event bundles
 and offline archives. Active apps still require current Contract8 documents
 and regeneration. The tested SQLite archive path retains V3 facts and explicitly
@@ -2916,6 +3048,15 @@ the dotted input path, `where.id.equals` or `orderBy[0].id`. `reason` is
 `MaxInputNodes`, `MaxInputDepth`, `MaxListItems`, `MaxDepth`,
 `MaxSelectedFields`, `MaxAliases`), with `max` for its value. `min` and `max`
 carry a numeric range.
+
+Wrong-shape and enum diagnostics also include schema-owned hints when available:
+`extensions.expectedType`, `extensions.example` and `extensions.allowedValues`.
+For example, an object supplied to `orderBy` is refused with its list type and
+a valid example such as `[{id: asc}]`. An invalid enum value identifies the
+nested argument path and the enum's actual GraphQL wire members; renamed enum
+members must use those wire names. These hints never echo caller values or
+private schema members. The [input-diagnostic acceptance](../../go/runtime/graphql_relation_empty_test.go)
+executes the suggested `orderBy` example and checks that invalid input runs no SQL.
 
 | Message form | Cause |
 |---|---|

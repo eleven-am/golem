@@ -35,6 +35,31 @@ them is code that ran.
 
 ## Releases
 
+### go/v0.9.0 and client 0.3.0
+
+Use matching CLI/library versions and regenerate bindings for Contract8.
+Build and serve with Go 1.26.11 or later; upgrade the client and generated
+manifest together when opting into the new capabilities.
+
+| New feature | Usage and limits |
+| --- | --- |
+| Named DTOs, embedded model rows and item gates | [Output objects](GUIDE.md#named-output-objects-and-embedded-model-rows) |
+| Nested inputs, omission/null/value and exactly-one choices | [Inputs](GUIDE.md#named-inputs-omission-and-exactly-one-choices) |
+| Compact scalar sets and readable relation existence | [Filters](GUIDE.md#large-scalar-sets-and-relation-existence) |
+| Expected input types, examples and enum wire values | [Input diagnostics](GUIDE.md#errors-for-a-value-the-operation-cannot-use) |
+| Prepared-vector ranking and authorized vector reads | [Vector operations](SEMANTIC.md#searching-with-a-prepared-vector) |
+| Authenticated custom pages and declared invalidation | [Pages](GUIDE.md#custom-continuation-pages), [invalidation](GUIDE.md#declared-operation-invalidation) |
+| Recovery generations, session/restore fencing and mutation invalidation | [Client lifecycle](../../client/core/README.md#initialization-and-authenticated-data-incarnation) |
+| Priority, promotion, reserved capacity and storage upgrades | [Queue controls](QUEUE.md#priority-and-promotion-gov090-p11) |
+| Reviewed backfills and data-only corrections | [Schema changes](GUIDE.md#what-each-provider-changes-in-place) |
+| Local snapshot, explicit restore modes and durable data identity | [Copy/restore](GUIDE.md#sqlite-copies-and-backups), [identity](GUIDE.md#durable-data-identity-gov090) |
+| Named policy-fact declarations and V3/V4 readers | [Declaration and deferred writer activation](GUIDE.md#named-policy-facts-and-their-release-boundary) |
+
+Automatic event writing remains V3; named-fact runtime admission and V4 writer
+activation are not enabled by this release. NAS performance and durability are
+explicitly unverified. [Release notes](RELEASE-NOTES.md#gov090) cover the upgrade
+sequence and compatibility requirements.
+
 - **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — what each `go/v*` release
   changed, what to check before upgrading, and what is deliberately absent.
 - **[MIGRATION.md](./MIGRATION.md)** — upgrading from go/v0.6.x to go/v0.7.0:
