@@ -299,18 +299,18 @@ func runbookStates() []runbookState {
 
 func publishedDrainQuery(t *testing.T) string {
 	t.Helper()
-	notes, err := os.ReadFile(filepath.Join("..", "..", "docs", "golem-go", "RELEASE-NOTES.md"))
+	notes, err := os.ReadFile(filepath.Join("..", "..", "docs", "GUIDE.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(notes)
 	if strings.Count(text, "SELECT COUNT(DISTINCT") != 1 {
-		t.Fatalf("the release notes hold %d drain queries; want 1", strings.Count(text, "SELECT COUNT(DISTINCT"))
+		t.Fatalf("the user guide holds %d drain queries; want 1", strings.Count(text, "SELECT COUNT(DISTINCT"))
 	}
 	start := strings.Index(text, "SELECT COUNT(DISTINCT")
 	end := strings.Index(text[start:], ";")
 	if end < 0 {
-		t.Fatal("the release-note drain query has no terminating semicolon")
+		t.Fatal("the documented drain query has no terminating semicolon")
 	}
 	return text[start : start+end]
 }

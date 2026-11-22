@@ -309,16 +309,18 @@ check_database_tier() {
 }
 
 format() {
-	local unformatted latest install notes="$ROOT/docs/golem-go/RELEASE-NOTES.md"
+	local unformatted latest declared install readme_install guide="$ROOT/docs/GUIDE.md"
 	unformatted="$(cd "$GO_DIR" && find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)" || return 1
 	[ -z "$unformatted" ] || {
 		printf 'gofmt would rewrite:\n%s\n' "$unformatted" >&2
 		return 1
 	}
-	latest="$(awk '/^## go\/v[0-9]+\.[0-9]+\.[0-9]+$/ { version=$2; sub(/^go\/v/, "", version); split(version, part, "."); if (!seen || part[1] > major || (part[1] == major && part[2] > minor) || (part[1] == major && part[2] == minor && part[3] > patch)) { major=part[1]; minor=part[2]; patch=part[3]; seen=1 } } END { if (seen) printf "v%d.%d.%d\n", major, minor, patch }' "$notes")" || return 1
-	install="$(sed -n 's/^go get github\.com\/eleven-am\/golem\/go@\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$notes" | head -n 1)" || return 1
-	[ -n "$latest" ] && [ "$install" = "$latest" ] || {
-		printf 'release-note install version %s differs from newest section %s\n' "$install" "$latest" >&2
+	latest="$(awk '/^### go\/v[0-9]+\.[0-9]+\.[0-9]+$/ { version=$2; sub(/^go\/v/, "", version); split(version, part, "."); if (!seen || part[1] > major || (part[1] == major && part[2] > minor) || (part[1] == major && part[2] == minor && part[3] > patch)) { major=part[1]; minor=part[2]; patch=part[3]; seen=1 } } END { if (seen) printf "v%d.%d.%d\n", major, minor, patch }' "$guide")" || return 1
+	declared="$(sed -n 's/^\*\*Go module:\*\* `go\/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)`.*$/\1/p' "$guide")" || return 1
+	install="$(sed -n 's/^go get github\.com\/eleven-am\/golem\/go@\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$guide" | sort -u)" || return 1
+	readme_install="$(sed -n 's/^go get github\.com\/eleven-am\/golem\/go@\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$ROOT/README.md" | sort -u)" || return 1
+	[ -n "$latest" ] && [ "$declared" = "$latest" ] && [ "$install" = "$latest" ] && [ "$readme_install" = "$latest" ] || {
+		printf 'newest Go upgrade section %s differs from declared release %s, guide install %s or README install %s\n' "$latest" "$declared" "$install" "$readme_install" >&2
 		return 1
 	}
 }

@@ -1,14 +1,11 @@
 # @eleven-am/golem-generator
 
-The Prisma generator for [Golem](https://github.com/eleven-am/golem).
+Prisma generator for Golem datamodels, typed clients and operation bindings.
 
-```prisma
-generator golem {
-  provider = "golem"
-  output   = "../src/generated/golem"
-}
+```sh
+npm install -D @eleven-am/golem-generator
 ```
 
-Running `npx prisma generate` emits three artifacts next to your Prisma client: the serialized datamodel and its typed `ComputedField` decorator, the instrumented `GolemPrismaService` (commit-aware event publishing plus the policy-bound `forContext`), and the type map behind `GolemRequest` and `GolemResult`. The generated computed-field decorator rejects unknown models and unknown `requires` fields. Plain delegate calls intentionally act as the system; only `forContext(ctx)` enters Golem's policy and hook pipeline. See the [full guide](https://github.com/eleven-am/golem#readme).
+Declare provider = "golem" in your Prisma generator and run npx prisma generate. PostgreSQL and SQLite are supported; GolemUpsertGuard is required.
 
-The generated client wraps interactive transactions so top-level `updateMany`/`deleteMany` auxiliary selection, mutation, verification, and event buffering stay on the transaction connection. Commit publishes deterministic per-row events; rollback publishes none. An array `$transaction([...])` runs its operations in order inside one interactive transaction. Regenerate after every Golem upgrade. The generator refuses a schema whose `datasource` provider is not `postgresql` or `sqlite`, and one that lacks the `GolemUpsertGuard` model. The reserved `GolemUpsertGuard` Prisma model is intentionally omitted from generated Golem model typings and public policy surfaces even though its Prisma delegate remains available for startup validation and serialized context-aware upsert.
+[Setup and API guide](https://github.com/eleven-am/golem/blob/main/docs/GUIDE.md#typescript-generator) · [Repository](https://github.com/eleven-am/golem)

@@ -22,17 +22,12 @@ var (
 
 func TestQuickstartFromEmptyDirectory(t *testing.T) {
 	t.Parallel()
-	moduleRoot := commandModuleRoot(t)
-	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "QUICKSTART.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document := string(source)
+	document := documentedChapter(t, "quickstart")
 
 	files := quickstartDocumentedFiles(t, document)
 	for _, required := range []string{"notes/schema.go", "notes/policies.go", "cmd/notes/main.go"} {
 		if files[required] == "" {
-			t.Fatalf("QUICKSTART.md documents no %s block", required)
+			t.Fatalf("quickstart chapter documents no %s block", required)
 		}
 	}
 	commands := quickstartDocumentedCommands(document)
@@ -135,7 +130,7 @@ func quickstartGo(t *testing.T, directory string, arguments ...string) string {
 
 func TestGuideApplicationRuns(t *testing.T) {
 	t.Parallel()
-	application := buildDocumentedApplication(t, "GUIDE.md", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
+	application := buildDocumentedApplication(t, "application", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
 	output := quickstartGo(t, application, "run", "./cmd/notes")
 	if !strings.Contains(output, "author=2 anonymous=1 drafts=1") {
 		t.Fatalf("the documented program printed %q", output)
@@ -144,7 +139,7 @@ func TestGuideApplicationRuns(t *testing.T) {
 
 func TestQueueApplicationRuns(t *testing.T) {
 	t.Parallel()
-	application := buildDocumentedApplication(t, "QUEUE.md", []string{"notes/", "cmd/notes/"}, notesDocumentedFiles, "notes", "sqlite", "notes.db")
+	application := buildDocumentedApplication(t, "queue", []string{"notes/", "cmd/notes/"}, notesDocumentedFiles, "notes", "sqlite", "notes.db")
 	output := quickstartGo(t, application, "run", "./cmd/notes")
 	for _, expected := range []string{"welcome=succeeded attempt=1", "flaky=succeeded attempt=2"} {
 		if !strings.Contains(output, expected) {
@@ -155,7 +150,7 @@ func TestQueueApplicationRuns(t *testing.T) {
 
 func TestDurableActionsRecipeRuns(t *testing.T) {
 	t.Parallel()
-	application := buildDocumentedApplication(t, "QUEUE.md", durablePrefixes, durableDocumentedFiles, "durable", "sqlite", "durable.db")
+	application := buildDocumentedApplication(t, "queue", durablePrefixes, durableDocumentedFiles, "durable", "sqlite", "durable.db")
 	output := quickstartGo(t, application, "run", "./cmd/durable")
 	for _, expected := range []string{"export=report status=succeeded code=\n", "export=failing status=failed code=attempts_exhausted\n", "export=canceled status=canceled code=\n"} {
 		if !strings.Contains(output, expected) {
@@ -167,7 +162,7 @@ func TestDurableActionsRecipeRuns(t *testing.T) {
 func TestDurableActionsRecipeOnPostgreSQL(t *testing.T) {
 	t.Parallel()
 	database := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
-	application := buildDocumentedApplication(t, "QUEUE.md", durablePrefixes, durableDocumentedFiles, "durable", "postgresql", database)
+	application := buildDocumentedApplication(t, "queue", durablePrefixes, durableDocumentedFiles, "durable", "postgresql", database)
 	child, err := os.ReadFile(filepath.Join("testdata", "durable_recipe_test.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +181,7 @@ func TestDurableActionsRecipeOnPostgreSQL(t *testing.T) {
 
 func TestSemanticApplicationRuns(t *testing.T) {
 	t.Parallel()
-	application := buildDocumentedApplication(t, "SEMANTIC.md", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
+	application := buildDocumentedApplication(t, "semantic", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
 	output := quickstartGo(t, application, "run", "./cmd/notes")
 	for _, expected := range []string{"search returned 3", "similar returned 2"} {
 		if !strings.Contains(output, expected) {
@@ -197,7 +192,7 @@ func TestSemanticApplicationRuns(t *testing.T) {
 
 func TestFullTextApplicationRuns(t *testing.T) {
 	t.Parallel()
-	application := buildDocumentedApplication(t, "FULLTEXT.md", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
+	application := buildDocumentedApplication(t, "fulltext", nil, notesDocumentedFiles, "notes", "sqlite", "notes.db")
 	output := quickstartGo(t, application, "run", "./cmd/notes")
 	if !strings.Contains(output, "search returned 1: Renée's invoice") {
 		t.Fatalf("the documented program printed %q", output)
@@ -206,15 +201,10 @@ func TestFullTextApplicationRuns(t *testing.T) {
 
 func TestRenderApplicationRuns(t *testing.T) {
 	t.Parallel()
-	moduleRoot := commandModuleRoot(t)
-	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "RENDER.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document := string(source)
+	document := documentedChapter(t, "render")
 	files := quickstartDocumentedFiles(t, document)
 	if files["cmd/site/main.go"] == "" {
-		t.Fatal("RENDER.md documents no cmd/site/main.go block")
+		t.Fatal("render chapter documents no cmd/site/main.go block")
 	}
 	shell := quickstartDocumentedShell(t, document)
 
@@ -276,19 +266,34 @@ func writeDocumentedModule(t *testing.T, name string, files map[string]string) s
 	return application
 }
 
-func buildDocumentedApplication(t *testing.T, document string, prefixes, required []string, schema, provider, database string) string {
+func documentedChapter(t *testing.T, chapter string) string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.Join(commandModuleRoot(t), "..", "docs", "golem-go", document))
+	source, err := os.ReadFile(filepath.Join(commandModuleRoot(t), "..", "docs", "GUIDE.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := quickstartDocumentedFiles(t, string(source))
+	start := "<!-- chapter:" + chapter + " -->"
+	end := "<!-- /chapter:" + chapter + " -->"
+	if bytes.Count(source, []byte(start)) != 1 || bytes.Count(source, []byte(end)) != 1 {
+		t.Fatalf("GUIDE.md must contain exactly one opening and closing marker for chapter %q", chapter)
+	}
+	_, remainder, _ := strings.Cut(string(source), start)
+	section, _, ok := strings.Cut(remainder, end)
+	if !ok {
+		t.Fatalf("GUIDE.md chapter %q ends before it starts", chapter)
+	}
+	return section
+}
+
+func buildDocumentedApplication(t *testing.T, chapter string, prefixes, required []string, schema, provider, database string) string {
+	t.Helper()
+	files := quickstartDocumentedFiles(t, documentedChapter(t, chapter))
 	if len(prefixes) > 0 {
 		files = quickstartFilesUnder(files, prefixes...)
 	}
 	for _, path := range required {
 		if files[path] == "" {
-			t.Fatalf("%s documents no %s block", document, path)
+			t.Fatalf("%s chapter documents no %s block", chapter, path)
 		}
 	}
 	application := writeDocumentedModule(t, "notes", files)

@@ -34,6 +34,7 @@ jobs:
             go:
               - go/**
               - docs/**
+              - README.md
               - scripts/verify.sh
               - Makefile
               - .github/workflows/ci.yml
