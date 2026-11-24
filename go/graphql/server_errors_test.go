@@ -5,17 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	goast "go/ast"
-	"go/build"
-	goparser "go/parser"
-	"go/token"
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +17,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"github.com/vektah/gqlparser/v2/parser"
+	"github.com/vektah/gqlparser/v2/validator/rules"
 )
 
 const errorsSDL = `scalar JSON
@@ -377,22 +372,19 @@ func TestValidationPresenterBoundsLocationsAndNamesUnknownRulesGenerically(t *te
 }
 
 func TestValidationRuleTableCoversPinnedGqlparser(t *testing.T) {
-	registered := registeredGqlparserRules(t)
+	registered := rules.NewDefaultRules().GetInner()
 	var missing, stale []string
-	for _, name := range registered {
+	for name := range registered {
 		if _, ok := validationTemplates[name]; !ok {
 			missing = append(missing, name)
 		}
 	}
 	for name := range validationTemplates {
-		found := false
-		for _, candidate := range registered {
-			found = found || candidate == name
-		}
-		if !found {
+		if _, found := registered[name]; !found {
 			stale = append(stale, name)
 		}
 	}
+	sort.Strings(missing)
 	sort.Strings(stale)
 	if len(missing) != 0 || len(stale) != 0 {
 		t.Fatalf("validation templates drifted from the pinned gqlparser: missing=%v stale=%v", missing, stale)
@@ -404,77 +396,6 @@ func TestValidationRuleTableCoversPinnedGqlparser(t *testing.T) {
 		}
 		seen[message] = name
 	}
-}
-
-func registeredGqlparserRules(t *testing.T) []string {
-	t.Helper()
-	pkg, err := build.Import("github.com/vektah/gqlparser/v2/validator/rules", "", build.FindOnly)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := filepath.Glob(filepath.Join(pkg.Dir, "*.go"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("gqlparser rules not found: %v", err)
-	}
-	fileSet := token.NewFileSet()
-	ruleNames := map[string]string{}
-	var registrations []string
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		parsed, err := goparser.ParseFile(fileSet, file, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		goast.Inspect(parsed, func(node goast.Node) bool {
-			switch value := node.(type) {
-			case *goast.ValueSpec:
-				for index, name := range value.Names {
-					if index >= len(value.Values) {
-						continue
-					}
-					literal, ok := value.Values[index].(*goast.CompositeLit)
-					if !ok {
-						continue
-					}
-					for _, element := range literal.Elts {
-						pair, ok := element.(*goast.KeyValueExpr)
-						if !ok {
-							continue
-						}
-						if key, ok := pair.Key.(*goast.Ident); ok && key.Name == "Name" {
-							if text, ok := pair.Value.(*goast.BasicLit); ok {
-								ruleNames[name.Name], _ = strconv.Unquote(text.Value)
-							}
-						}
-					}
-				}
-			case *goast.CallExpr:
-				if function, ok := value.Fun.(*goast.Ident); ok && function.Name == "AddRule" && len(value.Args) == 2 {
-					if selector, ok := value.Args[0].(*goast.SelectorExpr); ok {
-						if owner, ok := selector.X.(*goast.Ident); ok {
-							registrations = append(registrations, owner.Name)
-						}
-					}
-				}
-			}
-			return true
-		})
-	}
-	names := make([]string, 0, len(registrations))
-	for _, owner := range registrations {
-		name, ok := ruleNames[owner]
-		if !ok {
-			t.Fatalf("registered rule %s has no literal name", owner)
-		}
-		names = append(names, name)
-	}
-	if len(names) < 20 {
-		t.Fatalf("found only %d registered rules: %v", len(names), names)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func mustParseDocument(t testing.TB, query string) *ast.QueryDocument {

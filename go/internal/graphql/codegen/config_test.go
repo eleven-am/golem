@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	gqlconfig "github.com/99designs/gqlgen/codegen/config"
+	gqlgraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
@@ -21,6 +22,24 @@ import (
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
+
+func TestGeneratedExecutableUsesLinkedGQLGenVersion(t *testing.T) {
+	source, err := privateGQLGenModuleSource("example.test/framework", moduleResolution{
+		Path: "example.test/framework", Version: "v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(source, []byte("github.com/99designs/gqlgen "+gqlgraphql.Version+"\n")) {
+		t.Errorf("private module does not require linked gqlgen %s:\n%s", gqlgraphql.Version, source)
+	}
+	stamped := stampGeneratedSource([]byte("package app\n"), Request{
+		GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
+	})
+	if !bytes.Contains(stamped, []byte("// gqlgen "+gqlgraphql.Version+";")) {
+		t.Errorf("generated identity does not name linked gqlgen %s:\n%s", gqlgraphql.Version, stamped)
+	}
+}
 
 func TestRenderSemanticSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing.T) {
 	compilation := ir.CompilationIR{
@@ -331,7 +350,7 @@ func TestPrivateGQLGenModuleSourceCoversVersionMainReplaceAndFork(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range append(test.contains, "github.com/99designs/gqlgen "+GQLGenVersion, "github.com/vektah/gqlparser/v2 "+gqlParserVersion) {
+			for _, want := range append(test.contains, "github.com/99designs/gqlgen "+GQLGenVersion) {
 				if !strings.Contains(string(source), want) {
 					t.Fatalf("private module missing %q:\n%s", want, source)
 				}

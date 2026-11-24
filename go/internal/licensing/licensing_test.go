@@ -17,26 +17,26 @@ import (
 func TestDependencyLicenseAuthorityIsCanonicalDigestBoundAndDetached(t *testing.T) {
 	root := dependencyLicenseModuleRoot(t)
 	encoded := dependencyLicenseRead(t, root, DependencyLicenseAuthorityPath)
-	if got := DependencyLicenseAuthorityDigest(encoded); got != "32b0e6dd0e77d14f459998efbbcffb890d856e32203b7a16adc74521b3975b6e" {
+	if got := DependencyLicenseAuthorityDigest(encoded); got != "c04c105a040b6f6db9f4cf94c4f743b8ac91959b4b5eca13bac66bcc39f2a323" {
 		t.Fatalf("dependency license authority digest=%s", got)
 	}
-	if DependencyLicenseAuthoritySHA256 != "32b0e6dd0e77d14f459998efbbcffb890d856e32203b7a16adc74521b3975b6e" {
+	if DependencyLicenseAuthoritySHA256 != "c04c105a040b6f6db9f4cf94c4f743b8ac91959b4b5eca13bac66bcc39f2a323" {
 		t.Fatalf("dependency license source digest=%s", DependencyLicenseAuthoritySHA256)
 	}
 	value, err := ParseDependencyLicenseAuthority(encoded, DependencyLicenseAuthoritySHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "7f45c7297e6a37a3b1048b20320ae37fbaded22d6b8ee56c49d45836efd78f3d" {
+	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "7a0f90a5f3ae5a508fbf3a7cd5c4674ad2ffd4a2415775c126a2f2ec5630936b" {
 		t.Fatalf("project/notices authority=%+v %+v", value.Project, value.Notices)
 	}
 	want := []DependencyLicense{
-		{Module: "github.com/klauspost/compress", Version: "v1.18.5", LicenseDeclared: "LicenseRef-Klauspost-Compress-Composite", LicenseSHA256: "0d9e582ee4bff57bf1189c9e514e6da7ce277f9cd3bc2d488b22fbb39a6d87cf"},
-		{Module: "github.com/nats-io/nats.go", Version: "v1.52.0", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
-		{Module: "github.com/nats-io/nkeys", Version: "v0.4.15", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
+		{Module: "github.com/klauspost/compress", Version: "v1.20.5", LicenseDeclared: "LicenseRef-Klauspost-Compress-Composite", LicenseSHA256: "0d9e582ee4bff57bf1189c9e514e6da7ce277f9cd3bc2d488b22fbb39a6d87cf"},
+		{Module: "github.com/nats-io/nats.go", Version: "v1.56.0", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
+		{Module: "github.com/nats-io/nkeys", Version: "v0.4.17", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
 		{Module: "github.com/nats-io/nuid", Version: "v1.0.1", LicenseDeclared: "Apache-2.0", LicenseSHA256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
-		{Module: "golang.org/x/crypto", Version: "v0.58.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
-		{Module: "golang.org/x/sys", Version: "v0.49.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
+		{Module: "golang.org/x/crypto", Version: "v0.59.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
+		{Module: "golang.org/x/sys", Version: "v0.50.0", LicenseDeclared: "BSD-3-Clause", LicenseSHA256: "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"},
 	}
 	if len(value.Dependencies) != len(want) {
 		t.Fatalf("dependency inventory=%+v", value.Dependencies)
@@ -165,10 +165,12 @@ func TestDependencyLicenseAuthorityExactlyCoversNATSPackageModuleClosure(t *test
 	for _, requirement := range moduleFile.Require {
 		selected[requirement.Mod.Path] = requirement.Mod.Version
 	}
-	actual := map[string]string{"github.com/nats-io/nats.go": selected["github.com/nats-io/nats.go"]}
+	const natsModule = "github.com/nats-io/nats.go"
+	natsIdentity := natsModule + "@" + selected[natsModule]
+	actual := map[string]string{natsModule: selected[natsModule]}
 	for _, line := range bytes.Split(bytes.TrimSpace(encoded), []byte{'\n'}) {
 		fields := bytes.Fields(line)
-		if len(fields) != 2 || string(fields[0]) != "github.com/nats-io/nats.go@v1.52.0" || bytes.HasPrefix(fields[1], []byte("go@")) {
+		if len(fields) != 2 || string(fields[0]) != natsIdentity || bytes.HasPrefix(fields[1], []byte("go@")) {
 			continue
 		}
 		module, _, ok := strings.Cut(string(fields[1]), "@")

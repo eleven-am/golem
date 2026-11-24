@@ -13,7 +13,7 @@ import (
 
 const (
 	DependencyLicenseAuthorityPath   = "compatibility/dependency-licenses.json"
-	DependencyLicenseAuthoritySHA256 = "32b0e6dd0e77d14f459998efbbcffb890d856e32203b7a16adc74521b3975b6e"
+	DependencyLicenseAuthoritySHA256 = "c04c105a040b6f6db9f4cf94c4f743b8ac91959b4b5eca13bac66bcc39f2a323"
 	ProjectLicensePath               = "LICENSE"
 	ThirdPartyNoticesPath            = "THIRD_PARTY_NOTICES"
 	ProjectLicenseDeclared           = "LicenseRef-Golem-GPLv3-Unspecified"

@@ -8,24 +8,24 @@
   },
   "notices": {
     "path": "THIRD_PARTY_NOTICES",
-    "sha256": "7f45c7297e6a37a3b1048b20320ae37fbaded22d6b8ee56c49d45836efd78f3d"
+    "sha256": "7a0f90a5f3ae5a508fbf3a7cd5c4674ad2ffd4a2415775c126a2f2ec5630936b"
   },
   "dependencies": [
     {
       "module": "github.com/klauspost/compress",
-      "version": "v1.18.5",
+      "version": "v1.20.5",
       "licenseDeclared": "LicenseRef-Klauspost-Compress-Composite",
       "licenseSHA256": "0d9e582ee4bff57bf1189c9e514e6da7ce277f9cd3bc2d488b22fbb39a6d87cf"
     },
     {
       "module": "github.com/nats-io/nats.go",
-      "version": "v1.52.0",
+      "version": "v1.56.0",
       "licenseDeclared": "Apache-2.0",
       "licenseSHA256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
     },
     {
       "module": "github.com/nats-io/nkeys",
-      "version": "v0.4.15",
+      "version": "v0.4.17",
       "licenseDeclared": "Apache-2.0",
       "licenseSHA256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
     },
@@ -37,13 +37,13 @@
     },
     {
       "module": "golang.org/x/crypto",
-      "version": "v0.58.0",
+      "version": "v0.59.0",
       "licenseDeclared": "BSD-3-Clause",
       "licenseSHA256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
     },
     {
       "module": "golang.org/x/sys",
-      "version": "v0.49.0",
+      "version": "v0.50.0",
       "licenseDeclared": "BSD-3-Clause",
       "licenseSHA256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
     }

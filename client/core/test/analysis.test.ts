@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/query-core'
-import { parse, print, type DocumentNode } from 'graphql'
+import { Kind, getOperationAST, parse, parseValue, print, type DocumentNode } from 'graphql'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { DocumentAnalyzer, GolemClient, GolemDocumentError, GolemMultipleOperationsError, analyzeMutation, GolemNotLiveError, assertLive, streamRequest, type MutateOptions } from '../src/index.js'
 import {
@@ -16,6 +16,17 @@ const normal = (text: string): string => print(parse(text))
 const flat = (text: string | undefined): string => (text ?? '').replace(/\s+/g, ' ').replace(/\( /g, '(').replace(/ \)/g, ')')
 
 const social = new DocumentAnalyzer(socialManifest)
+
+function streamFilter(query: string | undefined): { root: string; where: string } {
+  const operation = getOperationAST(parse(query ?? ''))
+  if (operation == null) throw new Error('stream operation is missing')
+  const fields = operation.selectionSet.selections.filter((selection) => selection.kind === Kind.FIELD)
+  expect(fields).toHaveLength(1)
+  const field = fields[0]
+  const where = field?.arguments?.find((argument) => argument.name.value === 'where')
+  if (field === undefined || where === undefined) throw new Error('stream root filter is missing')
+  return { root: field.name.value, where: print(where.value) }
+}
 
 function streamQueries(analyzer: DocumentAnalyzer, text: string): string[] {
   return analyzer.analyze(text).streams.map((stream) => stream.query)
@@ -97,7 +108,7 @@ describe('stream set', () => {
 
   it('translates a unique root into an equality filter on the key', () => {
     const [stream] = social.analyze('query($id: UUID!) { post(where: { ID: $id }) { title } }').streams
-    expect(flat(stream?.query)).toContain('postEvents(where: {id: {equals: $id}})')
+    expect(streamFilter(stream?.query)).toEqual({ root: 'postEvents', where: print(parseValue('{id: {equals: $id}}')) })
     expect(stream?.variableNames).toEqual(['id'])
   })
 
@@ -105,7 +116,7 @@ describe('stream set', () => {
     const [stream] = social.analyze(
       'query($p: UUID!, $t: String!) { postTag(where: { PostID_TagName: { postID: $p, tagName: $t } }) { tagName } }',
     ).streams
-    expect(flat(stream?.query)).toContain('postTagEvents(where: {postID: {equals: $p}, tagName: {equals: $t}})')
+    expect(streamFilter(stream?.query)).toEqual({ root: 'postTagEvents', where: print(parseValue('{postID: {equals: $p}, tagName: {equals: $t}}')) })
     expect(stream?.variableNames).toEqual(['p', 't'])
   })
 
@@ -124,24 +135,20 @@ describe('stream set', () => {
     const comment = social.analyze(
       'query($id: UUID!) { post(where: { ID: $id }) { comments(where: { body: { contains: "x" } }) { body } } }',
     ).streams[1]
-    expect(flat(comment?.query)).toContain(
-      'commentEvents(where: {AND: [{body: {contains: "x"}}, {post: {is: {id: {equals: $id}}}}]})',
-    )
+    expect(streamFilter(comment?.query)).toEqual({ root: 'commentEvents', where: print(parseValue('{AND: [{body: {contains: "x"}}, {post: {is: {id: {equals: $id}}}}]}')) })
   })
 
   it('lifts through a to-one relation whose inverse is a list with some', () => {
     const post = social.analyze('query($w: CommentWhereInput) { comments(where: $w) { post { title } } }').streams[1]
     expect(post?.eventsRoot).toBe('postEvents')
-    expect(flat(post?.query)).toContain('postEvents(where: {comments: {some: $w}})')
+    expect(streamFilter(post?.query)).toEqual({ root: 'postEvents', where: print(parseValue('{comments: {some: $w}}')) })
   })
 
   it('lifts two levels by composing the scopes', () => {
     const replies = social.analyze(
       'query($id: UUID!) { post(where: { ID: $id }) { comments { replies { body } } } }',
     ).streams[2]
-    expect(flat(replies?.query)).toContain(
-      'commentEvents(where: {parent: {is: {post: {is: {id: {equals: $id}}}}}})',
-    )
+    expect(streamFilter(replies?.query)).toEqual({ root: 'commentEvents', where: print(parseValue('{parent: {is: {post: {is: {id: {equals: $id}}}}}}')) })
   })
 
   it('opens the policy-only slot stream for an opaque root', () => {

@@ -80,8 +80,17 @@ installation command and the root README. Change these together for a release.
 The nine package READMEs are intentionally short npm entry points; keep detailed
 behavior in the guide and use package READMEs for installation and navigation.
 
-For the browser client, install with `npm --prefix client ci`, then use the
-workspace build, type-check and test scripts in `client/package.json`.
+`scripts/verify.sh compatibility` reruns the pinned-source consumers with the
+same private PostgreSQL fixture owner as `database-bound`. Prepare the consumer
+dependency cache first; the consumer commands remain offline. Set `PG_BINDIR`
+when `pg_config` points to client-only tools.
+
+For the browser client, install with `npm --prefix client ci --strict-peer-deps`,
+then use the workspace build, type-check and test scripts in `client/package.json`.
+The shared development tools require Node 22.22.2, 24.15 or later in those major
+lines, or Node 26 and later. Public SDKs retain Node >=20.19 with GraphQL 16.
+TypeScript 6.0.3 is the newest compatible compiler: gql.tada's language-service
+plugin currently accepts TypeScript 5 and 6, so TypeScript 7 is excluded.
 For the Prisma backend, use `make ts-install`, `make ts-build` and `make ts-test`.
 These are independent workspaces; a client-only change does not require rebuilding
 the Prisma backend.
@@ -148,7 +157,7 @@ Prisma/NestJS packages. A tag in one namespace does not release the others.
    package versions and distribution tags. Workflow definitions in
    `.github/workflows/` are the executable release authority.
 
-Current documented releases are Go 0.9.0 and browser client 0.3.0. The Go release
+Current documented releases are Go 0.9.1 and browser client 0.3.1. The Go release
 requires Go 1.26.11 or later. Automatic writers remain V3; staged V4 verification
 does not activate V4 in a released application. After a V4 commit, rollback must
 retain V4 readers. NAS measurements and production rollout remain unverified.
@@ -948,11 +957,12 @@ Automatic writers still emit V3. The staged V4 acceptance exercises historical c
 
 ### Frames generator dependency prerequisite
 
-`TestFramesGQLGenConsumerMVS` builds the current CLI from source inside a
+`TestGQLGenConsumerMVS` builds the current CLI from source inside a
 disposable consumer that pins Frames' gqlgen v0.17.94 and gqlparser v2.5.36.
 It inspects a nested DTO/input schema, creates its reviewed initial migration,
 generates and checks the application, and compiles every generated package.
-The selected generator versions are checked before and after these operations.
+The selected generator versions must equal Golem's current module selection
+before and after these operations; the lower consumer pins remain unchanged.
 Using a CLI built in Golem's own module would miss generator API skew.
 
 This tests the two generator pins under consumer module selection, not Frames'

@@ -4,7 +4,7 @@ Format-Version: 1
 This distribution includes source dependencies whose reviewed license texts are reproduced below.
 The SPDX labels are inventory declarations bound to the exact text hashes in compatibility/dependency-licenses.json.
 
------ BEGIN LICENSE github.com/klauspost/compress@v1.18.5 -----
+----- BEGIN LICENSE github.com/klauspost/compress@v1.20.5 -----
 Copyright (c) 2012 The Go Authors. All rights reserved.
 Copyright (c) 2019 Klaus Post. All rights reserved.
 
@@ -309,9 +309,9 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
------ END LICENSE github.com/klauspost/compress@v1.18.5 -----
+----- END LICENSE github.com/klauspost/compress@v1.20.5 -----
 
------ BEGIN LICENSE github.com/nats-io/nats.go@v1.52.0 -----
+----- BEGIN LICENSE github.com/nats-io/nats.go@v1.56.0 -----
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -513,9 +513,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
------ END LICENSE github.com/nats-io/nats.go@v1.52.0 -----
+----- END LICENSE github.com/nats-io/nats.go@v1.56.0 -----
 
------ BEGIN LICENSE github.com/nats-io/nkeys@v0.4.15 -----
+----- BEGIN LICENSE github.com/nats-io/nkeys@v0.4.17 -----
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -717,7 +717,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
------ END LICENSE github.com/nats-io/nkeys@v0.4.15 -----
+----- END LICENSE github.com/nats-io/nkeys@v0.4.17 -----
 
 ----- BEGIN LICENSE github.com/nats-io/nuid@v1.0.1 -----
                                  Apache License
@@ -923,7 +923,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    limitations under the License.
 ----- END LICENSE github.com/nats-io/nuid@v1.0.1 -----
 
------ BEGIN LICENSE golang.org/x/crypto@v0.58.0 -----
+----- BEGIN LICENSE golang.org/x/crypto@v0.59.0 -----
 Copyright 2009 The Go Authors.
 
 Redistribution and use in source and binary forms, with or without
@@ -951,9 +951,9 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
------ END LICENSE golang.org/x/crypto@v0.58.0 -----
+----- END LICENSE golang.org/x/crypto@v0.59.0 -----
 
------ BEGIN LICENSE golang.org/x/sys@v0.49.0 -----
+----- BEGIN LICENSE golang.org/x/sys@v0.50.0 -----
 Copyright 2009 The Go Authors.
 
 Redistribution and use in source and binary forms, with or without
@@ -981,4 +981,4 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
------ END LICENSE golang.org/x/sys@v0.49.0 -----
+----- END LICENSE golang.org/x/sys@v0.50.0 -----

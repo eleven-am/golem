@@ -15,7 +15,7 @@ import (
 )
 
 const golemGeneratedGraphQLABI = "p8-graphql-abi-v6"
-const golemGeneratedGQLGenVersion = "v0.17.70"
+const golemGeneratedGQLGenVersion = "v0.17.98"
 const golemGeneratedGraphQLGenerationDigest = "0095470f9138c89e1a8890bd70cedfd34d895e8937d6fa21fcc4b8abe31ba1a0"
 const golemGeneratedGraphQLGeneratorVersion = "p1-v1"
 const golemGeneratedGraphQLTemplateABI = "p8-go-abi-v8"

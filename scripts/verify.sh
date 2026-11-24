@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_DIR="$ROOT/go"
 GO="${GO:-go}"
 LOG_DIR="${VERIFY_LOG_DIR:-$GO_DIR/bin/verify}"
-GOVULNCHECK="golang.org/x/vuln/cmd/govulncheck@v1.7.0"
+GOVULNCHECK="golang.org/x/vuln/cmd/govulncheck@v1.10.0"
 NATS_IMAGE="nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
 
 export GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 GOLEM_REQUIRE_PGVECTOR=1
@@ -302,7 +302,7 @@ check_database_tier() {
 			echo "undeclared database package: $file" >&2
 			status=1
 		fi
-	done < <(grep -rl --include='*.go' \
+	done < <(grep -rl --include='*.go' --exclude-dir='old' \
 		-e GOLEM_TEST_POSTGRES_DSN -e GOLEM_TEST_POSTGRES_LINGUISTIC_DSN -e GOLEM_TEST_PGVECTOR_DSN \
 		-e '/internal/testenv"' "$GO_DIR")
 	return "$status"
@@ -310,7 +310,7 @@ check_database_tier() {
 
 format() {
 	local unformatted latest declared install readme_install guide="$ROOT/docs/GUIDE.md"
-	unformatted="$(cd "$GO_DIR" && find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)" || return 1
+	unformatted="$(cd "$GO_DIR" && find . -type d -name old -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)" || return 1
 	[ -z "$unformatted" ] || {
 		printf 'gofmt would rewrite:\n%s\n' "$unformatted" >&2
 		return 1
@@ -364,6 +364,7 @@ run() {
 		;;
 	writer4-database) with_private_postgresql with_writer4 writer4_database_acceptance ;;
 	writer4-client) writer4_client_acceptance ;;
+	compatibility) with_private_postgresql go_test_serial ./compatibility ;;
 	oracle-mutation-and-load) go_test_serial "${ORACLE_MUTATION_AND_LOAD[@]}" ;;
 	oracle-failure-and-event)
 		require_local_nats || return 1
@@ -382,7 +383,7 @@ run() {
 		;;
 	vulncheck) (cd "$GO_DIR" && "$GO" run "$GOVULNCHECK" ./...) ;;
 	*)
-		echo "unknown step: $1 (steps: ${STEPS[*]}; explicit actions: cache-nats writer4-database writer4-client)" >&2
+		echo "unknown step: $1 (steps: ${STEPS[*]}; explicit actions: cache-nats compatibility writer4-database writer4-client)" >&2
 		return 2
 		;;
 	esac

@@ -59,7 +59,7 @@
     {
       "path": "social/golemgqlgen/zz_golem_graphql_exec.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "ddc9c7a7355e8703ede03eee52be3b1c2207f8fc3c3e73a2ef4e793144f2025e",
+      "contentSha256": "3a12dd4007509275913556c119f335b3ec5363609c25a133bc5c450a84381e0c",
       "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
       "generationDigest": "99b13864247f9d1f9887ed8e72eb9b234adaa1e9ca67019fd6a7b64a5f6f9761",
       "generatorVersion": "p1-v1",
@@ -68,7 +68,7 @@
     {
       "path": "social/golemgqlgen/zz_golem_graphql_models.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "70d0c6e5312ed9eb17295a9b7dd244a2e02185946a9f28bebac88e7e219a1cee",
+      "contentSha256": "bc4cabb0937dea2360eb892a01a899e2b4ba008895cbdab5bd08658661267aae",
       "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
       "generationDigest": "99b13864247f9d1f9887ed8e72eb9b234adaa1e9ca67019fd6a7b64a5f6f9761",
       "generatorVersion": "p1-v1",
@@ -77,7 +77,7 @@
     {
       "path": "social/golemgqlgen/zz_golem_graphql_resolvers.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "e7a34ddecfb091b23cde4f42105c4477750c77c785e9b6c67d6e91979c4e5e16",
+      "contentSha256": "5b7b2535ac8e0576c01c2d751c70e68957e987a98bdf6a492c39cadaa161fcaf",
       "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
       "generationDigest": "99b13864247f9d1f9887ed8e72eb9b234adaa1e9ca67019fd6a7b64a5f6f9761",
       "generatorVersion": "p1-v1",
@@ -113,7 +113,7 @@
     {
       "path": "social/zz_golem_graphql.gen.go",
       "kind": "graphql_go",
-      "contentSha256": "bdb31e2fe10afab774e83f44e8d6b34a8bdbe9bb6bb476d7900675141daf6a01",
+      "contentSha256": "54a2cfcb0dc446c737c740450d1b286f0a8319206997ed16f82434ef5eae5dec",
       "modelFingerprint": "27924791e418e41cecb527ee2ab12431720d0419ab2c9d283b298182f20f9cba",
       "generationDigest": "99b13864247f9d1f9887ed8e72eb9b234adaa1e9ca67019fd6a7b64a5f6f9761",
       "generatorVersion": "p1-v1",

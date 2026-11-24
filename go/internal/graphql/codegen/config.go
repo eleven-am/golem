@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/99designs/gqlgen/codegen/config"
+	gqlgraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/graphql/adaptersurface"
@@ -23,7 +24,7 @@ import (
 
 // GQLGenVersion participates in P5 generation identity and is changed only
 // with the GraphQL golden, compile, execution, and determinism gates.
-const GQLGenVersion = "v0.17.70"
+const GQLGenVersion = gqlgraphql.Version
 
 const (
 	GraphQLABIVersion        = "p8-graphql-abi-v6"

@@ -175,6 +175,25 @@ func (world *recheckWorld) dial(t *testing.T, user golem.UUID) *websocket.Conn {
 
 func subscribeWS(t *testing.T, connection *websocket.Conn, id, query string, variables map[string]any) {
 	t.Helper()
+	sendWSSubscription(t, connection, id, query, variables)
+	frame := readWSFrame(t, connection, "next")
+	var acknowledgement struct {
+		Extensions struct {
+			Golem struct {
+				Live bool `json:"live"`
+			} `json:"golem"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(frame.Payload, &acknowledgement); err != nil {
+		t.Fatal(err)
+	}
+	if frame.ID != id || !acknowledgement.Extensions.Golem.Live {
+		t.Fatalf("subscription %s was not admitted: %s %s", id, frame.ID, frame.Payload)
+	}
+}
+
+func sendWSSubscription(t *testing.T, connection *websocket.Conn, id, query string, variables map[string]any) {
+	t.Helper()
 	if err := connection.WriteJSON(map[string]any{"id": id, "type": "subscribe", "payload": map[string]any{"query": query, "variables": variables}}); err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +481,7 @@ func TestSubscriptionPrincipalCapSpansGoAndGraphQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitWSNext(t, connection, "admitted", created.String())
-	subscribeWS(t, connection, "refused", postSubscription, nil)
+	sendWSSubscription(t, connection, "refused", postSubscription, nil)
 	awaitWSOperationError(t, connection, "refused", events.CodeSubscriptionLimit)
 	assertWSPing(t, connection)
 	if _, err := dave.Comments.Events(ctx); err == nil {
@@ -484,7 +503,6 @@ func TestSubscriptionPrincipalCapSpansGoAndGraphQL(t *testing.T) {
 	}
 	subscribeWS(t, connection, "freed", postSubscription, nil)
 	next := mustUUID(t, "65000000-0000-0000-0000-000000000002")
-	time.Sleep(100 * time.Millisecond)
 	if _, err := dave.Posts.Create(ctx, referencePostInput(t, next, true)); err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +575,6 @@ func TestReconnectAfterTheDeadlineResolvesThePrincipalFresh(t *testing.T) {
 	first := world.dial(t, carolID)
 	subscribeWS(t, first, "posts", postSubscription, nil)
 	draftOne := mustUUID(t, "67000000-0000-0000-0000-000000000001")
-	time.Sleep(100 * time.Millisecond)
 	if _, err := carol.Posts.Create(ctx, referencePostInput(t, draftOne, false)); err != nil {
 		t.Fatal(err)
 	}
@@ -576,7 +593,6 @@ func TestReconnectAfterTheDeadlineResolvesThePrincipalFresh(t *testing.T) {
 	world.credentialTTL.Store(int64(time.Hour))
 	second := world.dial(t, carolID)
 	subscribeWS(t, second, "posts", postSubscription, nil)
-	time.Sleep(100 * time.Millisecond)
 	draftTwo := mustUUID(t, "67000000-0000-0000-0000-000000000002")
 	published := mustUUID(t, "67000000-0000-0000-0000-000000000003")
 	if _, err := carol.Posts.Create(ctx, referencePostInput(t, draftTwo, false)); err != nil {

@@ -189,9 +189,7 @@ func assertResponseOrderSubscription(t *testing.T, application *social.App[socia
 	}
 	readWSFrame(t, connection, "connection_ack")
 	query := `subscription { postEvents { type __typename entity { title ...Ident metadata } kind: type id } } fragment Ident on Post { id __typename }`
-	if err := connection.WriteJSON(map[string]any{"id": "ordered", "type": "subscribe", "payload": map[string]any{"query": query}}); err != nil {
-		t.Fatal(err)
-	}
+	subscribeWS(t, connection, "ordered", query, nil)
 	postID := mustUUID(t, "23000000-0000-0000-0000-000000000002")
 	if _, err := caller.Posts.Create(context.Background(), social.Posts.Create(
 		social.Posts.ID.Create(postID), social.Posts.Title.Create("subscribed"), social.Posts.Body.Create("body"),

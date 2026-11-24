@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot } from 'react-dom/client'
 import { expect, expectTypeOf, it } from 'vitest'
-import { buildSchema, coerceInputValue, GraphQLInputObjectType, introspectionFromSchema, parse, validate } from 'graphql'
+import { buildSchema, GraphQLInputObjectType, introspectionFromSchema, parse, validate, validateInputValue } from 'graphql'
 import { initGraphQLTada, type ResultOf, type VariablesOf } from 'gql.tada'
 import { outputIntrospectionFile } from 'gql.tada/internal'
 import { GolemClient } from '@eleven-am/golem-client'
@@ -59,7 +59,7 @@ it('keeps gql.tada introspection tied to the generated Go SDL', () => {
   expectTypeOf<VariablesFor<typeof CHOICE>>().toEqualTypeOf<VariablesOf<typeof CHOICE>>()
   const target = schema.getType('PlaybackTarget')
   expect(target).toBeInstanceOf(GraphQLInputObjectType)
-  expect(() => coerceInputValue(multipleChoices.target, target as GraphQLInputObjectType)).toThrow('Exactly one key')
+  expect(() => validateInputValue(multipleChoices.target, target as GraphQLInputObjectType, (error) => { throw error })).toThrow('exactly one field must be specified')
   expectTypeOf<ResultFor<typeof HOME>['homeFeed']['results'][number]['kind']>().toEqualTypeOf<'BASIC_PICK' | 'EDITOR_PICK' | 'RECOMMENDATION'>()
   expectTypeOf<ResultFor<typeof COMPUTED>['users'][number]['metadata']['identity']>().toEqualTypeOf<string>()
   expectTypeOf<NonNullable<ResultFor<typeof COMPUTED>['users'][number]['metadata']['items'][number]>['kind']>().toEqualTypeOf<'BASIC_PICK' | 'EDITOR_PICK' | 'RECOMMENDATION'>()

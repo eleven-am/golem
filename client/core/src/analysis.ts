@@ -17,6 +17,7 @@ import {
   type ValueNode,
   type VariableNode,
 } from 'graphql'
+import { nameNode } from './ast.js'
 import { GolemDocumentError, GolemMultipleOperationsError, GolemNotLiveError } from './errors.js'
 import { assertClientManifest, type ClientManifest, type ManifestModel, type ManifestMutationScope, type ManifestRoot, type ManifestType } from './manifest.js'
 import type { SubscriptionRequest } from './session.js'
@@ -130,8 +131,6 @@ interface RowState {
 }
 
 type Scope = ObjectValueNode | VariableNode
-
-const nameNode = (value: string) => ({ kind: Kind.NAME as const, value })
 
 const bareField = (name: string): FieldNode => ({ kind: Kind.FIELD, name: nameNode(name) })
 

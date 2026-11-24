@@ -1,4 +1,5 @@
 import { Kind, OperationTypeNode, print, type DocumentNode, type FieldNode, type OperationDefinitionNode, type SelectionSetNode, type ValueNode } from 'graphql'
+import { nameNode, variableDefinition } from './ast.js'
 import { assertLive, operationOf, type DocumentAnalysis, type StaticDocumentAnalysis } from './analysis.js'
 import { GolemConfigurationError, GolemDocumentError, GolemProtocolError } from './errors.js'
 import { assertClientManifest, type ClientManifest } from './manifest.js'
@@ -48,8 +49,6 @@ export const CURSOR_VARIABLE = 'golemCursor'
 
 export const SKIP_VARIABLE = 'golemSkip'
 
-const nameNode = (value: string) => ({ kind: Kind.NAME as const, value })
-
 function continuationOf(document: DocumentNode, operation: OperationDefinitionNode, field: FieldNode, uniqueInput: string): string {
   const taken = operation.variableDefinitions?.find((definition) => definition.variable.name.value === CURSOR_VARIABLE || definition.variable.name.value === SKIP_VARIABLE)
   if (taken !== undefined) {
@@ -67,8 +66,8 @@ function continuationOf(document: DocumentNode, operation: OperationDefinitionNo
     ...operation,
     variableDefinitions: [
       ...(operation.variableDefinitions ?? []),
-      { kind: Kind.VARIABLE_DEFINITION, variable: { kind: Kind.VARIABLE, name: nameNode(CURSOR_VARIABLE) }, type: { kind: Kind.NAMED_TYPE, name: nameNode(uniqueInput) } },
-      { kind: Kind.VARIABLE_DEFINITION, variable: { kind: Kind.VARIABLE, name: nameNode(SKIP_VARIABLE) }, type: { kind: Kind.NAMED_TYPE, name: nameNode('Int') } },
+      variableDefinition(CURSOR_VARIABLE, uniqueInput),
+      variableDefinition(SKIP_VARIABLE, 'Int'),
     ],
     selectionSet: { ...operation.selectionSet, selections: operation.selectionSet.selections.map((selection) => (selection === field ? paged : selection)) },
   }
@@ -272,7 +271,7 @@ function continuationQuery(document: DocumentNode, variables: Readonly<Record<st
       ...operation,
       variableDefinitions: [
         ...(operation.variableDefinitions ?? []),
-        ...(paged ? [{ kind: Kind.VARIABLE_DEFINITION as const, variable: { kind: Kind.VARIABLE as const, name: nameNode(CONTINUATION_VARIABLE) }, type: { kind: Kind.NAMED_TYPE as const, name: nameNode('String') } }] : []),
+        ...(paged ? [variableDefinition(CONTINUATION_VARIABLE, 'String')] : []),
       ],
       selectionSet: { ...operation.selectionSet, selections: operation.selectionSet.selections.map((selection) => selection === field ? replacement : selection) },
     }

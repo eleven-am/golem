@@ -1,7 +1,7 @@
 # Golem user guide
 
-**Go module:** `go/v0.9.0`
-**TypeScript / React client:** `0.3.0`
+**Go module:** `go/v0.9.1`
+**TypeScript / React client:** `0.3.1`
 
 Golem has two independently released backend implementations. Start with the Go
 chapters for a Go application. The Prisma/NestJS backend has its own section,
@@ -11,8 +11,8 @@ with the Go module. The browser client described here targets the Go live protoc
 Use Go 1.26.11 or later and matching CLI/library versions. Install the Go module:
 
 ```sh
-go install github.com/eleven-am/golem/go/cmd/golem@v0.9.0
-go get github.com/eleven-am/golem/go@v0.9.0
+go install github.com/eleven-am/golem/go/cmd/golem@v0.9.1
+go get github.com/eleven-am/golem/go@v0.9.1
 ```
 
 Automatic event writing remains V3. Named-fact declarations and V3/V4 readers ship
@@ -62,10 +62,10 @@ The example is a note-taking application on SQLite.
 ### 1. A module and a schema
 
 ```
-go install github.com/eleven-am/golem/go/cmd/golem@v0.9.0
+go install github.com/eleven-am/golem/go/cmd/golem@v0.9.1
 mkdir notes-app && cd notes-app
 go mod init example.com/notes
-go get github.com/eleven-am/golem/go@v0.9.0
+go get github.com/eleven-am/golem/go@v0.9.1
 ```
 
 A schema is ordinary Go. One file declares the actor, the models, and the
@@ -7148,6 +7148,23 @@ reads it from client input, and that is part of the contract.
 ## Upgrading Go applications
 
 Read the release boundary below before upgrading. Use matching CLI and library builds, review migrations, regenerate Go/GraphQL/client bindings, and deploy the generated manifest with the client. Stop incompatible workers before queue storage changes; drain an outbox before changing its wire format.
+
+<a id="upgrading-gov091"></a>
+
+### go/v0.9.1
+
+This dependency maintenance patch updates the Go runtime, providers and generator
+together with browser client and React packages 0.3.1. Install matching v0.9.1 CLI
+and library builds, run `go mod tidy`, regenerate application bindings and the
+client manifest, then build and test your application. Gqlgen's executable
+interface changed; previously generated executables must be regenerated against
+the updated library. The patch introduces no database migration, event-format
+change or V4 writer activation.
+
+Client 0.3.1 supports GraphQL 16 and 17 and React 18 and 19. Node 20.19 remains
+supported with GraphQL 16; GraphQL 17 requires Node 22, 24 or 26 and later. Use a Node version satisfying
+all installed peer packages. Application-facing Golem contracts remain those of
+0.9.0 / client 0.3.0 below.
 
 <a id="upgrading-gov090"></a>
 
