@@ -1,6 +1,6 @@
 # Golem user guide
 
-**Go module:** `go/v0.9.1`
+**Go module:** `go/v0.9.2`
 **TypeScript / React client:** `0.3.1`
 
 Golem has two independently released backend implementations. Start with the Go
@@ -11,8 +11,8 @@ with the Go module. The browser client described here targets the Go live protoc
 Use Go 1.26.11 or later and matching CLI/library versions. Install the Go module:
 
 ```sh
-go install github.com/eleven-am/golem/go/cmd/golem@v0.9.1
-go get github.com/eleven-am/golem/go@v0.9.1
+go install github.com/eleven-am/golem/go/cmd/golem@v0.9.2
+go get github.com/eleven-am/golem/go@v0.9.2
 ```
 
 Automatic event writing remains V3. Named-fact declarations and V3/V4 readers ship
@@ -62,10 +62,10 @@ The example is a note-taking application on SQLite.
 ### 1. A module and a schema
 
 ```
-go install github.com/eleven-am/golem/go/cmd/golem@v0.9.1
+go install github.com/eleven-am/golem/go/cmd/golem@v0.9.2
 mkdir notes-app && cd notes-app
 go mod init example.com/notes
-go get github.com/eleven-am/golem/go@v0.9.1
+go get github.com/eleven-am/golem/go@v0.9.2
 ```
 
 A schema is ordinary Go. One file declares the actor, the models, and the
@@ -7148,6 +7148,19 @@ reads it from client input, and that is part of the contract.
 ## Upgrading Go applications
 
 Read the release boundary below before upgrading. Use matching CLI and library builds, review migrations, regenerate Go/GraphQL/client bindings, and deploy the generated manifest with the client. Stop incompatible workers before queue storage changes; drain an outbox before changing its wire format.
+
+<a id="upgrading-gov092"></a>
+
+### go/v0.9.2
+
+This patch recognizes PostgreSQL's `NOT NULL` catalog entries introduced in
+PostgreSQL 18. Schema verification and Golem-owned queue, migration, outbox and
+data-incarnation storage accept validated nullability that matches their
+columns. Unvalidated or unenforced constraints and unexpected storage shapes
+remain errors. Install matching v0.9.2 CLI and library builds. No database
+migration or browser-package update is required; client and React 0.3.1 remain
+current. Applications upgrading from before v0.9.1 must also follow its
+regeneration instructions below.
 
 <a id="upgrading-gov091"></a>
 

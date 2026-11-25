@@ -107,7 +107,7 @@ func (store *queueStore) inspectStorage(ctx context.Context, query queueStorageQ
 	}
 	// PostgreSQL marks primary keys NO INHERIT; our authored CHECK remains
 	// inheritable. Require each exact kind instead of relaxing inheritance checks.
-	const constraintsSQL = `SELECT con.conname AS name,con.contype::text AS kind,COALESCE((SELECT string_agg(a.attname,',' ORDER BY k.position) FROM unnest(con.conkey) WITH ORDINALITY k(attnum,position) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=k.attnum),'') AS columns,COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),'') AS expression,con.convalidated AND NOT con.condeferrable AND NOT con.condeferred AND ((con.contype='p' AND con.connoinherit) OR (con.contype='c' AND NOT con.connoinherit)) AND con.conislocal AND con.coninhcount=0 AS valid FROM pg_catalog.pg_constraint con WHERE con.conrelid=to_regclass($1) ORDER BY con.conname`
+	const constraintsSQL = `SELECT con.conname AS name,con.contype::text AS kind,COALESCE((SELECT string_agg(a.attname,',' ORDER BY k.position) FROM unnest(con.conkey) WITH ORDINALITY k(attnum,position) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=k.attnum),'') AS columns,COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),'') AS expression,` + validatedCatalogConstraintSQL + ` AND NOT con.condeferrable AND NOT con.condeferred AND ((con.contype='p' AND con.connoinherit) OR (con.contype='c' AND NOT con.connoinherit)) AND con.conislocal AND con.coninhcount=0 AS valid FROM pg_catalog.pg_constraint con WHERE con.conrelid=to_regclass($1) AND ` + catalogConstraintNeedsInspectionSQL + ` ORDER BY con.conname`
 	if err := query.SelectContext(ctx, &constraints, constraintsSQL, store.table()); err != nil {
 		return result, err
 	}

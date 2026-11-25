@@ -163,7 +163,7 @@ func introspectDataIncarnation(ctx context.Context, query catalogQueryer, namesp
 	if count != 2 {
 		return fmt.Errorf("data incarnation columns are missing")
 	}
-	rows, err = query.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),''),con.convalidated AND NOT con.condeferrable AND NOT con.condeferred AND con.conislocal AND con.coninhcount=0 AND ((con.contype='p' AND con.connoinherit) OR (con.contype='c' AND NOT con.connoinherit)) FROM pg_catalog.pg_constraint con WHERE con.conrelid=to_regclass($1) OR con.confrelid=to_regclass($1) ORDER BY con.contype,con.conkey::text`, table)
+	rows, err = query.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),''),`+validatedCatalogConstraintSQL+` AND NOT con.condeferrable AND NOT con.condeferred AND con.conislocal AND con.coninhcount=0 AND ((con.contype='p' AND con.connoinherit) OR (con.contype='c' AND NOT con.connoinherit)) FROM pg_catalog.pg_constraint con WHERE (con.conrelid=to_regclass($1) OR con.confrelid=to_regclass($1)) AND `+catalogConstraintNeedsInspectionSQL+` ORDER BY con.contype,con.conkey::text`, table)
 	if err != nil {
 		return err
 	}

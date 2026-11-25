@@ -81,9 +81,14 @@ The nine package READMEs are intentionally short npm entry points; keep detailed
 behavior in the guide and use package READMEs for installation and navigation.
 
 `scripts/verify.sh compatibility` reruns the pinned-source consumers with the
-same private PostgreSQL fixture owner as `database-bound`. Prepare the consumer
-dependency cache first; the consumer commands remain offline. Set `PG_BINDIR`
-when `pg_config` points to client-only tools.
+same private PostgreSQL fixture owner as `database-bound`. Run
+`scripts/verify.sh cache-compatibility` first. This explicit network step prepares
+the complete root module graph and the pinned consumers in disposable modules,
+then verifies that the root graph is readable offline. CI calls this same owner;
+the compatibility test commands remain offline. Set `PG_BINDIR`
+when `pg_config` points to client-only tools. CI keeps its PostgreSQL 17 service
+profiles and explicitly uses PostgreSQL 18 for the private cluster. The verifier
+prints the selected server version before creating that cluster.
 
 For the browser client, install with `npm --prefix client ci --strict-peer-deps`,
 then use the workspace build, type-check and test scripts in `client/package.json`.
@@ -157,7 +162,7 @@ Prisma/NestJS packages. A tag in one namespace does not release the others.
    package versions and distribution tags. Workflow definitions in
    `.github/workflows/` are the executable release authority.
 
-Current documented releases are Go 0.9.1 and browser client 0.3.1. The Go release
+Current documented releases are Go 0.9.2 and browser client 0.3.1. The Go release
 requires Go 1.26.11 or later. Automatic writers remain V3; staged V4 verification
 does not activate V4 in a released application. After a V4 commit, rollback must
 retain V4 readers. NAS measurements and production rollout remain unverified.
@@ -973,7 +978,9 @@ must already be in the local cache. A cache miss is an incomplete check, not
 evidence that generated bindings are incompatible.
 
 The Go CI database tier prepares the unchanged pinned consumer dependencies
-before running these offline tests. Its cache preparation uses disposable
+before running these offline tests. `scripts/verify.sh cache-compatibility` owns
+the shared local/CI preparation, including root graph metadata that a generated
+consumer does not necessarily retain after tidy. Its preparation uses disposable
 module files; it does not normalize the checked-in fixtures or application
 dependencies. First generation is followed by the documented `go mod tidy`
 step before checking and compiling the generated application.

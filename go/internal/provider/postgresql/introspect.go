@@ -600,7 +600,7 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 			return providerdrift.New(providerdrift.Object{Type: "table", Name: string(names.table), Table: string(names.table)}, "postgresql full-text introspect: column drift extension=%s", extension.ID)
 		}
 		var primaryKey string
-		const primaryKeySQL = `SELECT string_agg(a.attname,',' ORDER BY key.ordinality) FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid AND i.indrelid=con.conrelid CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE n.nspname=$1 AND c.relname=$2 AND con.contype='p' AND con.convalidated AND NOT con.condeferrable AND NOT con.condeferred AND i.indisprimary AND i.indisunique AND i.indisvalid AND i.indisready GROUP BY con.oid`
+		const primaryKeySQL = `SELECT string_agg(a.attname,',' ORDER BY key.ordinality) FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid AND i.indrelid=con.conrelid CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE n.nspname=$1 AND c.relname=$2 AND con.contype='p' AND ` + validatedCatalogConstraintSQL + ` AND NOT con.condeferrable AND NOT con.condeferred AND i.indisprimary AND i.indisunique AND i.indisvalid AND i.indisready GROUP BY con.oid`
 		if err := query.QueryRowxContext(ctx, primaryKeySQL, string(expected.Namespace.Name), string(names.table)).Scan(&primaryKey); err != nil {
 			if err != sql.ErrNoRows {
 				return err
@@ -737,7 +737,7 @@ func supportedPGVectorVersion(version string) bool {
 }
 
 func introspectConstraints(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, strictTables map[int64]physical.PhysicalName, columns map[int64]map[int]physical.PhysicalColumn) error {
-	rows, err := q.QueryxContext(ctx, `SELECT con.conrelid::bigint,con.conname,con.contype::text,COALESCE(con.conkey::text,''),COALESCE(con.confrelid::bigint,0),COALESCE(con.confkey::text,''),con.confupdtype::text,con.confdeltype::text,con.confmatchtype::text,con.condeferrable,con.condeferred,con.convalidated,con.connoinherit,COALESCE(pi.indnullsnotdistinct,false),COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),'') FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_index pi ON pi.indexrelid=con.conindid WHERE n.nspname=$1 ORDER BY c.relname,con.conname`, string(namespace))
+	rows, err := q.QueryxContext(ctx, `SELECT con.conrelid::bigint,con.conname,con.contype::text,COALESCE(con.conkey::text,''),COALESCE(con.confrelid::bigint,0),COALESCE(con.confkey::text,''),con.confupdtype::text,con.confdeltype::text,con.confmatchtype::text,con.condeferrable,con.condeferred,`+validatedCatalogConstraintSQL+`,con.connoinherit,COALESCE(pi.indnullsnotdistinct,false),COALESCE(pg_catalog.pg_get_expr(con.conbin,con.conrelid),'') FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_index pi ON pi.indexrelid=con.conindid WHERE n.nspname=$1 AND `+catalogConstraintNeedsInspectionSQL+` ORDER BY c.relname,con.conname`, string(namespace))
 	if err != nil {
 		return err
 	}
@@ -1058,7 +1058,7 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		}
 		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: ledgerName}, "postgresql migration ledger column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.conname`, string(expected.Namespace.Name), ledgerName)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,`+validatedCatalogConstraintSQL+` FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND `+catalogConstraintNeedsInspectionSQL+` ORDER BY con.conname`, string(expected.Namespace.Name), ledgerName)
 	if err != nil {
 		return physical.SystemSchema{}, err
 	}
@@ -1167,7 +1167,7 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 		}
 		return providerdrift.New(providerdrift.Object{Type: "column", Name: column, Table: name}, "postgresql outbox column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,`+validatedCatalogConstraintSQL+` FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND `+catalogConstraintNeedsInspectionSQL+` ORDER BY con.contype,con.conkey::text`, string(namespace), name)
 	if err != nil {
 		return err
 	}
@@ -1273,7 +1273,7 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		}
 		return providerdrift.New(providerdrift.Object{Type: "column", Name: column, Table: name}, "postgresql outbox delivery column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,`+validatedCatalogConstraintSQL+` FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND `+catalogConstraintNeedsInspectionSQL+` ORDER BY con.contype,con.conkey::text`, string(namespace), name)
 	if err != nil {
 		return err
 	}

@@ -25,16 +25,16 @@ and plain `v*` for the Prisma/NestJS packages.
 
 ## Start with Go
 
-The documented release is **go/v0.9.1**, with browser client **0.3.1**.
+The documented release is **go/v0.9.2**, with browser client **0.3.1**.
 Use Go **1.26.11 or later**, matching CLI/library versions, and regenerate your
 application and client manifest when upgrading.
 
 ```sh
-go install github.com/eleven-am/golem/go/cmd/golem@v0.9.1
+go install github.com/eleven-am/golem/go/cmd/golem@v0.9.2
 mkdir notes-app
 cd notes-app
 go mod init example.com/notes
-go get github.com/eleven-am/golem/go@v0.9.1
+go get github.com/eleven-am/golem/go@v0.9.2
 ```
 
 Create the schema and policy files from the [complete quickstart](docs/GUIDE.md#quickstart),

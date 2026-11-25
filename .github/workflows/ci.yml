@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PG_BINDIR: /usr/lib/postgresql/18/bin
+
 jobs:
   plan:
     name: Plan
@@ -114,30 +117,7 @@ jobs:
         if: matrix.step == 'database-bound'
         timeout-minutes: 5
         shell: bash
-        run: |
-          set -euo pipefail
-          consumer_dir=$(mktemp -d)
-          trap 'rm -rf "$consumer_dir"' EXIT
-          prior_dir="$consumer_dir/prior"
-          generator_dir="$consumer_dir/generator"
-          session_dir="$consumer_dir/session"
-          mkdir "$prior_dir" "$generator_dir" "$session_dir"
-          cp go/compatibility/testdata/priorrelease/*.go go/compatibility/testdata/priorrelease/go.mod go/compatibility/testdata/priorrelease/go.sum "$prior_dir/"
-          (cd "$prior_dir" && GOWORK=off go mod tidy && GOWORK=off go mod download all)
-          cp go/compatibility/testdata/framesgqlgen/go.mod "$generator_dir/go.mod"
-          cat go/go.sum go/compatibility/testdata/framesgqlgen/go.sum > "$generator_dir/go.sum"
-          # Model the generated server's imports so tidy also caches the
-          # dependency test imports needed by first-generation normalization.
-          printf '%s\n' 'package compatibilitycache' 'import _ "github.com/eleven-am/golem/go/graphql"' > "$generator_dir/cache.go"
-          (cd "$generator_dir" && GOWORK=off go mod edit "-replace=github.com/eleven-am/golem/go=$GITHUB_WORKSPACE/go" && GOWORK=off go list -mod=mod -m all && GOWORK=off go mod tidy && GOWORK=off go mod download all)
-          # Keep the shared-session consumer's existing application pin in its
-          # test owner. Cache it without changing Golem's module dependencies.
-          pond_version=$(sed -nE 's/^const sessionConsumerPondVersion = "(v[^"]+)"$/\1/p' go/internal/generate/pipeline/session_acceptance_test.go)
-          [[ "$pond_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'invalid shared-session PondSocket pin' >&2; exit 1; }
-          printf '%s\n' 'module example.test/sessioncache' '' 'go 1.26' > "$session_dir/go.mod"
-          cp go/go.sum "$session_dir/go.sum"
-          printf '%s\n' 'package compatibilitycache' 'import (' '_ "github.com/eleven-am/golem/go/runtime"' '_ "github.com/eleven-am/pondsocket/go/pondsocket"' ')' > "$session_dir/cache.go"
-          (cd "$session_dir" && GOWORK=off go mod edit '-require=github.com/eleven-am/golem/go@v0.0.0' "-replace=github.com/eleven-am/golem/go=$GITHUB_WORKSPACE/go" "-require=github.com/eleven-am/pondsocket/go/pondsocket@$pond_version" && GOWORK=off go mod tidy && GOWORK=off go mod download all)
+        run: scripts/verify.sh cache-compatibility
       - name: Cache pinned Core NATS image
         if: matrix.step == 'database-bound' || matrix.step == 'oracle-failure-and-event'
         timeout-minutes: 5

@@ -100,6 +100,7 @@ with_private_postgresql() (
 		echo "private PostgreSQL requires existing PostgreSQL 15+ binaries" >&2
 		return 1
 	fi
+	printf 'private PostgreSQL: %s\n' "$pg_version"
 	# Short path avoids Unix-socket path limits on both Linux and macOS.
 	owned_root="$(mktemp -d /tmp/golem-pg.XXXXXXXX)" || return 1
 	cleanup_private_postgresql() {
@@ -144,6 +145,33 @@ PGCONF
 	export GOLEM_POLICY_HISTORY_PG_ROOT="$owned_root"
 	export GOLEM_POLICY_HISTORY_PG_DSN="host=$owned_root/socket port=55439 user=golem dbname=postgres sslmode=disable"
 	"$@"
+)
+
+cache_compatibility() (
+	set -euo pipefail
+	local consumer_dir prior_dir generator_dir session_dir root_dir pond_version
+	consumer_dir=$(mktemp -d)
+	trap 'rm -rf "$consumer_dir"' EXIT
+	prior_dir="$consumer_dir/prior"
+	generator_dir="$consumer_dir/generator"
+	session_dir="$consumer_dir/session"
+	root_dir="$consumer_dir/root"
+	mkdir "$prior_dir" "$generator_dir" "$session_dir" "$root_dir"
+	cp "$GO_DIR/go.mod" "$GO_DIR/go.sum" "$root_dir/"
+	(cd "$root_dir" && "$GO" list -mod=readonly -m all && "$GO" mod download all)
+	cp "$GO_DIR"/compatibility/testdata/priorrelease/*.go "$GO_DIR/compatibility/testdata/priorrelease/go.mod" "$GO_DIR/compatibility/testdata/priorrelease/go.sum" "$prior_dir/"
+	(cd "$prior_dir" && "$GO" mod tidy && "$GO" mod download all)
+	cp "$GO_DIR/compatibility/testdata/framesgqlgen/go.mod" "$generator_dir/go.mod"
+	cat "$GO_DIR/go.sum" "$GO_DIR/compatibility/testdata/framesgqlgen/go.sum" > "$generator_dir/go.sum"
+	printf '%s\n' 'package compatibilitycache' 'import _ "github.com/eleven-am/golem/go/graphql"' > "$generator_dir/cache.go"
+	(cd "$generator_dir" && "$GO" mod edit "-replace=github.com/eleven-am/golem/go=$GO_DIR" && "$GO" list -mod=mod -m all && "$GO" mod tidy && "$GO" mod download all)
+	pond_version=$(sed -nE 's/^const sessionConsumerPondVersion = "(v[^\"]+)"$/\1/p' "$GO_DIR/internal/generate/pipeline/session_acceptance_test.go")
+	[[ "$pond_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'invalid shared-session dependency pin' >&2; exit 1; }
+	printf '%s\n' 'module example.test/sessioncache' '' 'go 1.26' > "$session_dir/go.mod"
+	cp "$GO_DIR/go.sum" "$session_dir/go.sum"
+	printf '%s\n' 'package compatibilitycache' 'import (' '_ "github.com/eleven-am/golem/go/runtime"' '_ "github.com/eleven-am/pondsocket/go/pondsocket"' ')' > "$session_dir/cache.go"
+	(cd "$session_dir" && "$GO" mod edit '-require=github.com/eleven-am/golem/go@v0.0.0' "-replace=github.com/eleven-am/golem/go=$GO_DIR" "-require=github.com/eleven-am/pondsocket/go/pondsocket@$pond_version" && "$GO" mod tidy && "$GO" mod download all)
+	(cd "$GO_DIR" && GOPROXY=off GOSUMDB=off "$GO" list -mod=readonly -m all)
 )
 
 require_matching() {
@@ -375,6 +403,7 @@ run() {
 		require_matching "$RACE_SKIP_COUNT" "$RACE_SKIP_TESTS" ./runtime || return 1
 		with_private_postgresql go_test -race -p=1 -parallel 4 -count=1 -timeout=45m -skip "$RACE_SKIP_TESTS" "${RACE_PACKAGES[@]}"
 		;;
+	cache-compatibility) cache_compatibility ;;
 	cache-nats)
 		# Network/cache preparation only; CI bounds this separate step. Keep
 		# the pinned image here, rather than duplicating it in workflow YAML.
@@ -383,7 +412,7 @@ run() {
 		;;
 	vulncheck) (cd "$GO_DIR" && "$GO" run "$GOVULNCHECK" ./...) ;;
 	*)
-		echo "unknown step: $1 (steps: ${STEPS[*]}; explicit actions: cache-nats compatibility writer4-database writer4-client)" >&2
+		echo "unknown step: $1 (steps: ${STEPS[*]}; explicit actions: cache-nats cache-compatibility compatibility writer4-database writer4-client)" >&2
 		return 2
 		;;
 	esac
